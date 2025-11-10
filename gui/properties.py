@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-# Ported in full from legacy with prefs wiring. See Cut_DC_Scripts/gui/properties.py for original.
 from typing import Optional
 from matplotlib.backends import qt_compat
 QtWidgets = qt_compat.QtWidgets
