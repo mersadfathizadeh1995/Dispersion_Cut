@@ -39,7 +39,7 @@ class ColumnMapDialog(QtWidgets.QDialog):
 
 
 class LauncherWindow(QtWidgets.QMainWindow):
-    def __init__(self):
+    def __init__(self, auto_open=False):
         super().__init__()
         self.setWindowTitle("DC Cut – Launcher (Qt)")
         self.resize(740, 280)
@@ -51,8 +51,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
         lab.setAlignment(align)
         self.setCentralWidget(lab)
         self._build_menu()
-        # Auto-open on startup for a smoother flow
-        QtCore.QTimer.singleShot(0, self._open_data)
+        # Optionally auto-open on startup
+        if auto_open:
+            QtCore.QTimer.singleShot(0, self._open_data)
 
     def _build_menu(self):
         bar = self.menuBar()
@@ -382,6 +383,41 @@ class LauncherWindow(QtWidgets.QMainWindow):
             return False
 
 
+def open_data_directly():
+    """Show file dialog directly and load data without launcher window."""
+    try:
+        from dc_cut.gui.open_data import OpenDataDialog
+    except Exception as e:
+        QtWidgets.QMessageBox.critical(None, "Error", f"Failed to import dialog:\n{e}")
+        return False
+
+    # Show the file selection dialog
+    dlg = OpenDataDialog(None)
+    if dlg.exec() != 1 or not dlg.result:
+        return False  # User cancelled
+
+    spec = dlg.result
+    mode = spec.get('mode')
+
+    # Create a hidden launcher instance to use its loader methods
+    launcher = LauncherWindow(auto_open=False)
+
+    # Dispatch to appropriate loader
+    ok = False
+    if mode == 'passive':
+        ok = launcher._load_passive(spec)
+    elif mode == 'matlab':
+        ok = launcher._load_matlab(spec)
+    elif mode == 'csv':
+        ok = launcher._load_csv(spec)
+    elif mode == 'state':
+        ok = launcher._load_state(spec)
+    else:
+        QtWidgets.QMessageBox.warning(None, "Error", f"Unsupported mode: {mode}")
+
+    return ok
+
+
 def main():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
     # Simple CLI: allow opening data without the launcher
@@ -415,11 +451,13 @@ def main():
             else:
                 ok = False
             if ok:
+                app.exec()
                 return
     except Exception:
         pass
-    # Fallback: show launcher
-    w = LauncherWindow(); w.show()
-    try: w.raise_(); w.activateWindow()
-    except Exception: pass
-    app.exec()
+
+    # GUI mode: show file dialog directly (no launcher window)
+    ok = open_data_directly()
+    if ok:
+        app.exec()
+    # If user cancelled or loading failed, exit gracefully
