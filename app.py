@@ -9,9 +9,6 @@ QtCore    = qt_compat.QtCore
 QtGui     = qt_compat.QtGui
 
 
-# Standalone: no dependency on Cut_DC_Scripts required anymore
-
-
 class ColumnMapDialog(QtWidgets.QDialog):
     def __init__(self, columns: list[str], parent=None):
         super().__init__(parent)
@@ -46,7 +43,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle("DC Cut – Launcher (Qt)")
         self.resize(740, 280)
-        lab = QtWidgets.QLabel("File → Open Data… to load MATLAB/CSV/State/Passive.\nTemporary launcher while we migrate.")
+        lab = QtWidgets.QLabel("Welcome to DC Cut\n\nFile → Open Data… to load MATLAB/CSV/State/Passive data files.")
         try:
             align = QtCore.Qt.AlignCenter
         except AttributeError:
@@ -198,7 +195,12 @@ class LauncherWindow(QtWidgets.QMainWindow):
         frequency_arrays  = [freq]
         wavelength_arrays = [wave]
         set_leg = ["Passive Array Data"]
-        n_phones = 24
+        # Get array configuration from preferences
+        try:
+            P = load_prefs()
+            n_phones = int(P.get('default_n_phones', 24))
+        except Exception:
+            n_phones = 24
         array_positions = np.arange(0, dx * n_phones, dx)
         source_offsets = []
         try:
@@ -248,7 +250,13 @@ class LauncherWindow(QtWidgets.QMainWindow):
             data = load_matlab_data(path)
             v = data.get('VelocityRawOffsets', []); f = data.get('FrequencyRawOffsets', []); w = data.get('WavelengthRawOffsets', [])
             set_leg = data.get('setLeg', None)
-            n_phones = 24; array_positions = np.arange(0, dx * n_phones, dx)
+            # Get array configuration from preferences
+            try:
+                P = load_prefs()
+                n_phones = int(P.get('default_n_phones', 24))
+            except Exception:
+                n_phones = 24
+            array_positions = np.arange(0, dx * n_phones, dx)
             source_offsets = []
             ctrl = InteractiveRemovalWithLayers(v, f, w, array_positions=array_positions, source_offsets=source_offsets, set_leg=set_leg, receiver_dx=dx, legacy_controls=False)
             try:
@@ -289,7 +297,13 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 m = (vi >= vmin) & (vi <= vmax)
                 v2.append(vi[m]); f2.append(fi[m]); w2.append(wi[m])
             v, f, w = v2, f2, w2
-            n_phones = 24; array_positions = np.arange(0, dx * n_phones, dx)
+            # Get array configuration from preferences
+            try:
+                P = load_prefs()
+                n_phones = int(P.get('default_n_phones', 24))
+            except Exception:
+                n_phones = 24
+            array_positions = np.arange(0, dx * n_phones, dx)
             source_offsets = []
             ctrl = InteractiveRemovalWithLayers(v, f, w, array_positions=array_positions, source_offsets=source_offsets, set_leg=set_leg, receiver_dx=dx, legacy_controls=False)
             # Set clamps on controller too, so axes reflect
@@ -327,7 +341,13 @@ class LauncherWindow(QtWidgets.QMainWindow):
             S = load_session(path)
             v = S["velocity_arrays"]; f = S["frequency_arrays"]; w = S["wavelength_arrays"]
             set_leg = S.get("set_leg", None)
-            n_phones = 24; array_positions = np.arange(0, dx * n_phones, dx)
+            # Get array configuration from preferences
+            try:
+                P = load_prefs()
+                n_phones = int(P.get('default_n_phones', 24))
+            except Exception:
+                n_phones = 24
+            array_positions = np.arange(0, dx * n_phones, dx)
             source_offsets = []
             ctrl = InteractiveRemovalWithLayers(v, f, w, array_positions=array_positions, source_offsets=source_offsets, set_leg=set_leg, receiver_dx=dx, legacy_controls=False)
             # Restore passive FK guides if present

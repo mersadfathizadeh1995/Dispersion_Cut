@@ -88,7 +88,19 @@ class NearFieldInspector:
         v = np.asarray(self.c.velocity_arrays[i], float)
         f = np.asarray(self.c.frequency_arrays[i], float)
         w = np.asarray(self.c.wavelength_arrays[i], float)
-        nacd = compute_nacd_array(getattr(self.c, 'array_positions', np.arange(0, 48, 2.0)), f, v)
+        # Get array_positions from controller, or compute default from preferences
+        if hasattr(self.c, 'array_positions'):
+            array_pos = self.c.array_positions
+        else:
+            try:
+                from dc_cut.services.prefs import load_prefs
+                P = load_prefs()
+                n_phones = int(P.get('default_n_phones', 24))
+                dx = float(P.get('default_receiver_dx', 2.0))
+                array_pos = np.arange(0, dx * n_phones, dx)
+            except Exception:
+                array_pos = np.arange(0, 48, 2.0)  # Ultimate fallback
+        nacd = compute_nacd_array(array_pos, f, v)
         mask = nacd < self.thr
         return i, f, v, w, nacd, mask
 

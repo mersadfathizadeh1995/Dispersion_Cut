@@ -13,6 +13,9 @@ _DEFAULTS: Dict[str, Any] = {
     "show_grid": True,
     "robust_lower_pct": 0.5,
     "robust_upper_pct": 99.5,
+    # Array configuration
+    "default_n_phones": 24,
+    "default_receiver_dx": 2.0,
 }
 
 
