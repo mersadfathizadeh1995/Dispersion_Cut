@@ -67,6 +67,10 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         type_group = QtWidgets.QGroupBox("Plot Type")
         type_layout = QtWidgets.QVBoxLayout(type_group)
 
+        # FREQUENCY DOMAIN PLOTS
+        freq_label = QtWidgets.QLabel("<b>Frequency Domain:</b>")
+        type_layout.addWidget(freq_label)
+
         self.plot_type_aggregated = QtWidgets.QRadioButton("Aggregated Dispersion Curve")
         self.plot_type_per_offset = QtWidgets.QRadioButton("Per-Offset Curves")
         self.plot_type_uncertainty = QtWidgets.QRadioButton("Uncertainty Visualization")
@@ -104,6 +108,44 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         type_layout.addWidget(self.plot_type_uncertainty)
         type_layout.addWidget(desc_uncertainty)
 
+        # WAVELENGTH DOMAIN PLOTS (STEP 1)
+        type_layout.addSpacing(15)
+        wave_label = QtWidgets.QLabel("<b>Wavelength Domain:</b>")
+        type_layout.addWidget(wave_label)
+
+        self.plot_type_aggregated_wavelength = QtWidgets.QRadioButton("Aggregated (Wavelength)")
+        desc_agg_wave = QtWidgets.QLabel(
+            "Same as aggregated but in wavelength domain.\n"
+            "Better for depth-related interpretations (λ/2 or λ/3 rules)."
+        )
+        desc_agg_wave.setWordWrap(True)
+        desc_agg_wave.setStyleSheet("color: gray; font-style: italic; margin-left: 20px;")
+
+        self.plot_type_per_offset_wavelength = QtWidgets.QRadioButton("Per-Offset (Wavelength)")
+        desc_offset_wave = QtWidgets.QLabel(
+            "Per-offset curves in wavelength domain.\n"
+            "Shows aperture-wavelength relationships clearly."
+        )
+        desc_offset_wave.setWordWrap(True)
+        desc_offset_wave.setStyleSheet("color: gray; font-style: italic; margin-left: 20px;")
+
+        self.plot_type_dual_domain = QtWidgets.QRadioButton("Dual-Domain Comparison")
+        desc_dual = QtWidgets.QLabel(
+            "Side-by-side frequency and wavelength plots.\n"
+            "Very common in MASW publications for comprehensive presentation."
+        )
+        desc_dual.setWordWrap(True)
+        desc_dual.setStyleSheet("color: gray; font-style: italic; margin-left: 20px;")
+
+        type_layout.addWidget(self.plot_type_aggregated_wavelength)
+        type_layout.addWidget(desc_agg_wave)
+        type_layout.addSpacing(10)
+        type_layout.addWidget(self.plot_type_per_offset_wavelength)
+        type_layout.addWidget(desc_offset_wave)
+        type_layout.addSpacing(10)
+        type_layout.addWidget(self.plot_type_dual_domain)
+        type_layout.addWidget(desc_dual)
+
         layout.addWidget(type_group)
 
         # Option to generate all plot types
@@ -129,7 +171,8 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         self.offset_group = offset_group
 
         # Enable/disable based on selection
-        self.plot_type_per_offset.toggled.connect(self.offset_group.setEnabled)
+        self.plot_type_per_offset.toggled.connect(self._update_per_offset_options)
+        self.plot_type_per_offset_wavelength.toggled.connect(self._update_per_offset_options)
         self.offset_group.setEnabled(False)
 
         layout.addStretch()
@@ -460,6 +503,11 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         if dir_path:
             self.output_dir_edit.setText(dir_path)
 
+    def _update_per_offset_options(self):
+        """Enable/disable per-offset options based on plot type selection."""
+        enabled = self.plot_type_per_offset.isChecked() or self.plot_type_per_offset_wavelength.isChecked()
+        self.offset_group.setEnabled(enabled)
+
     def _gather_config(self) -> PlotConfig:
         """Gather configuration from UI widgets."""
         # Determine format
@@ -662,8 +710,22 @@ class PublicationFigureDialog(QtWidgets.QDialog):
                         config=config,
                         max_offsets=max_offsets
                     )
-                else:  # uncertainty
+                elif self.plot_type_uncertainty.isChecked():
                     generator.generate_uncertainty_plot(output_path=output_path, config=config)
+                # WAVELENGTH DOMAIN PLOTS (STEP 1)
+                elif self.plot_type_aggregated_wavelength.isChecked():
+                    generator.generate_aggregated_wavelength_plot(output_path=output_path, config=config)
+                elif self.plot_type_per_offset_wavelength.isChecked():
+                    max_offsets = self.max_offsets_spin.value()
+                    generator.generate_per_offset_wavelength_plot(
+                        output_path=output_path,
+                        config=config,
+                        max_offsets=max_offsets
+                    )
+                elif self.plot_type_dual_domain.isChecked():
+                    generator.generate_dual_domain_plot(output_path=output_path, config=config)
+                else:
+                    raise ValueError("Unknown plot type selected")
 
                 # Success message
                 QtWidgets.QMessageBox.information(
