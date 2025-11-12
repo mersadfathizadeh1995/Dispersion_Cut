@@ -1,0 +1,527 @@
+"""GUI dialog for configuring publication-quality figure generation."""
+
+from __future__ import annotations
+
+from typing import Optional
+from pathlib import Path
+from matplotlib.backends import qt_compat
+
+QtWidgets = qt_compat.QtWidgets
+QtGui = qt_compat.QtGui
+QtCore = qt_compat.QtCore
+
+from dc_cut.core.pub_figures import PublicationFigureGenerator, PlotConfig
+
+
+class PublicationFigureDialog(QtWidgets.QDialog):
+    """Dialog for configuring and generating publication-quality figures."""
+
+    def __init__(self, controller, parent: Optional[QtWidgets.QWidget] = None):
+        super().__init__(parent)
+        self.controller = controller
+        self.setWindowTitle("Export Publication Figure")
+        self.resize(600, 700)
+
+        # Main layout
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # Tab widget for organized sections
+        self.tabs = QtWidgets.QTabWidget(self)
+        layout.addWidget(self.tabs)
+
+        # Create tabs
+        self._build_plot_type_tab()
+        self._build_styling_tab()
+        self._build_axes_tab()
+        self._build_output_tab()
+
+        # Buttons
+        button_box = QtWidgets.QDialogButtonBox(self)
+        try:
+            generate_btn = QtWidgets.QDialogButtonBox.Ok
+            cancel_btn = QtWidgets.QDialogButtonBox.Cancel
+        except AttributeError:
+            generate_btn = QtWidgets.QDialogButtonBox.StandardButton.Ok
+            cancel_btn = QtWidgets.QDialogButtonBox.StandardButton.Cancel
+
+        button_box.setStandardButtons(generate_btn | cancel_btn)
+        # Rename OK button to "Generate"
+        try:
+            ok_button = button_box.button(generate_btn)
+            if ok_button:
+                ok_button.setText("Generate")
+        except Exception:
+            pass
+
+        button_box.accepted.connect(self._on_generate)
+        button_box.rejected.connect(self.reject)
+
+        layout.addWidget(button_box)
+
+    def _build_plot_type_tab(self):
+        """Build the Plot Type selection tab."""
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(tab)
+
+        # Plot type selection
+        type_group = QtWidgets.QGroupBox("Plot Type")
+        type_layout = QtWidgets.QVBoxLayout(type_group)
+
+        self.plot_type_aggregated = QtWidgets.QRadioButton("Aggregated Dispersion Curve")
+        self.plot_type_per_offset = QtWidgets.QRadioButton("Per-Offset Curves")
+        self.plot_type_uncertainty = QtWidgets.QRadioButton("Uncertainty Visualization")
+
+        self.plot_type_aggregated.setChecked(True)
+
+        # Add descriptions
+        desc_aggregated = QtWidgets.QLabel(
+            "Shows binned average velocity with ±1σ uncertainty envelope.\n"
+            "Suitable for final dispersion curves in publications."
+        )
+        desc_aggregated.setWordWrap(True)
+        desc_aggregated.setStyleSheet("color: gray; font-style: italic; margin-left: 20px;")
+
+        desc_per_offset = QtWidgets.QLabel(
+            "Shows individual curves for each active offset/layer.\n"
+            "Useful for comparing multiple offsets or showing data diversity."
+        )
+        desc_per_offset.setWordWrap(True)
+        desc_per_offset.setStyleSheet("color: gray; font-style: italic; margin-left: 20px;")
+
+        desc_uncertainty = QtWidgets.QLabel(
+            "Shows coefficient of variation (CV = σ/μ) as a function of frequency.\n"
+            "Highlights regions with high uncertainty."
+        )
+        desc_uncertainty.setWordWrap(True)
+        desc_uncertainty.setStyleSheet("color: gray; font-style: italic; margin-left: 20px;")
+
+        type_layout.addWidget(self.plot_type_aggregated)
+        type_layout.addWidget(desc_aggregated)
+        type_layout.addSpacing(10)
+        type_layout.addWidget(self.plot_type_per_offset)
+        type_layout.addWidget(desc_per_offset)
+        type_layout.addSpacing(10)
+        type_layout.addWidget(self.plot_type_uncertainty)
+        type_layout.addWidget(desc_uncertainty)
+
+        layout.addWidget(type_group)
+
+        # Per-offset options (only enabled when per-offset is selected)
+        offset_group = QtWidgets.QGroupBox("Per-Offset Options")
+        offset_layout = QtWidgets.QFormLayout(offset_group)
+
+        self.max_offsets_spin = QtWidgets.QSpinBox()
+        self.max_offsets_spin.setRange(1, 50)
+        self.max_offsets_spin.setValue(10)
+        offset_layout.addRow("Maximum offsets to plot:", self.max_offsets_spin)
+
+        layout.addWidget(offset_group)
+        self.offset_group = offset_group
+
+        # Enable/disable based on selection
+        self.plot_type_per_offset.toggled.connect(self.offset_group.setEnabled)
+        self.offset_group.setEnabled(False)
+
+        layout.addStretch()
+        self.tabs.addTab(tab, "Plot Type")
+
+    def _build_styling_tab(self):
+        """Build the Styling options tab."""
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(tab)
+
+        # Figure settings
+        fig_group = QtWidgets.QGroupBox("Figure Settings")
+        fig_layout = QtWidgets.QFormLayout(fig_group)
+
+        self.figsize_width_spin = QtWidgets.QDoubleSpinBox()
+        self.figsize_width_spin.setRange(2.0, 20.0)
+        self.figsize_width_spin.setValue(8.0)
+        self.figsize_width_spin.setSingleStep(0.5)
+        fig_layout.addRow("Width (inches):", self.figsize_width_spin)
+
+        self.figsize_height_spin = QtWidgets.QDoubleSpinBox()
+        self.figsize_height_spin.setRange(2.0, 20.0)
+        self.figsize_height_spin.setValue(6.0)
+        self.figsize_height_spin.setSingleStep(0.5)
+        fig_layout.addRow("Height (inches):", self.figsize_height_spin)
+
+        self.dpi_spin = QtWidgets.QSpinBox()
+        self.dpi_spin.setRange(72, 600)
+        self.dpi_spin.setValue(300)
+        self.dpi_spin.setSingleStep(50)
+        fig_layout.addRow("DPI:", self.dpi_spin)
+
+        layout.addWidget(fig_group)
+
+        # Font settings
+        font_group = QtWidgets.QGroupBox("Font Settings")
+        font_layout = QtWidgets.QFormLayout(font_group)
+
+        self.font_family_combo = QtWidgets.QComboBox()
+        self.font_family_combo.addItems(['serif', 'sans-serif', 'monospace'])
+        font_layout.addRow("Font family:", self.font_family_combo)
+
+        self.font_size_spin = QtWidgets.QSpinBox()
+        self.font_size_spin.setRange(6, 24)
+        self.font_size_spin.setValue(11)
+        font_layout.addRow("Font size:", self.font_size_spin)
+
+        layout.addWidget(font_group)
+
+        # Line/marker settings
+        line_group = QtWidgets.QGroupBox("Line & Marker Settings")
+        line_layout = QtWidgets.QFormLayout(line_group)
+
+        self.line_width_spin = QtWidgets.QDoubleSpinBox()
+        self.line_width_spin.setRange(0.5, 5.0)
+        self.line_width_spin.setValue(1.5)
+        self.line_width_spin.setSingleStep(0.1)
+        line_layout.addRow("Line width:", self.line_width_spin)
+
+        self.marker_size_spin = QtWidgets.QDoubleSpinBox()
+        self.marker_size_spin.setRange(1.0, 10.0)
+        self.marker_size_spin.setValue(4.0)
+        self.marker_size_spin.setSingleStep(0.5)
+        line_layout.addRow("Marker size:", self.marker_size_spin)
+
+        layout.addWidget(line_group)
+
+        # Color settings
+        color_group = QtWidgets.QGroupBox("Color Settings")
+        color_layout = QtWidgets.QFormLayout(color_group)
+
+        self.color_palette_combo = QtWidgets.QComboBox()
+        self.color_palette_combo.addItems(['vibrant', 'muted', 'bright'])
+        color_layout.addRow("Color palette:", self.color_palette_combo)
+
+        palette_note = QtWidgets.QLabel("All palettes are colorblind-friendly")
+        palette_note.setStyleSheet("color: gray; font-style: italic;")
+        color_layout.addRow("", palette_note)
+
+        self.uncertainty_alpha_spin = QtWidgets.QDoubleSpinBox()
+        self.uncertainty_alpha_spin.setRange(0.0, 1.0)
+        self.uncertainty_alpha_spin.setValue(0.3)
+        self.uncertainty_alpha_spin.setSingleStep(0.05)
+        color_layout.addRow("Uncertainty alpha:", self.uncertainty_alpha_spin)
+
+        layout.addWidget(color_group)
+
+        layout.addStretch()
+        self.tabs.addTab(tab, "Styling")
+
+    def _build_axes_tab(self):
+        """Build the Axes configuration tab."""
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(tab)
+
+        # Grid settings
+        grid_group = QtWidgets.QGroupBox("Grid")
+        grid_layout = QtWidgets.QVBoxLayout(grid_group)
+
+        self.show_grid_check = QtWidgets.QCheckBox("Show grid")
+        self.show_grid_check.setChecked(True)
+        grid_layout.addWidget(self.show_grid_check)
+
+        grid_alpha_layout = QtWidgets.QHBoxLayout()
+        grid_alpha_layout.addWidget(QtWidgets.QLabel("Grid alpha:"))
+        self.grid_alpha_spin = QtWidgets.QDoubleSpinBox()
+        self.grid_alpha_spin.setRange(0.0, 1.0)
+        self.grid_alpha_spin.setValue(0.3)
+        self.grid_alpha_spin.setSingleStep(0.05)
+        grid_alpha_layout.addWidget(self.grid_alpha_spin)
+        grid_alpha_layout.addStretch()
+        grid_layout.addLayout(grid_alpha_layout)
+
+        layout.addWidget(grid_group)
+
+        # Labels
+        labels_group = QtWidgets.QGroupBox("Axis Labels")
+        labels_layout = QtWidgets.QFormLayout(labels_group)
+
+        self.xlabel_edit = QtWidgets.QLineEdit("Frequency (Hz)")
+        labels_layout.addRow("X-axis label:", self.xlabel_edit)
+
+        self.ylabel_edit = QtWidgets.QLineEdit("Phase Velocity (m/s)")
+        labels_layout.addRow("Y-axis label:", self.ylabel_edit)
+
+        layout.addWidget(labels_group)
+
+        # Limits
+        limits_group = QtWidgets.QGroupBox("Axis Limits")
+        limits_layout = QtWidgets.QFormLayout(limits_group)
+
+        self.xlim_auto_check = QtWidgets.QCheckBox("Auto")
+        self.xlim_auto_check.setChecked(True)
+        limits_layout.addRow("X-axis:", self.xlim_auto_check)
+
+        xlim_layout = QtWidgets.QHBoxLayout()
+        self.xlim_min_spin = QtWidgets.QDoubleSpinBox()
+        self.xlim_min_spin.setRange(0.1, 1000.0)
+        self.xlim_min_spin.setValue(1.0)
+        self.xlim_min_spin.setEnabled(False)
+        xlim_layout.addWidget(QtWidgets.QLabel("Min:"))
+        xlim_layout.addWidget(self.xlim_min_spin)
+        self.xlim_max_spin = QtWidgets.QDoubleSpinBox()
+        self.xlim_max_spin.setRange(0.1, 1000.0)
+        self.xlim_max_spin.setValue(100.0)
+        self.xlim_max_spin.setEnabled(False)
+        xlim_layout.addWidget(QtWidgets.QLabel("Max:"))
+        xlim_layout.addWidget(self.xlim_max_spin)
+        xlim_layout.addStretch()
+        limits_layout.addRow("", xlim_layout)
+
+        self.ylim_auto_check = QtWidgets.QCheckBox("Auto")
+        self.ylim_auto_check.setChecked(True)
+        limits_layout.addRow("Y-axis:", self.ylim_auto_check)
+
+        ylim_layout = QtWidgets.QHBoxLayout()
+        self.ylim_min_spin = QtWidgets.QDoubleSpinBox()
+        self.ylim_min_spin.setRange(0.0, 10000.0)
+        self.ylim_min_spin.setValue(0.0)
+        self.ylim_min_spin.setEnabled(False)
+        ylim_layout.addWidget(QtWidgets.QLabel("Min:"))
+        ylim_layout.addWidget(self.ylim_min_spin)
+        self.ylim_max_spin = QtWidgets.QDoubleSpinBox()
+        self.ylim_max_spin.setRange(0.0, 10000.0)
+        self.ylim_max_spin.setValue(1000.0)
+        self.ylim_max_spin.setEnabled(False)
+        ylim_layout.addWidget(QtWidgets.QLabel("Max:"))
+        ylim_layout.addWidget(self.ylim_max_spin)
+        ylim_layout.addStretch()
+        limits_layout.addRow("", ylim_layout)
+
+        layout.addWidget(limits_group)
+
+        # Connect auto checkboxes
+        self.xlim_auto_check.toggled.connect(lambda checked: self.xlim_min_spin.setDisabled(checked))
+        self.xlim_auto_check.toggled.connect(lambda checked: self.xlim_max_spin.setDisabled(checked))
+        self.ylim_auto_check.toggled.connect(lambda checked: self.ylim_min_spin.setDisabled(checked))
+        self.ylim_auto_check.toggled.connect(lambda checked: self.ylim_max_spin.setDisabled(checked))
+
+        # Near-field marking
+        nf_group = QtWidgets.QGroupBox("Near-Field Marking")
+        nf_layout = QtWidgets.QVBoxLayout(nf_group)
+
+        self.mark_near_field_check = QtWidgets.QCheckBox("Mark near-field data")
+        self.mark_near_field_check.setChecked(True)
+        nf_layout.addWidget(self.mark_near_field_check)
+
+        nf_style_layout = QtWidgets.QHBoxLayout()
+        nf_style_layout.addWidget(QtWidgets.QLabel("Style:"))
+        self.nf_style_combo = QtWidgets.QComboBox()
+        self.nf_style_combo.addItems(['faded', 'crossed', 'none'])
+        nf_style_layout.addWidget(self.nf_style_combo)
+        nf_style_layout.addStretch()
+        nf_layout.addLayout(nf_style_layout)
+
+        nf_thresh_layout = QtWidgets.QHBoxLayout()
+        nf_thresh_layout.addWidget(QtWidgets.QLabel("NACD threshold:"))
+        self.nacd_thresh_spin = QtWidgets.QDoubleSpinBox()
+        self.nacd_thresh_spin.setRange(0.1, 10.0)
+        self.nacd_thresh_spin.setValue(1.0)
+        self.nacd_thresh_spin.setSingleStep(0.1)
+        nf_thresh_layout.addWidget(self.nacd_thresh_spin)
+        nf_thresh_layout.addStretch()
+        nf_layout.addLayout(nf_thresh_layout)
+
+        nf_alpha_layout = QtWidgets.QHBoxLayout()
+        nf_alpha_layout.addWidget(QtWidgets.QLabel("Near-field alpha:"))
+        self.nf_alpha_spin = QtWidgets.QDoubleSpinBox()
+        self.nf_alpha_spin.setRange(0.0, 1.0)
+        self.nf_alpha_spin.setValue(0.4)
+        self.nf_alpha_spin.setSingleStep(0.05)
+        nf_alpha_layout.addWidget(self.nf_alpha_spin)
+        nf_alpha_layout.addStretch()
+        nf_layout.addLayout(nf_alpha_layout)
+
+        layout.addWidget(nf_group)
+
+        layout.addStretch()
+        self.tabs.addTab(tab, "Axes & Limits")
+
+    def _build_output_tab(self):
+        """Build the Output settings tab."""
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(tab)
+
+        # Output file
+        file_group = QtWidgets.QGroupBox("Output File")
+        file_layout = QtWidgets.QVBoxLayout(file_group)
+
+        file_select_layout = QtWidgets.QHBoxLayout()
+        self.output_path_edit = QtWidgets.QLineEdit()
+        self.output_path_edit.setPlaceholderText("Select output file...")
+        file_select_layout.addWidget(self.output_path_edit)
+
+        self.browse_button = QtWidgets.QPushButton("Browse...")
+        self.browse_button.clicked.connect(self._on_browse)
+        file_select_layout.addWidget(self.browse_button)
+
+        file_layout.addLayout(file_select_layout)
+
+        layout.addWidget(file_group)
+
+        # Format
+        format_group = QtWidgets.QGroupBox("Output Format")
+        format_layout = QtWidgets.QVBoxLayout(format_group)
+
+        self.format_pdf = QtWidgets.QRadioButton("PDF (vector, recommended)")
+        self.format_png = QtWidgets.QRadioButton("PNG (raster)")
+        self.format_svg = QtWidgets.QRadioButton("SVG (vector)")
+        self.format_eps = QtWidgets.QRadioButton("EPS (vector)")
+
+        self.format_pdf.setChecked(True)
+
+        format_layout.addWidget(self.format_pdf)
+        format_layout.addWidget(self.format_png)
+        format_layout.addWidget(self.format_svg)
+        format_layout.addWidget(self.format_eps)
+
+        layout.addWidget(format_group)
+
+        # Layout options
+        layout_group = QtWidgets.QGroupBox("Layout")
+        layout_layout = QtWidgets.QVBoxLayout(layout_group)
+
+        self.tight_layout_check = QtWidgets.QCheckBox("Use tight layout")
+        self.tight_layout_check.setChecked(True)
+        layout_layout.addWidget(self.tight_layout_check)
+
+        layout.addWidget(layout_group)
+
+        layout.addStretch()
+        self.tabs.addTab(tab, "Output")
+
+    def _on_browse(self):
+        """Open file dialog to select output path."""
+        # Determine default suffix based on format
+        if self.format_pdf.isChecked():
+            default_filter = "PDF Files (*.pdf)"
+            default_suffix = ".pdf"
+        elif self.format_png.isChecked():
+            default_filter = "PNG Files (*.png)"
+            default_suffix = ".png"
+        elif self.format_svg.isChecked():
+            default_filter = "SVG Files (*.svg)"
+            default_suffix = ".svg"
+        else:
+            default_filter = "EPS Files (*.eps)"
+            default_suffix = ".eps"
+
+        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Save Publication Figure",
+            "",
+            f"{default_filter};;All Files (*.*)"
+        )
+
+        if file_path:
+            # Ensure correct extension
+            path = Path(file_path)
+            if path.suffix.lower() != default_suffix:
+                file_path = str(path.with_suffix(default_suffix))
+
+            self.output_path_edit.setText(file_path)
+
+    def _gather_config(self) -> PlotConfig:
+        """Gather configuration from UI widgets."""
+        # Determine format
+        if self.format_pdf.isChecked():
+            output_format = 'pdf'
+        elif self.format_png.isChecked():
+            output_format = 'png'
+        elif self.format_svg.isChecked():
+            output_format = 'svg'
+        else:
+            output_format = 'eps'
+
+        # Determine limits
+        xlim = None
+        if not self.xlim_auto_check.isChecked():
+            xlim = (self.xlim_min_spin.value(), self.xlim_max_spin.value())
+
+        ylim = None
+        if not self.ylim_auto_check.isChecked():
+            ylim = (self.ylim_min_spin.value(), self.ylim_max_spin.value())
+
+        config = PlotConfig(
+            figsize=(self.figsize_width_spin.value(), self.figsize_height_spin.value()),
+            dpi=self.dpi_spin.value(),
+            font_family=self.font_family_combo.currentText(),
+            font_size=self.font_size_spin.value(),
+            line_width=self.line_width_spin.value(),
+            marker_size=self.marker_size_spin.value(),
+            color_palette=self.color_palette_combo.currentText(),
+            uncertainty_alpha=self.uncertainty_alpha_spin.value(),
+            near_field_alpha=self.nf_alpha_spin.value(),
+            mark_near_field=self.mark_near_field_check.isChecked(),
+            near_field_style=self.nf_style_combo.currentText(),
+            nacd_threshold=self.nacd_thresh_spin.value(),
+            show_grid=self.show_grid_check.isChecked(),
+            grid_alpha=self.grid_alpha_spin.value(),
+            xlabel=self.xlabel_edit.text(),
+            ylabel=self.ylabel_edit.text(),
+            xlim=xlim,
+            ylim=ylim,
+            output_format=output_format,
+            tight_layout=self.tight_layout_check.isChecked(),
+        )
+
+        return config
+
+    def _on_generate(self):
+        """Generate the publication figure."""
+        # Validate output path
+        output_path = self.output_path_edit.text().strip()
+        if not output_path:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "No Output File",
+                "Please select an output file path."
+            )
+            return
+
+        # Gather configuration
+        config = self._gather_config()
+
+        # Create generator from controller
+        try:
+            generator = PublicationFigureGenerator.from_controller(self.controller)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to create figure generator:\n{str(e)}"
+            )
+            return
+
+        # Generate appropriate plot type
+        try:
+            if self.plot_type_aggregated.isChecked():
+                generator.generate_aggregated_plot(output_path=output_path, config=config)
+            elif self.plot_type_per_offset.isChecked():
+                max_offsets = self.max_offsets_spin.value()
+                generator.generate_per_offset_plot(
+                    output_path=output_path,
+                    config=config,
+                    max_offsets=max_offsets
+                )
+            else:  # uncertainty
+                generator.generate_uncertainty_plot(output_path=output_path, config=config)
+
+            # Success message
+            QtWidgets.QMessageBox.information(
+                self,
+                "Success",
+                f"Publication figure saved to:\n{output_path}"
+            )
+
+            self.accept()
+
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to generate figure:\n{str(e)}"
+            )
