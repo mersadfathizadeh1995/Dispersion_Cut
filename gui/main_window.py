@@ -142,7 +142,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(container)
 
     def _build_menu(self):
-        bar = self.menuBar(); m_file = bar.addMenu("&File"); m_view = bar.addMenu("&View"); m_edit = bar.addMenu("&Edit"); m_tools= bar.addMenu("&Tools")
+        bar = self.menuBar(); m_file = bar.addMenu("&File"); m_view = bar.addMenu("&View"); m_edit = bar.addMenu("&Edit"); m_tools= bar.addMenu("&Tools"); m_help = bar.addMenu("&Help")
+
+        # File menu - Preferences
+        act_prefs = QtGui.QAction("Preferences...", self)
+        act_prefs.setShortcut("Ctrl+,")
+        act_prefs.triggered.connect(self._show_preferences)
+        m_file.addAction(act_prefs)
+        m_file.addSeparator()
+
         act_exit = QtGui.QAction("Exit", self); act_exit.setShortcut("Ctrl+Q"); act_exit.triggered.connect(self.close); m_file.addAction(act_exit)
         reg = getattr(self.controller, 'actions', None)
         if reg is not None:
@@ -199,6 +207,53 @@ class MainWindow(QtWidgets.QMainWindow):
                 m_file.addAction(act_psv)
             except Exception: pass
 
+        # Help menu
+        act_shortcuts = QtGui.QAction("Keyboard Shortcuts...", self)
+        act_shortcuts.setShortcut("F1")
+        act_shortcuts.triggered.connect(self._show_shortcuts)
+        m_help.addAction(act_shortcuts)
+
+    def _show_shortcuts(self):
+        """Show keyboard shortcuts reference."""
+        shortcuts_text = """<h2>Keyboard Shortcuts</h2>
+        <table cellpadding="5">
+        <tr><th align="left">Action</th><th align="left">Shortcut</th></tr>
+        <tr><td><b>File</b></td><td></td></tr>
+        <tr><td>Preferences</td><td>Ctrl+,</td></tr>
+        <tr><td>Save State</td><td>Ctrl+S</td></tr>
+        <tr><td>Exit</td><td>Ctrl+Q</td></tr>
+        <tr><td><b>Edit</b></td><td></td></tr>
+        <tr><td>Undo</td><td>Ctrl+Z</td></tr>
+        <tr><td>Redo</td><td>Ctrl+Y</td></tr>
+        <tr><td>Cancel Selection</td><td>Esc</td></tr>
+        <tr><td><b>View</b></td><td></td></tr>
+        <tr><td>Both Plots</td><td>Ctrl+1</td></tr>
+        <tr><td>Frequency Plot Only</td><td>Ctrl+2</td></tr>
+        <tr><td>Wavelength Plot Only</td><td>Ctrl+3</td></tr>
+        <tr><td><b>Near-Field</b></td><td></td></tr>
+        <tr><td>Start NF Evaluation</td><td>Ctrl+N</td></tr>
+        <tr><td>Apply NF Deletions</td><td>Ctrl+Enter</td></tr>
+        <tr><td>Cancel NF Mode</td><td>Esc</td></tr>
+        <tr><td><b>Help</b></td><td></td></tr>
+        <tr><td>Show Shortcuts</td><td>F1</td></tr>
+        </table>
+        """
+        msg = QtWidgets.QMessageBox(self)
+        msg.setWindowTitle("Keyboard Shortcuts")
+        msg.setTextFormat(QtCore.Qt.TextFormat.RichText if hasattr(QtCore.Qt, 'TextFormat') else QtCore.Qt.RichText)
+        msg.setText(shortcuts_text)
+        msg.setIcon(QtWidgets.QMessageBox.Icon.Information if hasattr(QtWidgets.QMessageBox, 'Icon') else QtWidgets.QMessageBox.Information)
+        msg.exec()
+
+    def _show_preferences(self):
+        """Show the preferences dialog."""
+        try:
+            from dc_cut.gui.preferences_dialog import PreferencesDialog
+            dlg = PreferencesDialog(self)
+            dlg.exec()
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open preferences:\n{e}")
+
     def _build_toolbar(self):
         pass
 
@@ -218,6 +273,18 @@ class MainWindow(QtWidgets.QMainWindow):
 
 def show_shell(controller):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+
+    # Apply theme from preferences
+    try:
+        from dc_cut.services.prefs import load_prefs
+        from dc_cut.services.theme import apply_theme, apply_matplotlib_theme
+        prefs = load_prefs()
+        theme_name = prefs.get("theme", "light")
+        apply_theme(app, theme_name)
+        apply_matplotlib_theme(theme_name)
+    except Exception:
+        pass  # Silently fall back to default theme
+
     win = MainWindow(controller); win.show()
     setattr(app, "_masw_shell_window", win)
     try: win.raise_(); win.activateWindow()

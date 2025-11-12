@@ -420,6 +420,18 @@ def open_data_directly():
 
 def main():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+
+    # Apply theme from preferences early
+    try:
+        from dc_cut.services.prefs import load_prefs
+        from dc_cut.services.theme import apply_theme, apply_matplotlib_theme
+        prefs = load_prefs()
+        theme_name = prefs.get("theme", "light")
+        apply_theme(app, theme_name)
+        apply_matplotlib_theme(theme_name)
+    except Exception:
+        pass  # Silently fall back to default theme
+
     # Simple CLI: allow opening data without the launcher
     try:
         import argparse
