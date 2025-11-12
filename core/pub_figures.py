@@ -295,6 +295,9 @@ class PublicationFigureGenerator:
 
     def _apply_style(self, config: PlotConfig):
         """Apply publication styling to matplotlib."""
+        # Determine if we're using a raster format (needs white background)
+        is_raster = config.output_format.lower() in ['png', 'jpg', 'jpeg']
+
         plt.rcParams.update({
             'font.family': config.font_family,
             'font.size': config.font_size,
@@ -306,6 +309,11 @@ class PublicationFigureGenerator:
             'lines.linewidth': config.line_width,
             'lines.markersize': config.marker_size,
             'figure.dpi': config.dpi,
+            # Set backgrounds: white for raster, transparent for vector
+            'figure.facecolor': 'white' if is_raster else 'none',
+            'axes.facecolor': 'white',
+            'savefig.facecolor': 'white' if is_raster else 'none',
+            'savefig.edgecolor': 'none',
         })
 
     def _get_colors(self, config: PlotConfig, n: int) -> List[str]:
@@ -440,7 +448,16 @@ class PublicationFigureGenerator:
 
         # Save if path provided
         if output_path:
-            fig.savefig(output_path, dpi=config.dpi, bbox_inches='tight')
+            # Determine transparency based on format
+            is_raster = config.output_format.lower() in ['png', 'jpg', 'jpeg']
+            transparent = not is_raster
+            fig.savefig(
+                output_path,
+                dpi=config.dpi,
+                bbox_inches='tight',
+                facecolor='white' if is_raster else 'none',
+                transparent=transparent
+            )
 
         return fig
 
@@ -525,7 +542,16 @@ class PublicationFigureGenerator:
 
         # Save if path provided
         if output_path:
-            fig.savefig(output_path, dpi=config.dpi, bbox_inches='tight')
+            # Determine transparency based on format
+            is_raster = config.output_format.lower() in ['png', 'jpg', 'jpeg']
+            transparent = not is_raster
+            fig.savefig(
+                output_path,
+                dpi=config.dpi,
+                bbox_inches='tight',
+                facecolor='white' if is_raster else 'none',
+                transparent=transparent
+            )
 
         return fig
 
@@ -638,6 +664,15 @@ class PublicationFigureGenerator:
 
         # Save if path provided
         if output_path:
-            fig.savefig(output_path, dpi=config.dpi, bbox_inches='tight')
+            # Determine transparency based on format
+            is_raster = config.output_format.lower() in ['png', 'jpg', 'jpeg']
+            transparent = not is_raster
+            fig.savefig(
+                output_path,
+                dpi=config.dpi,
+                bbox_inches='tight',
+                facecolor='white' if is_raster else 'none',
+                transparent=transparent
+            )
 
         return fig
