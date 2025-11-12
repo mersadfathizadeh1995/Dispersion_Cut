@@ -345,22 +345,35 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
 
-        # Output file
-        file_group = QtWidgets.QGroupBox("Output File")
-        file_layout = QtWidgets.QVBoxLayout(file_group)
+        # Output directory
+        dir_group = QtWidgets.QGroupBox("Output Directory")
+        dir_layout = QtWidgets.QVBoxLayout(dir_group)
 
-        file_select_layout = QtWidgets.QHBoxLayout()
-        self.output_path_edit = QtWidgets.QLineEdit()
-        self.output_path_edit.setPlaceholderText("Select output file...")
-        file_select_layout.addWidget(self.output_path_edit)
+        dir_select_layout = QtWidgets.QHBoxLayout()
+        self.output_dir_edit = QtWidgets.QLineEdit()
+        self.output_dir_edit.setPlaceholderText("Select output directory...")
+        dir_select_layout.addWidget(self.output_dir_edit)
 
         self.browse_button = QtWidgets.QPushButton("Browse...")
         self.browse_button.clicked.connect(self._on_browse)
-        file_select_layout.addWidget(self.browse_button)
+        dir_select_layout.addWidget(self.browse_button)
 
-        file_layout.addLayout(file_select_layout)
+        dir_layout.addLayout(dir_select_layout)
 
-        layout.addWidget(file_group)
+        # Filename options
+        filename_layout = QtWidgets.QHBoxLayout()
+        filename_layout.addWidget(QtWidgets.QLabel("Filename:"))
+        self.filename_edit = QtWidgets.QLineEdit("dispersion_curve")
+        self.filename_edit.setPlaceholderText("Enter filename (without extension)")
+        filename_layout.addWidget(self.filename_edit)
+        dir_layout.addLayout(filename_layout)
+
+        note_label = QtWidgets.QLabel("Note: File extension will be added automatically based on format")
+        note_label.setStyleSheet("color: gray; font-style: italic; font-size: 9pt;")
+        note_label.setWordWrap(True)
+        dir_layout.addWidget(note_label)
+
+        layout.addWidget(dir_group)
 
         # Format
         format_group = QtWidgets.QGroupBox("Output Format")
@@ -394,35 +407,21 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         self.tabs.addTab(tab, "Output")
 
     def _on_browse(self):
-        """Open file dialog to select output path."""
-        # Determine default suffix based on format
-        if self.format_pdf.isChecked():
-            default_filter = "PDF Files (*.pdf)"
-            default_suffix = ".pdf"
-        elif self.format_png.isChecked():
-            default_filter = "PNG Files (*.png)"
-            default_suffix = ".png"
-        elif self.format_svg.isChecked():
-            default_filter = "SVG Files (*.svg)"
-            default_suffix = ".svg"
-        else:
-            default_filter = "EPS Files (*.eps)"
-            default_suffix = ".eps"
+        """Open dialog to select output directory."""
+        # Get current directory if set
+        current_dir = self.output_dir_edit.text().strip()
+        if not current_dir:
+            current_dir = str(Path.home())
 
-        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+        dir_path = QtWidgets.QFileDialog.getExistingDirectory(
             self,
-            "Save Publication Figure",
-            "",
-            f"{default_filter};;All Files (*.*)"
+            "Select Output Directory",
+            current_dir,
+            QtWidgets.QFileDialog.ShowDirsOnly
         )
 
-        if file_path:
-            # Ensure correct extension
-            path = Path(file_path)
-            if path.suffix.lower() != default_suffix:
-                file_path = str(path.with_suffix(default_suffix))
-
-            self.output_path_edit.setText(file_path)
+        if dir_path:
+            self.output_dir_edit.setText(dir_path)
 
     def _gather_config(self) -> PlotConfig:
         """Gather configuration from UI widgets."""
@@ -472,15 +471,71 @@ class PublicationFigureDialog(QtWidgets.QDialog):
 
     def _on_generate(self):
         """Generate the publication figure."""
-        # Validate output path
-        output_path = self.output_path_edit.text().strip()
-        if not output_path:
+        # Validate output directory
+        output_dir = self.output_dir_edit.text().strip()
+        if not output_dir:
             QtWidgets.QMessageBox.warning(
                 self,
-                "No Output File",
-                "Please select an output file path."
+                "No Output Directory",
+                "Please select an output directory."
             )
             return
+
+        # Validate directory exists
+        dir_path = Path(output_dir)
+        if not dir_path.exists():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Directory Not Found",
+                f"The directory does not exist:\n{output_dir}"
+            )
+            return
+
+        if not dir_path.is_dir():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Invalid Directory",
+                f"The path is not a directory:\n{output_dir}"
+            )
+            return
+
+        # Get filename
+        filename = self.filename_edit.text().strip()
+        if not filename:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "No Filename",
+                "Please enter a filename."
+            )
+            return
+
+        # Determine file extension based on format
+        if self.format_pdf.isChecked():
+            extension = ".pdf"
+        elif self.format_png.isChecked():
+            extension = ".png"
+        elif self.format_svg.isChecked():
+            extension = ".svg"
+        else:
+            extension = ".eps"
+
+        # Remove extension from filename if user added one
+        filename_base = Path(filename).stem
+
+        # Construct full output path
+        output_path = str(dir_path / f"{filename_base}{extension}")
+
+        # Check if file exists and confirm overwrite
+        if Path(output_path).exists():
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "File Exists",
+                f"The file already exists:\n{output_path}\n\nOverwrite?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No
+            )
+            if reply == QtWidgets.QMessageBox.No:
+                return
 
         # Gather configuration
         config = self._gather_config()
