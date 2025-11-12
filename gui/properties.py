@@ -60,12 +60,8 @@ class PropertiesDock(QtWidgets.QDockWidget):
         self.btn_apply_limits.clicked.connect(self._apply_limits)
         self.btn_reavg.clicked.connect(self._recompute_avg)
 
-        try:
-            self._sc_both = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+1"), self); self._sc_both.activated.connect(lambda: self.controller._apply_view_mode('both'))
-            self._sc_freq = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+2"), self); self._sc_freq.activated.connect(lambda: self.controller._apply_view_mode('freq_only'))
-            self._sc_wave = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+3"), self); self._sc_wave.activated.connect(lambda: self.controller._apply_view_mode('wave_only'))
-        except Exception:
-            pass
+        # Note: Keyboard shortcuts (Ctrl+1/2/3) are now handled globally in main_window.py
+        # No need to duplicate them here
 
         self.sync_from_controller()
         # Load NACD from prefs if controller lacks it

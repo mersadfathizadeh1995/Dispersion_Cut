@@ -263,22 +263,17 @@ class MainWindow(QtWidgets.QMainWindow):
         # Esc - Cancel selection
         try:
             sc_esc = QtGui.QShortcut(QtGui.QKeySequence('Esc'), self)
-            try: sc_esc.setContext(QtCore.Qt.ApplicationShortcut)
-            except Exception:
-                try: sc_esc.setContext(QtCore.Qt.ShortcutContext.ApplicationShortcut)
-                except Exception: pass
+            sc_esc.setContext(QtCore.Qt.WindowShortcut if hasattr(QtCore.Qt, 'WindowShortcut') else QtCore.Qt.ShortcutContext.WindowShortcut)
             sc_esc.activated.connect(lambda: self.controller._on_cancel(None))
+            sc_esc.setEnabled(True)
             self._esc_shortcut = sc_esc
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: Could not install Esc shortcut: {e}")
 
         # Delete - Delete selected area
         try:
             sc_del = QtGui.QShortcut(QtGui.QKeySequence('Delete'), self)
-            try: sc_del.setContext(QtCore.Qt.ApplicationShortcut)
-            except Exception:
-                try: sc_del.setContext(QtCore.Qt.ShortcutContext.ApplicationShortcut)
-                except Exception: pass
+            sc_del.setContext(QtCore.Qt.WindowShortcut if hasattr(QtCore.Qt, 'WindowShortcut') else QtCore.Qt.ShortcutContext.WindowShortcut)
             # Use the delete action from controller if available
             reg = getattr(self.controller, 'actions', None)
             if reg is not None:
@@ -287,46 +282,47 @@ class MainWindow(QtWidgets.QMainWindow):
                     sc_del.activated.connect(a_del.callback)
                 except Exception:
                     pass
+            sc_del.setEnabled(True)
             self._del_shortcut = sc_del
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: Could not install Delete shortcut: {e}")
 
         # View mode shortcuts (Ctrl+1/2/3)
         try:
             sc_both = QtGui.QShortcut(QtGui.QKeySequence('Ctrl+1'), self)
-            try: sc_both.setContext(QtCore.Qt.ApplicationShortcut)
-            except: pass
+            sc_both.setContext(QtCore.Qt.WindowShortcut if hasattr(QtCore.Qt, 'WindowShortcut') else QtCore.Qt.ShortcutContext.WindowShortcut)
             sc_both.activated.connect(lambda: self.controller._apply_view_mode('both'))
+            sc_both.setEnabled(True)
 
             sc_freq = QtGui.QShortcut(QtGui.QKeySequence('Ctrl+2'), self)
-            try: sc_freq.setContext(QtCore.Qt.ApplicationShortcut)
-            except: pass
+            sc_freq.setContext(QtCore.Qt.WindowShortcut if hasattr(QtCore.Qt, 'WindowShortcut') else QtCore.Qt.ShortcutContext.WindowShortcut)
             sc_freq.activated.connect(lambda: self.controller._apply_view_mode('freq_only'))
+            sc_freq.setEnabled(True)
 
             sc_wave = QtGui.QShortcut(QtGui.QKeySequence('Ctrl+3'), self)
-            try: sc_wave.setContext(QtCore.Qt.ApplicationShortcut)
-            except: pass
+            sc_wave.setContext(QtCore.Qt.WindowShortcut if hasattr(QtCore.Qt, 'WindowShortcut') else QtCore.Qt.ShortcutContext.WindowShortcut)
             sc_wave.activated.connect(lambda: self.controller._apply_view_mode('wave_only'))
+            sc_wave.setEnabled(True)
 
             self._view_shortcuts = [sc_both, sc_freq, sc_wave]
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: Could not install view shortcuts: {e}")
 
         # Undo/Redo shortcuts
         try:
             sc_undo = QtGui.QShortcut(QtGui.QKeySequence('Ctrl+Z'), self)
-            try: sc_undo.setContext(QtCore.Qt.ApplicationShortcut)
-            except: pass
+            sc_undo.setContext(QtCore.Qt.WindowShortcut if hasattr(QtCore.Qt, 'WindowShortcut') else QtCore.Qt.ShortcutContext.WindowShortcut)
             sc_undo.activated.connect(lambda: self.controller._on_undo(None))
+            sc_undo.setEnabled(True)
 
             sc_redo = QtGui.QShortcut(QtGui.QKeySequence('Ctrl+Y'), self)
-            try: sc_redo.setContext(QtCore.Qt.ApplicationShortcut)
-            except: pass
+            sc_redo.setContext(QtCore.Qt.WindowShortcut if hasattr(QtCore.Qt, 'WindowShortcut') else QtCore.Qt.ShortcutContext.WindowShortcut)
             sc_redo.activated.connect(lambda: self.controller._on_redo(None))
+            sc_redo.setEnabled(True)
 
             self._edit_shortcuts = [sc_undo, sc_redo]
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: Could not install undo/redo shortcuts: {e}")
 
         # Save shortcuts
         try:
@@ -335,14 +331,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 try:
                     a_save = reg.get('file.save_state')
                     sc_save = QtGui.QShortcut(QtGui.QKeySequence('Ctrl+S'), self)
-                    try: sc_save.setContext(QtCore.Qt.ApplicationShortcut)
-                    except: pass
+                    sc_save.setContext(QtCore.Qt.WindowShortcut if hasattr(QtCore.Qt, 'WindowShortcut') else QtCore.Qt.ShortcutContext.WindowShortcut)
                     sc_save.activated.connect(a_save.callback)
+                    sc_save.setEnabled(True)
                     self._save_shortcut = sc_save
                 except Exception:
                     pass
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: Could not install save shortcut: {e}")
 
 
 def show_shell(controller):
