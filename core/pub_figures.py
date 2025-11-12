@@ -121,12 +121,34 @@ class PublicationFigureGenerator:
         Returns:
             PublicationFigureGenerator instance
         """
+        # Extract layer labels (offset_labels in controller)
+        # Note: offset_labels includes average labels appended at the end,
+        # so we only take labels matching the number of data arrays
+        n = len(controller.velocity_arrays)
+        layer_labels = list(controller.offset_labels[:n])
+
+        # Extract visibility flags from layers model if available
+        active_flags = []
+        if hasattr(controller, '_layers_model') and controller._layers_model is not None:
+            try:
+                for i in range(n):
+                    if i < len(controller._layers_model.layers):
+                        active_flags.append(controller._layers_model.layers[i].visible)
+                    else:
+                        active_flags.append(True)  # Default to visible
+            except Exception:
+                # Fallback if model access fails
+                active_flags = [True] * n
+        else:
+            # No layers model, assume all visible
+            active_flags = [True] * n
+
         return cls(
             velocity_arrays=controller.velocity_arrays,
             frequency_arrays=controller.frequency_arrays,
             wavelength_arrays=controller.wavelength_arrays,
-            layer_labels=controller.layer_labels,
-            active_flags=controller.active_flags,
+            layer_labels=layer_labels,
+            active_flags=active_flags,
             array_positions=getattr(controller, 'array_positions', None),
         )
 
