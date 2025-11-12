@@ -225,6 +225,7 @@ class MainWindow(QtWidgets.QMainWindow):
         <tr><td><b>Edit</b></td><td></td></tr>
         <tr><td>Undo</td><td>Ctrl+Z</td></tr>
         <tr><td>Redo</td><td>Ctrl+Y</td></tr>
+        <tr><td>Delete Selected Area</td><td>Delete</td></tr>
         <tr><td>Cancel Selection</td><td>Esc</td></tr>
         <tr><td><b>View</b></td><td></td></tr>
         <tr><td>Both Plots</td><td>Ctrl+1</td></tr>
@@ -258,15 +259,88 @@ class MainWindow(QtWidgets.QMainWindow):
         pass
 
     def _install_shortcuts(self):
-        # Single Esc binding at the window level
+        """Install global keyboard shortcuts at the window level."""
+        # Esc - Cancel selection
         try:
-            sc = QtGui.QShortcut(QtGui.QKeySequence('Esc'), self)
-            try: sc.setContext(QtCore.Qt.ApplicationShortcut)
+            sc_esc = QtGui.QShortcut(QtGui.QKeySequence('Esc'), self)
+            try: sc_esc.setContext(QtCore.Qt.ApplicationShortcut)
             except Exception:
-                try: sc.setContext(QtCore.Qt.ShortcutContext.ApplicationShortcut)
+                try: sc_esc.setContext(QtCore.Qt.ShortcutContext.ApplicationShortcut)
                 except Exception: pass
-            sc.activated.connect(lambda: self.controller._on_cancel(None))
-            self._esc_shortcut = sc
+            sc_esc.activated.connect(lambda: self.controller._on_cancel(None))
+            self._esc_shortcut = sc_esc
+        except Exception:
+            pass
+
+        # Delete - Delete selected area
+        try:
+            sc_del = QtGui.QShortcut(QtGui.QKeySequence('Delete'), self)
+            try: sc_del.setContext(QtCore.Qt.ApplicationShortcut)
+            except Exception:
+                try: sc_del.setContext(QtCore.Qt.ShortcutContext.ApplicationShortcut)
+                except Exception: pass
+            # Use the delete action from controller if available
+            reg = getattr(self.controller, 'actions', None)
+            if reg is not None:
+                try:
+                    a_del = reg.get('edit.delete')
+                    sc_del.activated.connect(a_del.callback)
+                except Exception:
+                    pass
+            self._del_shortcut = sc_del
+        except Exception:
+            pass
+
+        # View mode shortcuts (Ctrl+1/2/3)
+        try:
+            sc_both = QtGui.QShortcut(QtGui.QKeySequence('Ctrl+1'), self)
+            try: sc_both.setContext(QtCore.Qt.ApplicationShortcut)
+            except: pass
+            sc_both.activated.connect(lambda: self.controller._apply_view_mode('both'))
+
+            sc_freq = QtGui.QShortcut(QtGui.QKeySequence('Ctrl+2'), self)
+            try: sc_freq.setContext(QtCore.Qt.ApplicationShortcut)
+            except: pass
+            sc_freq.activated.connect(lambda: self.controller._apply_view_mode('freq_only'))
+
+            sc_wave = QtGui.QShortcut(QtGui.QKeySequence('Ctrl+3'), self)
+            try: sc_wave.setContext(QtCore.Qt.ApplicationShortcut)
+            except: pass
+            sc_wave.activated.connect(lambda: self.controller._apply_view_mode('wave_only'))
+
+            self._view_shortcuts = [sc_both, sc_freq, sc_wave]
+        except Exception:
+            pass
+
+        # Undo/Redo shortcuts
+        try:
+            sc_undo = QtGui.QShortcut(QtGui.QKeySequence('Ctrl+Z'), self)
+            try: sc_undo.setContext(QtCore.Qt.ApplicationShortcut)
+            except: pass
+            sc_undo.activated.connect(self.controller._on_undo)
+
+            sc_redo = QtGui.QShortcut(QtGui.QKeySequence('Ctrl+Y'), self)
+            try: sc_redo.setContext(QtCore.Qt.ApplicationShortcut)
+            except: pass
+            sc_redo.activated.connect(self.controller._on_redo)
+
+            self._edit_shortcuts = [sc_undo, sc_redo]
+        except Exception:
+            pass
+
+        # Save shortcuts
+        try:
+            reg = getattr(self.controller, 'actions', None)
+            if reg is not None:
+                try:
+                    a_save = reg.get('file.save_state')
+                    sc_save = QtGui.QShortcut(QtGui.QKeySequence('Ctrl+S'), self)
+                    try: sc_save.setContext(QtCore.Qt.ApplicationShortcut)
+                    except: pass
+                    sc_save.activated.connect(a_save.callback)
+                    self._save_shortcut = sc_save
+                except Exception:
+                    pass
         except Exception:
             pass
 

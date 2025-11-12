@@ -116,15 +116,19 @@ class PreferencesDialog(QtWidgets.QDialog):
 
         self.theme_light = QtWidgets.QRadioButton("Light (Default)")
         self.theme_dark = QtWidgets.QRadioButton("Dark (Dim Dracula)")
+        self.theme_dark_hc = QtWidgets.QRadioButton("Dark High Contrast (Better Visibility)")
 
         current_theme = self.prefs.get("theme", "light")
         if current_theme == "dark":
             self.theme_dark.setChecked(True)
+        elif current_theme == "dark-high-contrast":
+            self.theme_dark_hc.setChecked(True)
         else:
             self.theme_light.setChecked(True)
 
         theme_layout.addWidget(self.theme_light)
         theme_layout.addWidget(self.theme_dark)
+        theme_layout.addWidget(self.theme_dark_hc)
 
         note_label = QtWidgets.QLabel("Note: Theme changes will be applied when you restart the application.")
         note_label.setWordWrap(True)
@@ -231,7 +235,12 @@ class PreferencesDialog(QtWidgets.QDialog):
         prefs["show_k_guides_default"] = self.show_k_guides_check.isChecked()
 
         # Appearance
-        prefs["theme"] = "dark" if self.theme_dark.isChecked() else "light"
+        if self.theme_dark.isChecked():
+            prefs["theme"] = "dark"
+        elif self.theme_dark_hc.isChecked():
+            prefs["theme"] = "dark-high-contrast"
+        else:
+            prefs["theme"] = "light"
 
         # Array
         prefs["default_n_phones"] = self.n_phones_spin.value()
