@@ -16,6 +16,11 @@ _DEFAULTS: Dict[str, Any] = {
     # Array configuration
     "default_n_phones": 24,
     "default_receiver_dx": 2.0,
+    # Appearance
+    "theme": "light",  # "light" or "dark"
+    # General
+    "auto_save_enabled": False,
+    "auto_save_interval_minutes": 10,
 }
 
 
