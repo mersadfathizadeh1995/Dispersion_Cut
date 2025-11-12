@@ -142,18 +142,18 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
             if self.actions.try_get('edit.delete') is None:
                 self.actions.add(id="edit.delete", text="Delete", callback=lambda: self._on_delete(None), shortcut=None)
             if self.actions.try_get('edit.cancel') is None:
-                self.actions.add(id="edit.cancel", text="Cancel", callback=lambda: self._on_cancel(None), shortcut="Esc")
+                self.actions.add(id="edit.cancel", text="Cancel Selection", callback=lambda: self._on_cancel(None), shortcut=None)
             if self.actions.try_get('edit.undo') is None:
                 self.actions.add(id="edit.undo",   text="Undo",   callback=lambda: self._on_undo(None),   shortcut=None)
             if self.actions.try_get('edit.redo') is None:
                 self.actions.add(id="edit.redo",   text="Redo",   callback=lambda: self._on_redo(None),   shortcut=None)
-            # View shortcuts (Ctrl+1/2/3)
+            # View shortcuts (Ctrl+1/2/3) - shortcuts handled by main_window QShortcut, not menu
             if self.actions.try_get('view.both') is None:
-                self.actions.add(id="view.both", text="Both plots", callback=lambda: self._apply_view_mode('both'), shortcut="Ctrl+1")
+                self.actions.add(id="view.both", text="Both plots", callback=lambda: self._apply_view_mode('both'), shortcut=None)
             if self.actions.try_get('view.freq') is None:
-                self.actions.add(id="view.freq", text="Phase-vel vs Freq", callback=lambda: self._apply_view_mode('freq_only'), shortcut="Ctrl+2")
+                self.actions.add(id="view.freq", text="Phase-vel vs Freq", callback=lambda: self._apply_view_mode('freq_only'), shortcut=None)
             if self.actions.try_get('view.wave') is None:
-                self.actions.add(id="view.wave", text="Wave vs Vel", callback=lambda: self._apply_view_mode('wave_only'), shortcut="Ctrl+3")
+                self.actions.add(id="view.wave", text="Wave vs Vel", callback=lambda: self._apply_view_mode('wave_only'), shortcut=None)
         except Exception:
             pass
 
@@ -367,8 +367,11 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
                 # Grid preference
                 try:
                     from dc_cut.services.prefs import get_pref
-                    if bool(get_pref('show_grid', True)):
+                    show_grid = bool(get_pref('show_grid', True))
+                    if show_grid:
                         self.ax_freq.grid(True, which='both', alpha=0.25)
+                    else:
+                        self.ax_freq.grid(False)
                 except Exception:
                     pass
                 try: self._apply_frequency_ticks()
@@ -382,8 +385,11 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
                 self.ax_wave.set_ylim(y0, y1); self.ax_wave.set_xlim(wmin, wmax)
                 try:
                     from dc_cut.services.prefs import get_pref
-                    if bool(get_pref('show_grid', True)):
+                    show_grid = bool(get_pref('show_grid', True))
+                    if show_grid:
                         self.ax_wave.grid(True, which='both', alpha=0.25)
+                    else:
+                        self.ax_wave.grid(False)
                 except Exception:
                     pass
             try: self._draw_k_guides()

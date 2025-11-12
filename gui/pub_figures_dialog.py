@@ -106,6 +106,16 @@ class PublicationFigureDialog(QtWidgets.QDialog):
 
         layout.addWidget(type_group)
 
+        # Option to generate all plot types
+        self.generate_all_check = QtWidgets.QCheckBox("Generate all plot types at once")
+        self.generate_all_check.setToolTip(
+            "When checked, all three plot types will be generated with appropriate filenames:\n"
+            "  - <filename>_aggregated.ext\n"
+            "  - <filename>_per_offset.ext\n"
+            "  - <filename>_uncertainty.ext"
+        )
+        layout.addWidget(self.generate_all_check)
+
         # Per-offset options (only enabled when per-offset is selected)
         offset_group = QtWidgets.QGroupBox("Per-Offset Options")
         offset_layout = QtWidgets.QFormLayout(offset_group)
@@ -413,12 +423,39 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         if not current_dir:
             current_dir = str(Path.home())
 
-        dir_path = QtWidgets.QFileDialog.getExistingDirectory(
-            self,
-            "Select Output Directory",
-            current_dir,
-            QtWidgets.QFileDialog.ShowDirsOnly
-        )
+        # Handle Qt version compatibility for ShowDirsOnly option
+        try:
+            # Try newer Qt6 enum style first
+            options = QtWidgets.QFileDialog.Option.ShowDirsOnly
+        except AttributeError:
+            try:
+                # Fall back to Qt5 style
+                options = QtWidgets.QFileDialog.ShowDirsOnly
+            except AttributeError:
+                # If neither works, use no options
+                options = None
+
+        try:
+            if options is not None:
+                dir_path = QtWidgets.QFileDialog.getExistingDirectory(
+                    self,
+                    "Select Output Directory",
+                    current_dir,
+                    options
+                )
+            else:
+                dir_path = QtWidgets.QFileDialog.getExistingDirectory(
+                    self,
+                    "Select Output Directory",
+                    current_dir
+                )
+        except Exception as e:
+            # Fallback without options if there's any error
+            dir_path = QtWidgets.QFileDialog.getExistingDirectory(
+                self,
+                "Select Output Directory",
+                current_dir
+            )
 
         if dir_path:
             self.output_dir_edit.setText(dir_path)
@@ -522,21 +559,6 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         # Remove extension from filename if user added one
         filename_base = Path(filename).stem
 
-        # Construct full output path
-        output_path = str(dir_path / f"{filename_base}{extension}")
-
-        # Check if file exists and confirm overwrite
-        if Path(output_path).exists():
-            reply = QtWidgets.QMessageBox.question(
-                self,
-                "File Exists",
-                f"The file already exists:\n{output_path}\n\nOverwrite?",
-                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                QtWidgets.QMessageBox.No
-            )
-            if reply == QtWidgets.QMessageBox.No:
-                return
-
         # Gather configuration
         config = self._gather_config()
 
@@ -551,32 +573,110 @@ class PublicationFigureDialog(QtWidgets.QDialog):
             )
             return
 
-        # Generate appropriate plot type
-        try:
-            if self.plot_type_aggregated.isChecked():
-                generator.generate_aggregated_plot(output_path=output_path, config=config)
-            elif self.plot_type_per_offset.isChecked():
-                max_offsets = self.max_offsets_spin.value()
-                generator.generate_per_offset_plot(
-                    output_path=output_path,
-                    config=config,
-                    max_offsets=max_offsets
+        # Determine if generating all types or just one
+        generate_all = self.generate_all_check.isChecked()
+
+        if generate_all:
+            # Generate all three plot types
+            outputs_to_generate = [
+                ('aggregated', 'aggregated'),
+                ('per_offset', 'per_offset'),
+                ('uncertainty', 'uncertainty')
+            ]
+
+            # Check if any files exist
+            files_to_create = []
+            for plot_type, suffix in outputs_to_generate:
+                output_path = str(dir_path / f"{filename_base}_{suffix}{extension}")
+                files_to_create.append((plot_type, output_path))
+
+            existing_files = [p for _, p in files_to_create if Path(p).exists()]
+            if existing_files:
+                file_list = '\n'.join(existing_files)
+                reply = QtWidgets.QMessageBox.question(
+                    self,
+                    "Files Exist",
+                    f"The following files already exist:\n{file_list}\n\nOverwrite?",
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.No
                 )
-            else:  # uncertainty
-                generator.generate_uncertainty_plot(output_path=output_path, config=config)
+                if reply == QtWidgets.QMessageBox.No:
+                    return
 
-            # Success message
-            QtWidgets.QMessageBox.information(
-                self,
-                "Success",
-                f"Publication figure saved to:\n{output_path}"
-            )
+            # Generate all plots
+            try:
+                generated_files = []
+                for plot_type, output_path in files_to_create:
+                    if plot_type == 'aggregated':
+                        generator.generate_aggregated_plot(output_path=output_path, config=config)
+                    elif plot_type == 'per_offset':
+                        max_offsets = self.max_offsets_spin.value()
+                        generator.generate_per_offset_plot(
+                            output_path=output_path,
+                            config=config,
+                            max_offsets=max_offsets
+                        )
+                    else:  # uncertainty
+                        generator.generate_uncertainty_plot(output_path=output_path, config=config)
+                    generated_files.append(output_path)
 
-            self.accept()
+                # Success message
+                file_list = '\n'.join(generated_files)
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Success",
+                    f"All publication figures saved:\n{file_list}"
+                )
+                self.accept()
 
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(
-                self,
-                "Error",
-                f"Failed to generate figure:\n{str(e)}"
-            )
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "Error",
+                    f"Failed to generate figures:\n{str(e)}"
+                )
+        else:
+            # Generate single plot type
+            output_path = str(dir_path / f"{filename_base}{extension}")
+
+            # Check if file exists and confirm overwrite
+            if Path(output_path).exists():
+                reply = QtWidgets.QMessageBox.question(
+                    self,
+                    "File Exists",
+                    f"The file already exists:\n{output_path}\n\nOverwrite?",
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.No
+                )
+                if reply == QtWidgets.QMessageBox.No:
+                    return
+
+            # Generate appropriate plot type
+            try:
+                if self.plot_type_aggregated.isChecked():
+                    generator.generate_aggregated_plot(output_path=output_path, config=config)
+                elif self.plot_type_per_offset.isChecked():
+                    max_offsets = self.max_offsets_spin.value()
+                    generator.generate_per_offset_plot(
+                        output_path=output_path,
+                        config=config,
+                        max_offsets=max_offsets
+                    )
+                else:  # uncertainty
+                    generator.generate_uncertainty_plot(output_path=output_path, config=config)
+
+                # Success message
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Success",
+                    f"Publication figure saved to:\n{output_path}"
+                )
+
+                self.accept()
+
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "Error",
+                    f"Failed to generate figure:\n{str(e)}"
+                )

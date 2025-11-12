@@ -163,8 +163,7 @@ class MainWindow(QtWidgets.QMainWindow):
             a_both = reg.get('view.both'); view_both = QtGui.QAction(a_both.text, self); view_both.triggered.connect(a_both.callback)
             a_freq = reg.get('view.freq'); view_freq = QtGui.QAction(a_freq.text, self); view_freq.triggered.connect(a_freq.callback)
             a_wave = reg.get('view.wave'); view_wave = QtGui.QAction(a_wave.text, self); view_wave.triggered.connect(a_wave.callback)
-            try: view_both.setShortcut('Ctrl+1'); view_freq.setShortcut('Ctrl+2'); view_wave.setShortcut('Ctrl+3')
-            except Exception: pass
+            # Shortcuts handled by QShortcut at window level, not menu actions
         else:
             view_both = QtGui.QAction("Both plots", self); view_both.triggered.connect(lambda: self.controller._apply_view_mode('both'))
             view_freq = QtGui.QAction("Phase-vel vs Freq", self); view_freq.triggered.connect(lambda: self.controller._apply_view_mode('freq_only'))
