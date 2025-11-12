@@ -149,6 +149,12 @@ class MainWindow(QtWidgets.QMainWindow):
         act_prefs.setShortcut("Ctrl+,")
         act_prefs.triggered.connect(self._show_preferences)
         m_file.addAction(act_prefs)
+
+        # Export Publication Figure
+        act_pub_fig = QtGui.QAction("Export Publication Figure...", self)
+        act_pub_fig.triggered.connect(self._show_pub_figure_dialog)
+        m_file.addAction(act_pub_fig)
+
         m_file.addSeparator()
 
         act_exit = QtGui.QAction("Exit", self); act_exit.setShortcut("Ctrl+Q"); act_exit.triggered.connect(self.close); m_file.addAction(act_exit)
@@ -254,6 +260,15 @@ class MainWindow(QtWidgets.QMainWindow):
             dlg.exec()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open preferences:\n{e}")
+
+    def _show_pub_figure_dialog(self):
+        """Show the publication figure export dialog."""
+        try:
+            from dc_cut.gui.pub_figures_dialog import PublicationFigureDialog
+            dlg = PublicationFigureDialog(self.controller, self)
+            dlg.exec()
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open publication figure dialog:\n{e}")
 
     def _build_toolbar(self):
         pass
