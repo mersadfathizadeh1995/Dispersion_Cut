@@ -17,7 +17,7 @@ DARK_THEME_COLORS = {
     "green": "#50fa7b",          # Accent 2
     "orange": "#ffb86c",         # Accent 3
     "pink": "#ff79c6",           # Accent 4
-    "purple": "#bd93f9",         # Accent 5
+    "border": "#808080",         # Gray borders (was purple)
     "red": "#ff5555",            # Error/warning
     "yellow": "#f1fa8c",         # Highlight
 }
@@ -42,7 +42,7 @@ def get_dark_stylesheet() -> str:
     QMenuBar {{
         background-color: {DARK_THEME_COLORS['background']};
         color: {DARK_THEME_COLORS['foreground']};
-        border-bottom: 2px solid {DARK_THEME_COLORS['purple']};
+        border-bottom: 2px solid {DARK_THEME_COLORS['border']};
     }}
 
     QMenuBar::item:selected {{
@@ -52,7 +52,7 @@ def get_dark_stylesheet() -> str:
     QMenu {{
         background-color: {DARK_THEME_COLORS['background']};
         color: {DARK_THEME_COLORS['foreground']};
-        border: 2px solid {DARK_THEME_COLORS['purple']};
+        border: 2px solid {DARK_THEME_COLORS['border']};
     }}
 
     QMenu::item:selected {{
@@ -62,7 +62,7 @@ def get_dark_stylesheet() -> str:
     QPushButton {{
         background-color: {DARK_THEME_COLORS['selection']};
         color: {DARK_THEME_COLORS['foreground']};
-        border: 2px solid {DARK_THEME_COLORS['purple']};
+        border: 2px solid {DARK_THEME_COLORS['border']};
         padding: 5px 15px;
         border-radius: 3px;
     }}
@@ -73,14 +73,14 @@ def get_dark_stylesheet() -> str:
     }}
 
     QPushButton:pressed {{
-        background-color: {DARK_THEME_COLORS['purple']};
-        border: 2px solid {DARK_THEME_COLORS['cyan']};
+        background-color: {DARK_THEME_COLORS['comment']};
+        border: 2px solid {DARK_THEME_COLORS['border']};
     }}
 
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
         background-color: {DARK_THEME_COLORS['selection']};
         color: {DARK_THEME_COLORS['foreground']};
-        border: 2px solid {DARK_THEME_COLORS['purple']};
+        border: 2px solid {DARK_THEME_COLORS['border']};
         padding: 3px;
         border-radius: 2px;
     }}
@@ -95,7 +95,7 @@ def get_dark_stylesheet() -> str:
 
     QGroupBox {{
         color: {DARK_THEME_COLORS['cyan']};
-        border: 2px solid {DARK_THEME_COLORS['purple']};
+        border: 2px solid {DARK_THEME_COLORS['border']};
         border-radius: 5px;
         margin-top: 10px;
         padding-top: 10px;
@@ -114,27 +114,27 @@ def get_dark_stylesheet() -> str:
     }}
 
     QCheckBox::indicator, QRadioButton::indicator {{
-        border: 2px solid {DARK_THEME_COLORS['purple']};
+        border: 2px solid {DARK_THEME_COLORS['border']};
         background-color: {DARK_THEME_COLORS['selection']};
     }}
 
     QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
-        background-color: {DARK_THEME_COLORS['purple']};
+        background-color: {DARK_THEME_COLORS['cyan']};
     }}
 
     QDockWidget {{
         color: {DARK_THEME_COLORS['foreground']};
-        border: 2px solid {DARK_THEME_COLORS['purple']};
+        border: 2px solid {DARK_THEME_COLORS['border']};
     }}
 
     QDockWidget::title {{
         background-color: {DARK_THEME_COLORS['selection']};
         padding: 5px;
-        border-bottom: 2px solid {DARK_THEME_COLORS['purple']};
+        border-bottom: 2px solid {DARK_THEME_COLORS['border']};
     }}
 
     QTabWidget::pane {{
-        border: 2px solid {DARK_THEME_COLORS['purple']};
+        border: 2px solid {DARK_THEME_COLORS['border']};
         background-color: {DARK_THEME_COLORS['background']};
     }}
 
@@ -147,14 +147,14 @@ def get_dark_stylesheet() -> str:
     }}
 
     QTabBar::tab:selected {{
-        background-color: {DARK_THEME_COLORS['purple']};
-        border: 2px solid {DARK_THEME_COLORS['cyan']};
+        background-color: {DARK_THEME_COLORS['comment']};
+        border: 2px solid {DARK_THEME_COLORS['border']};
     }}
 
     QListWidget, QTreeView {{
         background-color: {DARK_THEME_COLORS['selection']};
         color: {DARK_THEME_COLORS['foreground']};
-        border: 2px solid {DARK_THEME_COLORS['purple']};
+        border: 2px solid {DARK_THEME_COLORS['border']};
     }}
 
     QScrollBar:vertical {{
@@ -165,7 +165,7 @@ def get_dark_stylesheet() -> str:
     }}
 
     QScrollBar::handle:vertical {{
-        background-color: {DARK_THEME_COLORS['purple']};
+        background-color: {DARK_THEME_COLORS['comment']};
         min-height: 20px;
         border-radius: 6px;
     }}
@@ -182,7 +182,7 @@ def get_dark_stylesheet() -> str:
     }}
 
     QScrollBar::handle:horizontal {{
-        background-color: {DARK_THEME_COLORS['purple']};
+        background-color: {DARK_THEME_COLORS['comment']};
         min-width: 20px;
         border-radius: 6px;
     }}
@@ -198,8 +198,8 @@ def get_dark_stylesheet() -> str:
     }}
 
     QComboBox::drop-down {{
-        border: 1px solid {DARK_THEME_COLORS['purple']};
-        background-color: {DARK_THEME_COLORS['purple']};
+        border: 1px solid {DARK_THEME_COLORS['border']};
+        background-color: {DARK_THEME_COLORS['comment']};
     }}
 
     QComboBox::down-arrow {{
@@ -212,13 +212,13 @@ def get_dark_stylesheet() -> str:
     }}
 
     QSpinBox::up-button, QDoubleSpinBox::up-button {{
-        background-color: {DARK_THEME_COLORS['purple']};
-        border: 1px solid {DARK_THEME_COLORS['comment']};
+        background-color: {DARK_THEME_COLORS['comment']};
+        border: 1px solid {DARK_THEME_COLORS['border']};
     }}
 
     QSpinBox::down-button, QDoubleSpinBox::down-button {{
-        background-color: {DARK_THEME_COLORS['purple']};
-        border: 1px solid {DARK_THEME_COLORS['comment']};
+        background-color: {DARK_THEME_COLORS['comment']};
+        border: 1px solid {DARK_THEME_COLORS['border']};
     }}
     """
 

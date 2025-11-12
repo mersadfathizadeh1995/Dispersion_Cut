@@ -317,12 +317,12 @@ class MainWindow(QtWidgets.QMainWindow):
             sc_undo = QtGui.QShortcut(QtGui.QKeySequence('Ctrl+Z'), self)
             try: sc_undo.setContext(QtCore.Qt.ApplicationShortcut)
             except: pass
-            sc_undo.activated.connect(self.controller._on_undo)
+            sc_undo.activated.connect(lambda: self.controller._on_undo(None))
 
             sc_redo = QtGui.QShortcut(QtGui.QKeySequence('Ctrl+Y'), self)
             try: sc_redo.setContext(QtCore.Qt.ApplicationShortcut)
             except: pass
-            sc_redo.activated.connect(self.controller._on_redo)
+            sc_redo.activated.connect(lambda: self.controller._on_redo(None))
 
             self._edit_shortcuts = [sc_undo, sc_redo]
         except Exception:
