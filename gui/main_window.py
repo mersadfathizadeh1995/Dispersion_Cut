@@ -76,15 +76,19 @@ class MainWindow(QtWidgets.QMainWindow):
             self.props.raise_()
         except Exception:
             pass
-        try:
-            setattr(self.controller, 'on_layers_changed', self.layers.rebuild)
-        except Exception:
-            pass
-
         self.spectrum = SpectrumDock(self.controller, self)
         try:
             self.addDockWidget(area, self.spectrum)
             self.tabifyDockWidget(self.layers, self.spectrum)
+        except Exception:
+            pass
+
+        # Set up rebuild hooks for both docks when layers change
+        try:
+            def on_layers_changed():
+                self.layers.rebuild()
+                self.spectrum.rebuild()
+            setattr(self.controller, 'on_layers_changed', on_layers_changed)
         except Exception:
             pass
 
