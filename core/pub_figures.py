@@ -722,7 +722,7 @@ class PublicationFigureGenerator:
         fig, (ax_freq, ax_wave) = plt.subplots(1, 2, figsize=(config.figsize[0] * 1.8, config.figsize[1]))
 
         # Compute aggregates for both domains
-        self._compute_aggregates()
+        self._compute_binned_aggregates(config)
         self._compute_wavelength_aggregates()
 
         # LEFT PANEL: Frequency domain
@@ -1147,7 +1147,7 @@ class PublicationFigureGenerator:
         fig, (ax_freq, ax_wave) = plt.subplots(1, 2, figsize=(config.figsize[0] * 1.8, config.figsize[1]))
 
         # Compute aggregates for both domains
-        self._compute_aggregates()
+        self._compute_binned_aggregates(config)
         self._compute_wavelength_aggregates()
 
         # LEFT PANEL: Frequency domain
@@ -1600,7 +1600,7 @@ class PublicationFigureGenerator:
         fig, (ax_freq, ax_wave) = plt.subplots(1, 2, figsize=(config.figsize[0] * 1.8, config.figsize[1]))
 
         # Compute aggregates for both domains
-        self._compute_aggregates()
+        self._compute_binned_aggregates(config)
         self._compute_wavelength_aggregates()
 
         # LEFT PANEL: Frequency domain

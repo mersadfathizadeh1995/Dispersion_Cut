@@ -71,9 +71,9 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         freq_label = QtWidgets.QLabel("<b>Frequency Domain:</b>")
         type_layout.addWidget(freq_label)
 
-        self.plot_type_aggregated = QtWidgets.QRadioButton("Aggregated Dispersion Curve")
-        self.plot_type_per_offset = QtWidgets.QRadioButton("Per-Offset Curves")
-        self.plot_type_uncertainty = QtWidgets.QRadioButton("Uncertainty Visualization")
+        self.plot_type_aggregated = QtWidgets.QCheckBox("Aggregated Dispersion Curve")
+        self.plot_type_per_offset = QtWidgets.QCheckBox("Per-Offset Curves")
+        self.plot_type_uncertainty = QtWidgets.QCheckBox("Uncertainty Visualization")
 
         self.plot_type_aggregated.setChecked(True)
 
@@ -113,7 +113,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         wave_label = QtWidgets.QLabel("<b>Wavelength Domain:</b>")
         type_layout.addWidget(wave_label)
 
-        self.plot_type_aggregated_wavelength = QtWidgets.QRadioButton("Aggregated (Wavelength)")
+        self.plot_type_aggregated_wavelength = QtWidgets.QCheckBox("Aggregated (Wavelength)")
         desc_agg_wave = QtWidgets.QLabel(
             "Same as aggregated but in wavelength domain.\n"
             "Better for depth-related interpretations (λ/2 or λ/3 rules)."
@@ -121,7 +121,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         desc_agg_wave.setWordWrap(True)
         desc_agg_wave.setStyleSheet("color: gray; font-style: italic; margin-left: 20px;")
 
-        self.plot_type_per_offset_wavelength = QtWidgets.QRadioButton("Per-Offset (Wavelength)")
+        self.plot_type_per_offset_wavelength = QtWidgets.QCheckBox("Per-Offset (Wavelength)")
         desc_offset_wave = QtWidgets.QLabel(
             "Per-offset curves in wavelength domain.\n"
             "Shows aperture-wavelength relationships clearly."
@@ -129,7 +129,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         desc_offset_wave.setWordWrap(True)
         desc_offset_wave.setStyleSheet("color: gray; font-style: italic; margin-left: 20px;")
 
-        self.plot_type_dual_domain = QtWidgets.QRadioButton("Dual-Domain Comparison")
+        self.plot_type_dual_domain = QtWidgets.QCheckBox("Dual-Domain Comparison")
         desc_dual = QtWidgets.QLabel(
             "Side-by-side frequency and wavelength plots.\n"
             "Very common in MASW publications for comprehensive presentation."
@@ -151,10 +151,15 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         # Option to generate all plot types
         self.generate_all_check = QtWidgets.QCheckBox("Generate all plot types at once")
         self.generate_all_check.setToolTip(
-            "When checked, all three plot types will be generated with appropriate filenames:\n"
-            "  - <filename>_aggregated.ext\n"
-            "  - <filename>_per_offset.ext\n"
-            "  - <filename>_uncertainty.ext"
+            "When checked, all six plot types will be generated with appropriate filenames:\n"
+            "  Frequency domain:\n"
+            "    - <filename>_aggregated.ext\n"
+            "    - <filename>_per_offset.ext\n"
+            "    - <filename>_uncertainty.ext\n"
+            "  Wavelength domain:\n"
+            "    - <filename>_aggregated_wavelength.ext\n"
+            "    - <filename>_per_offset_wavelength.ext\n"
+            "    - <filename>_dual_domain.ext"
         )
         layout.addWidget(self.generate_all_check)
 
@@ -555,7 +560,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         return config
 
     def _on_generate(self):
-        """Generate the publication figure."""
+        """Generate the publication figure(s)."""
         # Validate output directory
         output_dir = self.output_dir_edit.text().strip()
         if not output_dir:
@@ -621,15 +626,18 @@ class PublicationFigureDialog(QtWidgets.QDialog):
             )
             return
 
-        # Determine if generating all types or just one
+        # Determine which plot types to generate
         generate_all = self.generate_all_check.isChecked()
 
         if generate_all:
-            # Generate all three plot types
+            # Generate all six plot types (3 frequency + 3 wavelength domain)
             outputs_to_generate = [
                 ('aggregated', 'aggregated'),
                 ('per_offset', 'per_offset'),
-                ('uncertainty', 'uncertainty')
+                ('uncertainty', 'uncertainty'),
+                ('aggregated_wavelength', 'aggregated_wavelength'),
+                ('per_offset_wavelength', 'per_offset_wavelength'),
+                ('dual_domain', 'dual_domain')
             ]
 
             # Check if any files exist
@@ -664,8 +672,19 @@ class PublicationFigureDialog(QtWidgets.QDialog):
                             config=config,
                             max_offsets=max_offsets
                         )
-                    else:  # uncertainty
+                    elif plot_type == 'uncertainty':
                         generator.generate_uncertainty_plot(output_path=output_path, config=config)
+                    elif plot_type == 'aggregated_wavelength':
+                        generator.generate_aggregated_wavelength_plot(output_path=output_path, config=config)
+                    elif plot_type == 'per_offset_wavelength':
+                        max_offsets = self.max_offsets_spin.value()
+                        generator.generate_per_offset_wavelength_plot(
+                            output_path=output_path,
+                            config=config,
+                            max_offsets=max_offsets
+                        )
+                    elif plot_type == 'dual_domain':
+                        generator.generate_dual_domain_plot(output_path=output_path, config=config)
                     generated_files.append(output_path)
 
                 # Success message
@@ -684,54 +703,93 @@ class PublicationFigureDialog(QtWidgets.QDialog):
                     f"Failed to generate figures:\n{str(e)}"
                 )
         else:
-            # Generate single plot type
-            output_path = str(dir_path / f"{filename_base}{extension}")
+            # Generate selected plot types
+            # Collect which checkboxes are selected
+            selected_types = []
+            if self.plot_type_aggregated.isChecked():
+                selected_types.append(('aggregated', 'aggregated'))
+            if self.plot_type_per_offset.isChecked():
+                selected_types.append(('per_offset', 'per_offset'))
+            if self.plot_type_uncertainty.isChecked():
+                selected_types.append(('uncertainty', 'uncertainty'))
+            if self.plot_type_aggregated_wavelength.isChecked():
+                selected_types.append(('aggregated_wavelength', 'aggregated_wavelength'))
+            if self.plot_type_per_offset_wavelength.isChecked():
+                selected_types.append(('per_offset_wavelength', 'per_offset_wavelength'))
+            if self.plot_type_dual_domain.isChecked():
+                selected_types.append(('dual_domain', 'dual_domain'))
 
-            # Check if file exists and confirm overwrite
-            if Path(output_path).exists():
+            # Validate at least one type is selected
+            if not selected_types:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "No Plot Type Selected",
+                    "Please select at least one plot type to generate."
+                )
+                return
+
+            # Build file list
+            files_to_create = []
+            for plot_type, suffix in selected_types:
+                # If only one type selected, don't add suffix
+                if len(selected_types) == 1:
+                    output_path = str(dir_path / f"{filename_base}{extension}")
+                else:
+                    output_path = str(dir_path / f"{filename_base}_{suffix}{extension}")
+                files_to_create.append((plot_type, output_path))
+
+            # Check for existing files
+            existing_files = [p for _, p in files_to_create if Path(p).exists()]
+            if existing_files:
+                file_list = '\n'.join(existing_files)
                 reply = QtWidgets.QMessageBox.question(
                     self,
-                    "File Exists",
-                    f"The file already exists:\n{output_path}\n\nOverwrite?",
+                    "Files Exist",
+                    f"The following files already exist:\n{file_list}\n\nOverwrite?",
                     QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
                     QtWidgets.QMessageBox.No
                 )
                 if reply == QtWidgets.QMessageBox.No:
                     return
 
-            # Generate appropriate plot type
+            # Generate all selected plots
             try:
-                if self.plot_type_aggregated.isChecked():
-                    generator.generate_aggregated_plot(output_path=output_path, config=config)
-                elif self.plot_type_per_offset.isChecked():
-                    max_offsets = self.max_offsets_spin.value()
-                    generator.generate_per_offset_plot(
-                        output_path=output_path,
-                        config=config,
-                        max_offsets=max_offsets
-                    )
-                elif self.plot_type_uncertainty.isChecked():
-                    generator.generate_uncertainty_plot(output_path=output_path, config=config)
-                # WAVELENGTH DOMAIN PLOTS (STEP 1)
-                elif self.plot_type_aggregated_wavelength.isChecked():
-                    generator.generate_aggregated_wavelength_plot(output_path=output_path, config=config)
-                elif self.plot_type_per_offset_wavelength.isChecked():
-                    max_offsets = self.max_offsets_spin.value()
-                    generator.generate_per_offset_wavelength_plot(
-                        output_path=output_path,
-                        config=config,
-                        max_offsets=max_offsets
-                    )
-                elif self.plot_type_dual_domain.isChecked():
-                    generator.generate_dual_domain_plot(output_path=output_path, config=config)
-                else:
-                    raise ValueError("Unknown plot type selected")
+                generated_files = []
+                for plot_type, output_path in files_to_create:
+                    if plot_type == 'aggregated':
+                        generator.generate_aggregated_plot(output_path=output_path, config=config)
+                    elif plot_type == 'per_offset':
+                        max_offsets = self.max_offsets_spin.value()
+                        generator.generate_per_offset_plot(
+                            output_path=output_path,
+                            config=config,
+                            max_offsets=max_offsets
+                        )
+                    elif plot_type == 'uncertainty':
+                        generator.generate_uncertainty_plot(output_path=output_path, config=config)
+                    elif plot_type == 'aggregated_wavelength':
+                        generator.generate_aggregated_wavelength_plot(output_path=output_path, config=config)
+                    elif plot_type == 'per_offset_wavelength':
+                        max_offsets = self.max_offsets_spin.value()
+                        generator.generate_per_offset_wavelength_plot(
+                            output_path=output_path,
+                            config=config,
+                            max_offsets=max_offsets
+                        )
+                    elif plot_type == 'dual_domain':
+                        generator.generate_dual_domain_plot(output_path=output_path, config=config)
+                    generated_files.append(output_path)
 
                 # Success message
+                file_list = '\n'.join(generated_files)
+                if len(generated_files) == 1:
+                    msg = f"Publication figure saved to:\n{file_list}"
+                else:
+                    msg = f"Publication figures saved:\n{file_list}"
                 QtWidgets.QMessageBox.information(
                     self,
                     "Success",
-                    f"Publication figure saved to:\n{output_path}"
+                    msg
                 )
 
                 self.accept()
