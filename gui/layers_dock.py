@@ -111,7 +111,14 @@ class LayersDock(QtWidgets.QDockWidget):
             except Exception:
                 pass
             if c.show_average or c.show_average_wave: c._update_average_line()
-        c._update_legend(); c._apply_axis_limits(); c.fig.canvas.draw_idle()
+        c._update_legend(); c._apply_axis_limits()
+        # Update spectrum backgrounds if method exists
+        try:
+            if hasattr(c, '_render_spectrum_backgrounds'):
+                c._render_spectrum_backgrounds()
+        except Exception:
+            pass
+        c.fig.canvas.draw_idle()
 
     def _set_all_layers(self, visible: bool) -> None:
         c = self.c
@@ -137,6 +144,13 @@ class LayersDock(QtWidgets.QDockWidget):
                 pass
         c.show_average = bool(visible); c.show_average_wave = bool(visible)
         if c.show_average or c.show_average_wave: c._update_average_line()
-        c._update_legend(); c._apply_axis_limits(); c.fig.canvas.draw_idle()
+        c._update_legend(); c._apply_axis_limits()
+        # Update spectrum backgrounds if method exists
+        try:
+            if hasattr(c, '_render_spectrum_backgrounds'):
+                c._render_spectrum_backgrounds()
+        except Exception:
+            pass
+        c.fig.canvas.draw_idle()
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple, Dict, Any
 import numpy as np
 
 
@@ -12,6 +12,12 @@ class LayerData:
     velocity: np.ndarray
     wavelength: np.ndarray
     visible: bool = True
+
+    # Spectrum background fields
+    spectrum_data: Optional[Dict[str, Any]] = None  # Loaded spectrum from .npz
+    spectrum_visible: bool = False  # Per-layer spectrum visibility
+    spectrum_alpha: float = 0.5  # Per-layer opacity (0.0-1.0)
+    spectrum_image: Any = field(default=None, repr=False)  # Matplotlib AxesImage reference
 
 
 class LayersModel:

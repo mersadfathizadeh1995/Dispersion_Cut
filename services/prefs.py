@@ -21,6 +21,12 @@ _DEFAULTS: Dict[str, Any] = {
     # General
     "auto_save_enabled": False,
     "auto_save_interval_minutes": 10,
+    # Spectrum backgrounds
+    "show_spectra": True,  # Master enable/disable for spectrum backgrounds
+    "default_spectrum_alpha": 0.5,  # Default opacity for new spectrum backgrounds
+    "spectrum_colormap": "viridis",  # Default colormap: viridis, plasma, hot, gray
+    "spectrum_display_mode": "active_only",  # "active_only" or "all_visible"
+    "auto_load_spectra": True,  # Auto-detect and load spectrum files at startup
 }
 
 
