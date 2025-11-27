@@ -142,7 +142,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(container)
 
     def _build_menu(self):
-        bar = self.menuBar(); m_file = bar.addMenu("&File"); m_view = bar.addMenu("&View"); m_edit = bar.addMenu("&Edit"); m_tools= bar.addMenu("&Tools"); m_help = bar.addMenu("&Help")
+        bar = self.menuBar(); m_file = bar.addMenu("&File"); m_view = bar.addMenu("&View"); m_edit = bar.addMenu("&Edit"); m_layers = bar.addMenu("&Layers"); m_tools= bar.addMenu("&Tools"); m_help = bar.addMenu("&Help")
 
         # File menu - Preferences
         act_prefs = QtGui.QAction("Preferences...", self)
@@ -191,6 +191,11 @@ class MainWindow(QtWidgets.QMainWindow):
             undo = QtGui.QAction("Undo", self); undo.setShortcut("Ctrl+Z"); undo.triggered.connect(self.controller._on_undo)
             redo = QtGui.QAction("Redo", self); redo.setShortcut("Ctrl+Y"); redo.triggered.connect(self.controller._on_redo)
         m_edit.addActions([undo, redo])
+
+        # Layers menu
+        act_add_spectrum = QtGui.QAction("Add Spectrum to Layer...", self)
+        act_add_spectrum.triggered.connect(self._add_spectrum_to_layer)
+        m_layers.addAction(act_add_spectrum)
 
         if reg is not None:
             try:
@@ -268,6 +273,100 @@ class MainWindow(QtWidgets.QMainWindow):
             dlg.exec()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open publication figure dialog:\n{e}")
+
+    def _add_spectrum_to_layer(self):
+        """Show dialog to add spectrum background to a layer."""
+        try:
+            # Check if controller has layers model
+            if not hasattr(self.controller, '_layers_model') or self.controller._layers_model is None:
+                QtWidgets.QMessageBox.warning(self, "No Layers", "No layers available to add spectrum to.")
+                return
+
+            layers = self.controller._layers_model.layers
+            if not layers:
+                QtWidgets.QMessageBox.warning(self, "No Layers", "No layers available to add spectrum to.")
+                return
+
+            # Create dialog for layer selection and spectrum file
+            dlg = QtWidgets.QDialog(self)
+            dlg.setWindowTitle("Add Spectrum to Layer")
+            dlg.resize(450, 180)
+
+            layout = QtWidgets.QVBoxLayout(dlg)
+
+            # Layer selection
+            layer_label = QtWidgets.QLabel("Select layer:", dlg)
+            layer_combo = QtWidgets.QComboBox(dlg)
+            for i, layer in enumerate(layers):
+                layer_combo.addItem(f"{i}: {layer.label}", i)
+            layout.addWidget(layer_label)
+            layout.addWidget(layer_combo)
+
+            # Spectrum file selection
+            spectrum_label = QtWidgets.QLabel("Spectrum file (.npz):", dlg)
+            spectrum_layout = QtWidgets.QHBoxLayout()
+            spectrum_edit = QtWidgets.QLineEdit(dlg)
+            spectrum_edit.setPlaceholderText("Select spectrum .npz file...")
+            spectrum_btn = QtWidgets.QPushButton("Browse", dlg)
+
+            def browse_spectrum():
+                path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                    dlg, "Select Spectrum File", "", "Spectrum Files (*.npz);;All Files (*.*)"
+                )
+                if path:
+                    spectrum_edit.setText(path)
+
+            spectrum_btn.clicked.connect(browse_spectrum)
+            spectrum_layout.addWidget(spectrum_edit, 1)
+            spectrum_layout.addWidget(spectrum_btn)
+            layout.addWidget(spectrum_label)
+            layout.addLayout(spectrum_layout)
+
+            # Buttons
+            btn_box = QtWidgets.QDialogButtonBox(
+                QtWidgets.QDialogButtonBox.StandardButton.Ok |
+                QtWidgets.QDialogButtonBox.StandardButton.Cancel,
+                dlg
+            )
+            btn_box.accepted.connect(dlg.accept)
+            btn_box.rejected.connect(dlg.reject)
+            layout.addWidget(btn_box)
+
+            # Show dialog
+            if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+                layer_idx = layer_combo.currentData()
+                spectrum_path = spectrum_edit.text().strip()
+
+                if not spectrum_path:
+                    QtWidgets.QMessageBox.warning(self, "No File", "Please select a spectrum file.")
+                    return
+
+                # Load spectrum
+                if hasattr(self.controller, 'load_spectrum_for_layer'):
+                    success = self.controller.load_spectrum_for_layer(layer_idx, spectrum_path)
+                    if success:
+                        QtWidgets.QMessageBox.information(
+                            self, "Success",
+                            f"Spectrum loaded for layer {layer_idx}: {layers[layer_idx].label}"
+                        )
+                        # Refresh layers dock to show new controls
+                        try:
+                            self.layers.rebuild()
+                        except Exception:
+                            pass
+                    else:
+                        QtWidgets.QMessageBox.critical(
+                            self, "Error",
+                            "Failed to load spectrum. Check log for details."
+                        )
+                else:
+                    QtWidgets.QMessageBox.warning(
+                        self, "Not Supported",
+                        "Spectrum loading not supported in this version."
+                    )
+
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to add spectrum:\n{e}")
 
     def _build_toolbar(self):
         pass

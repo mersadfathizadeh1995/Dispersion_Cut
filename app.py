@@ -315,6 +315,30 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 ctrl.freq_custom_ticks = P.get('freq_custom_ticks', getattr(ctrl, 'freq_custom_ticks', []))
             except Exception:
                 pass
+
+            # Load spectrum background if provided
+            spectrum_path = spec.get('spectrum_path')
+            if spectrum_path:
+                try:
+                    # For now, load the spectrum for the first layer (combined CSV case)
+                    # TODO: Future enhancement - support per-offset spectra
+                    if hasattr(ctrl, 'load_spectrum_for_layer'):
+                        success = ctrl.load_spectrum_for_layer(0, spectrum_path)
+                        if not success:
+                            # Log warning but don't fail the load
+                            try:
+                                from dc_cut.services import log
+                                log.warning(f"Failed to load spectrum from {spectrum_path}")
+                            except Exception:
+                                pass
+                except Exception as e:
+                    # Log error but don't fail the load
+                    try:
+                        from dc_cut.services import log
+                        log.error(f"Error loading spectrum: {e}")
+                    except Exception:
+                        pass
+
             app_qt = show_shell(ctrl)
             try:
                 app_qt._masw_shell_window.adopt_controller(ctrl)
