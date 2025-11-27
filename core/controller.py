@@ -1374,3 +1374,244 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
                 return None
         except Exception:
             return None
+
+    # ==================== SPECTRUM BACKGROUND METHODS ====================
+
+    def load_spectrum_for_layer(self, layer_idx: int, npz_path: str) -> bool:
+        """Load power spectrum background for a specific layer.
+
+        Args:
+            layer_idx: Index of the layer to load spectrum for
+            npz_path: Path to spectrum .npz file
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            from dc_cut.core.spectrum_loader import load_spectrum_npz
+            from dc_cut.services.prefs import get_pref
+
+            # Load spectrum data
+            spectrum_data = load_spectrum_npz(npz_path)
+
+            # Get the layer and assign spectrum
+            if hasattr(self, '_layers_model') and self._layers_model is not None:
+                if 0 <= layer_idx < len(self._layers_model.layers):
+                    layer = self._layers_model.layers[layer_idx]
+                    layer.spectrum_data = spectrum_data
+                    layer.spectrum_alpha = get_pref('default_spectrum_alpha', 0.5)
+                    layer.spectrum_visible = get_pref('show_spectra', True)
+
+                    # Render the spectrum
+                    self._render_spectrum_backgrounds()
+                    return True
+            return False
+        except Exception as e:
+            try:
+                from dc_cut.services import log
+                log.error(f"Failed to load spectrum: {e}")
+            except Exception:
+                pass
+            return False
+
+    def _render_spectrum_backgrounds(self) -> None:
+        """Render spectrum backgrounds for all layers based on preferences."""
+        try:
+            from dc_cut.services.prefs import get_pref
+
+            # Check if spectra are globally enabled
+            if not get_pref('show_spectra', True):
+                self._clear_all_spectrum_backgrounds()
+                return
+
+            # Get display mode
+            display_mode = get_pref('spectrum_display_mode', 'active_only')
+
+            if not hasattr(self, '_layers_model') or self._layers_model is None:
+                return
+
+            # Clear all existing spectrum images first
+            for layer in self._layers_model.layers:
+                if layer.spectrum_image is not None:
+                    try:
+                        layer.spectrum_image.remove()
+                    except Exception:
+                        pass
+                    layer.spectrum_image = None
+
+            # Render based on display mode
+            if display_mode == 'active_only':
+                # Find the active layer (first visible one, or first one)
+                active_idx = 0
+                for i, layer in enumerate(self._layers_model.layers):
+                    if layer.visible:
+                        active_idx = i
+                        break
+
+                # Render only the active layer's spectrum
+                if 0 <= active_idx < len(self._layers_model.layers):
+                    self._render_single_spectrum(active_idx)
+
+            else:  # 'all_visible'
+                # Render spectra for all visible layers
+                for i, layer in enumerate(self._layers_model.layers):
+                    if layer.visible:
+                        self._render_single_spectrum(i)
+
+            # Redraw canvas
+            try:
+                self.fig.canvas.draw_idle()
+            except Exception:
+                pass
+
+        except Exception as e:
+            try:
+                from dc_cut.services import log
+                log.error(f"Failed to render spectrum backgrounds: {e}")
+            except Exception:
+                pass
+
+    def _render_single_spectrum(self, layer_idx: int) -> None:
+        """Render spectrum background for a single layer.
+
+        Args:
+            layer_idx: Index of the layer to render spectrum for
+        """
+        try:
+            from dc_cut.services.prefs import get_pref
+            import matplotlib.cm as cm
+
+            if not hasattr(self, '_layers_model') or self._layers_model is None:
+                return
+
+            if not (0 <= layer_idx < len(self._layers_model.layers)):
+                return
+
+            layer = self._layers_model.layers[layer_idx]
+
+            # Check if layer has spectrum data and it's visible
+            if layer.spectrum_data is None or not layer.spectrum_visible:
+                return
+
+            spectrum = layer.spectrum_data
+            power = spectrum['power']
+            frequencies = spectrum['frequencies']
+            velocities = spectrum['velocities']
+
+            # Get colormap
+            colormap_name = get_pref('spectrum_colormap', 'viridis')
+            try:
+                cmap = cm.get_cmap(colormap_name)
+            except Exception:
+                cmap = cm.get_cmap('viridis')
+
+            # Define extent for imshow (frequency range and velocity range)
+            extent = [
+                frequencies[0],
+                frequencies[-1],
+                velocities[0],
+                velocities[-1]
+            ]
+
+            # Render on frequency axis
+            layer.spectrum_image = self.ax_freq.imshow(
+                power,
+                aspect='auto',
+                origin='lower',
+                extent=extent,
+                cmap=cmap,
+                alpha=layer.spectrum_alpha,
+                zorder=0,  # Behind all data points
+                interpolation='bilinear'
+            )
+
+        except Exception as e:
+            try:
+                from dc_cut.services import log
+                log.error(f"Failed to render single spectrum: {e}")
+            except Exception:
+                pass
+
+    def _clear_all_spectrum_backgrounds(self) -> None:
+        """Remove all spectrum background images."""
+        try:
+            if not hasattr(self, '_layers_model') or self._layers_model is None:
+                return
+
+            for layer in self._layers_model.layers:
+                if layer.spectrum_image is not None:
+                    try:
+                        layer.spectrum_image.remove()
+                    except Exception:
+                        pass
+                    layer.spectrum_image = None
+
+            try:
+                self.fig.canvas.draw_idle()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def set_layer_spectrum_visibility(self, layer_idx: int, visible: bool) -> None:
+        """Toggle visibility of a layer's spectrum background.
+
+        Args:
+            layer_idx: Index of the layer
+            visible: True to show, False to hide
+        """
+        try:
+            if not hasattr(self, '_layers_model') or self._layers_model is None:
+                return
+
+            if 0 <= layer_idx < len(self._layers_model.layers):
+                layer = self._layers_model.layers[layer_idx]
+                layer.spectrum_visible = visible
+                self._render_spectrum_backgrounds()
+        except Exception:
+            pass
+
+    def set_layer_spectrum_alpha(self, layer_idx: int, alpha: float) -> None:
+        """Set opacity of a layer's spectrum background.
+
+        Args:
+            layer_idx: Index of the layer
+            alpha: Opacity value (0.0 = transparent, 1.0 = opaque)
+        """
+        try:
+            if not hasattr(self, '_layers_model') or self._layers_model is None:
+                return
+
+            if 0 <= layer_idx < len(self._layers_model.layers):
+                layer = self._layers_model.layers[layer_idx]
+                layer.spectrum_alpha = max(0.0, min(1.0, alpha))
+
+                # Update existing image if it exists
+                if layer.spectrum_image is not None:
+                    layer.spectrum_image.set_alpha(layer.spectrum_alpha)
+                    try:
+                        self.fig.canvas.draw_idle()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def toggle_all_spectra(self, enabled: bool) -> None:
+        """Toggle all spectrum backgrounds on/off.
+
+        Args:
+            enabled: True to show all, False to hide all
+        """
+        try:
+            from dc_cut.services.prefs import set_pref
+            set_pref('show_spectra', enabled)
+            self._render_spectrum_backgrounds()
+        except Exception:
+            pass
+
+    def _on_layer_visibility_changed(self) -> None:
+        """Hook called when layer visibility changes - updates spectrum backgrounds."""
+        try:
+            self._render_spectrum_backgrounds()
+        except Exception:
+            pass
