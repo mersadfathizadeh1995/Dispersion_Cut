@@ -39,6 +39,7 @@ class FileExplorerDock(QtWidgets.QDockWidget):
             lst = QtWidgets.QListWidget(self); [lst.addItem(name) for name in sorted(os.listdir(root))]
             self.setWidget(lst)
 from dc_cut.gui.layers_dock import LayersDock
+from dc_cut.gui.spectrum_dock import SpectrumDock
 from dc_cut.gui.nf_eval_dock import NFEvalDock
 from dc_cut.gui.quick_actions import QuickActionsDock
 
@@ -77,6 +78,13 @@ class MainWindow(QtWidgets.QMainWindow):
             pass
         try:
             setattr(self.controller, 'on_layers_changed', self.layers.rebuild)
+        except Exception:
+            pass
+
+        self.spectrum = SpectrumDock(self.controller, self)
+        try:
+            self.addDockWidget(area, self.spectrum)
+            self.tabifyDockWidget(self.layers, self.spectrum)
         except Exception:
             pass
 
@@ -171,7 +179,7 @@ class MainWindow(QtWidgets.QMainWindow):
         sub_fig = m_view.addMenu("Figure"); sub_fig.addActions([view_both, view_freq, view_wave])
         sub_pan = m_view.addMenu("Panels")
         try:
-            sub_pan.addAction(self.files.toggleViewAction()); sub_pan.addAction(self.props.toggleViewAction()); sub_pan.addAction(self.layers.toggleViewAction())
+            sub_pan.addAction(self.files.toggleViewAction()); sub_pan.addAction(self.props.toggleViewAction()); sub_pan.addAction(self.layers.toggleViewAction()); sub_pan.addAction(self.spectrum.toggleViewAction())
         except Exception: pass
         if reg is not None:
             a_undo = reg.get('edit.undo'); undo = QtGui.QAction(a_undo.text, self); 
@@ -349,9 +357,9 @@ class MainWindow(QtWidgets.QMainWindow):
                             self, "Success",
                             f"Spectrum loaded for layer {layer_idx}: {layers[layer_idx].label}"
                         )
-                        # Refresh layers dock to show new controls
+                        # Refresh spectrum dock to show new controls
                         try:
-                            self.layers.rebuild()
+                            self.spectrum.rebuild()
                         except Exception:
                             pass
                     else:
