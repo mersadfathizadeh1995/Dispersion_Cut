@@ -286,6 +286,20 @@ class OpenDataDialog(QtWidgets.QDialog):
         btn = QtWidgets.QPushButton("Browse", w); btn.clicked.connect(lambda: self._pick_file(self.csv_path, "CSV", "*.csv"))
         row.addWidget(self.csv_path, 1); row.addWidget(btn)
         form.addRow("CSV:", row)
+
+        # NEW: Spectrum .npz file (optional)
+        row_spectrum = QtWidgets.QHBoxLayout()
+        self.csv_spectrum_path = QtWidgets.QLineEdit(w); self.csv_spectrum_path.setPlaceholderText("(Optional) Select spectrum .npz file...")
+        btn_spectrum = QtWidgets.QPushButton("Browse", w); btn_spectrum.clicked.connect(lambda: self._pick_file(self.csv_spectrum_path, "Spectrum NPZ", "*.npz"))
+        row_spectrum.addWidget(self.csv_spectrum_path, 1); row_spectrum.addWidget(btn_spectrum)
+        form.addRow("Spectrum:", row_spectrum)
+
+        # Info label for spectrum
+        spectrum_info = QtWidgets.QLabel("<i>Power spectrum background (optional, for visualization)</i>", w)
+        spectrum_info.setWordWrap(True)
+        spectrum_info.setStyleSheet("color: gray; font-size: 9pt;")
+        form.addRow("", spectrum_info)
+
         self.csv_dx = QtWidgets.QDoubleSpinBox(w); self.csv_dx.setRange(0.1, 100.0); self.csv_dx.setValue(2.0); self.csv_dx.setDecimals(2)
         form.addRow("Δx (m):", self.csv_dx)
         # Optional velocity clamp before opening
@@ -440,12 +454,14 @@ class OpenDataDialog(QtWidgets.QDialog):
                 path = self.csv_path.text().strip()
                 if not path:
                     QtWidgets.QMessageBox.warning(self, "CSV", "Please select a .csv file."); return
+                spectrum_path = self.csv_spectrum_path.text().strip() or None  # None if empty
                 self.result = {
                     'mode': 'csv',
                     'path': path,
                     'dx': float(self.csv_dx.value()),
                     'vmin': float(self.csv_vmin.value()),
                     'vmax': float(self.csv_vmax.value()),
+                    'spectrum_path': spectrum_path,  # NEW: Optional spectrum file
                 }
             else:
                 QtWidgets.QMessageBox.warning(self, "Active Data", "Unknown sub-tab."); return

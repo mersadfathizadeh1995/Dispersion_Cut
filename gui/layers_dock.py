@@ -44,6 +44,15 @@ class LayersDock(QtWidgets.QDockWidget):
         btn_row.addWidget(btn_all_off)
         v.addLayout(btn_row)
         v.addWidget(self.view)
+
+        # Spectrum controls section
+        spectrum_group = QtWidgets.QGroupBox("Spectrum Backgrounds", w)
+        spectrum_layout = QtWidgets.QVBoxLayout(spectrum_group)
+        self.spectrum_controls_layout = spectrum_layout
+        self.spectrum_controls_widgets = {}  # {layer_idx: {widgets}}
+        v.addWidget(spectrum_group)
+        self.spectrum_group = spectrum_group
+
         self.rebuild()
         self.model.itemChanged.connect(self._on_item_changed)
 
@@ -81,6 +90,9 @@ class LayersDock(QtWidgets.QDockWidget):
             self.model.appendRow(item)
         item_f = QtGui.QStandardItem(c.average_label); item_f.setCheckable(True); item_f.setCheckState(chk_on if c.show_average else chk_off); item_f.setData("avg_f", role); self.model.appendRow(item_f)
         item_w = QtGui.QStandardItem(c.average_label_wave); item_w.setCheckable(True); item_w.setCheckState(chk_on if c.show_average_wave else chk_off); item_w.setData("avg_w", role); self.model.appendRow(item_w)
+
+        # Rebuild spectrum controls
+        self._rebuild_spectrum_controls()
 
     def _on_item_changed(self, item):
         c = self.c
@@ -154,3 +166,91 @@ class LayersDock(QtWidgets.QDockWidget):
         c.fig.canvas.draw_idle()
 
 
+
+    def _rebuild_spectrum_controls(self) -> None:
+        """Rebuild spectrum controls for layers with spectrum data."""
+        # Clear existing controls
+        for widgets in self.spectrum_controls_widgets.values():
+            try:
+                widgets['container'].deleteLater()
+            except Exception:
+                pass
+        self.spectrum_controls_widgets.clear()
+
+        # Check if controller has layers model
+        if not hasattr(self.c, '_layers_model') or self.c._layers_model is None:
+            self.spectrum_group.setVisible(False)
+            return
+
+        layers = self.c._layers_model.layers
+        has_any_spectrum = any(layer.spectrum_data is not None for layer in layers)
+        
+        if not has_any_spectrum:
+            self.spectrum_group.setVisible(False)
+            return
+
+        self.spectrum_group.setVisible(True)
+
+        # Build controls for each layer with spectrum
+        for idx, layer in enumerate(layers):
+            if layer.spectrum_data is None:
+                continue
+
+            # Container for this layer's controls
+            container = QtWidgets.QWidget()
+            h_layout = QtWidgets.QHBoxLayout(container)
+            h_layout.setContentsMargins(0, 2, 0, 2)
+
+            # Layer label
+            label = QtWidgets.QLabel(f"{idx}: {layer.label}")
+            label.setMinimumWidth(100)
+            h_layout.addWidget(label)
+
+            # Visibility checkbox
+            chk_visible = QtWidgets.QCheckBox("Show")
+            chk_visible.setChecked(layer.spectrum_visible)
+            chk_visible.toggled.connect(lambda checked, i=idx: self._on_spectrum_visibility_changed(i, checked))
+            h_layout.addWidget(chk_visible)
+
+            # Opacity label
+            opacity_label = QtWidgets.QLabel("Opacity:")
+            h_layout.addWidget(opacity_label)
+
+            # Opacity slider
+            opacity_slider = QtWidgets.QSlider()
+            try:
+                opacity_slider.setOrientation(QtCore.Qt.Horizontal)
+            except AttributeError:
+                opacity_slider.setOrientation(QtCore.Qt.Orientation.Horizontal)
+            opacity_slider.setMinimum(0)
+            opacity_slider.setMaximum(100)
+            opacity_slider.setValue(int(layer.spectrum_alpha * 100))
+            opacity_slider.setMaximumWidth(100)
+            opacity_slider.valueChanged.connect(lambda val, i=idx: self._on_spectrum_alpha_changed(i, val / 100.0))
+            h_layout.addWidget(opacity_slider)
+
+            # Opacity value label
+            opacity_val_label = QtWidgets.QLabel(f"{int(layer.spectrum_alpha * 100)}%")
+            opacity_val_label.setMinimumWidth(35)
+            opacity_slider.valueChanged.connect(lambda val, lbl=opacity_val_label: lbl.setText(f"{val}%"))
+            h_layout.addWidget(opacity_val_label)
+
+            self.spectrum_controls_layout.addWidget(container)
+
+            # Store widgets for later cleanup
+            self.spectrum_controls_widgets[idx] = {
+                'container': container,
+                'checkbox': chk_visible,
+                'slider': opacity_slider,
+                'value_label': opacity_val_label
+            }
+
+    def _on_spectrum_visibility_changed(self, layer_idx: int, visible: bool) -> None:
+        """Handle spectrum visibility change."""
+        if hasattr(self.c, 'set_layer_spectrum_visibility'):
+            self.c.set_layer_spectrum_visibility(layer_idx, visible)
+
+    def _on_spectrum_alpha_changed(self, layer_idx: int, alpha: float) -> None:
+        """Handle spectrum opacity change."""
+        if hasattr(self.c, 'set_layer_spectrum_alpha'):
+            self.c.set_layer_spectrum_alpha(layer_idx, alpha)
