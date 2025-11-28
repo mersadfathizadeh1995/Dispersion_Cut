@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Dict, Any, List, Tuple
 from pathlib import Path
 from matplotlib.backends import qt_compat
 
@@ -11,6 +11,295 @@ QtGui = qt_compat.QtGui
 QtCore = qt_compat.QtCore
 
 from dc_cut.core.pub_figures import PublicationFigureGenerator, PlotConfig
+
+
+# Qt version compatibility helpers
+def _get_qt_orientation_horizontal():
+    """Get Qt.Horizontal with version compatibility."""
+    try:
+        return QtCore.Qt.Orientation.Horizontal  # Qt6
+    except AttributeError:
+        return QtCore.Qt.Horizontal  # Qt5
+
+
+def _get_qt_align_top():
+    """Get Qt.AlignTop with version compatibility."""
+    try:
+        return QtCore.Qt.AlignmentFlag.AlignTop  # Qt6
+    except AttributeError:
+        return QtCore.Qt.AlignTop  # Qt5
+
+
+def _get_qt_user_role():
+    """Get Qt.UserRole with version compatibility."""
+    try:
+        return QtCore.Qt.ItemDataRole.UserRole  # Qt6
+    except AttributeError:
+        return QtCore.Qt.UserRole  # Qt5
+
+
+def _get_qt_item_is_selectable():
+    """Get Qt.ItemIsSelectable with version compatibility."""
+    try:
+        return QtCore.Qt.ItemFlag.ItemIsSelectable  # Qt6
+    except AttributeError:
+        return QtCore.Qt.ItemIsSelectable  # Qt5
+
+
+def _get_qt_item_is_enabled():
+    """Get Qt.ItemIsEnabled with version compatibility."""
+    try:
+        return QtCore.Qt.ItemFlag.ItemIsEnabled  # Qt6
+    except AttributeError:
+        return QtCore.Qt.ItemIsEnabled  # Qt5
+
+
+def _get_qt_item_is_user_checkable():
+    """Get Qt.ItemIsUserCheckable with version compatibility."""
+    try:
+        return QtCore.Qt.ItemFlag.ItemIsUserCheckable  # Qt6
+    except AttributeError:
+        return QtCore.Qt.ItemIsUserCheckable  # Qt5
+
+
+def _get_qt_checked():
+    """Get Qt.Checked with version compatibility."""
+    try:
+        return QtCore.Qt.CheckState.Checked  # Qt6
+    except AttributeError:
+        return QtCore.Qt.Checked  # Qt5
+
+
+def _get_qt_unchecked():
+    """Get Qt.Unchecked with version compatibility."""
+    try:
+        return QtCore.Qt.CheckState.Unchecked  # Qt6
+    except AttributeError:
+        return QtCore.Qt.Unchecked  # Qt5
+
+
+def _get_qt_extended_selection():
+    """Get QAbstractItemView.ExtendedSelection with version compatibility."""
+    try:
+        return QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection  # Qt6
+    except AttributeError:
+        return QtWidgets.QAbstractItemView.ExtendedSelection  # Qt5
+
+
+# Figure type definitions organized by category
+# Each entry: (display_name, internal_key, description, is_implemented)
+FIGURE_TYPES: Dict[str, List[Tuple[str, str, str, bool]]] = {
+    "Basic Plots - Frequency Domain": [
+        (
+            "Aggregated Dispersion Curve",
+            "aggregated",
+            "Shows binned average velocity with +/-1 sigma uncertainty envelope.\n"
+            "Suitable for final dispersion curves in publications.",
+            True
+        ),
+        (
+            "Per-Offset Curves",
+            "per_offset",
+            "Shows individual curves for each active offset/layer.\n"
+            "Useful for comparing multiple offsets or showing data diversity.",
+            True
+        ),
+        (
+            "Uncertainty Visualization",
+            "uncertainty",
+            "Shows coefficient of variation (CV = sigma/mu) as a function of frequency.\n"
+            "Highlights regions with high uncertainty.",
+            True
+        ),
+    ],
+    "Basic Plots - Wavelength Domain": [
+        (
+            "Aggregated Wavelength",
+            "aggregated_wavelength",
+            "Same as aggregated but in wavelength domain.\n"
+            "Better for depth-related interpretations (lambda/2 or lambda/3 rules).",
+            True
+        ),
+        (
+            "Per-Offset Wavelength",
+            "per_offset_wavelength",
+            "Per-offset curves in wavelength domain.\n"
+            "Shows aperture-wavelength relationships clearly.",
+            True
+        ),
+        (
+            "Dual-Domain Comparison",
+            "dual_domain",
+            "Side-by-side frequency and wavelength plots.\n"
+            "Very common in MASW publications for comprehensive presentation.",
+            True
+        ),
+    ],
+    "Modal Analysis": [
+        (
+            "Multi-Mode Overlay",
+            "multi_mode_overlay",
+            "Overlays multiple modes (fundamental + higher) on the same plot.\n"
+            "Useful for showing mode identification results.",
+            False
+        ),
+        (
+            "Modal Energy Distribution",
+            "modal_energy",
+            "Shows relative energy distribution between modes.\n"
+            "Helps identify dominant modes at different frequencies.",
+            False
+        ),
+        (
+            "Mode Confidence Map",
+            "mode_confidence",
+            "Color-coded confidence levels for mode identification.\n"
+            "Indicates reliability of mode separation.",
+            False
+        ),
+        (
+            "Apparent vs. Fundamental",
+            "apparent_vs_fundamental",
+            "Compares apparent (picked) curve with theoretical fundamental mode.\n"
+            "Useful for validating mode identification.",
+            False
+        ),
+        (
+            "Modal Separation Quality",
+            "modal_separation",
+            "Visualizes the quality of separation between modes.\n"
+            "Shows spectral gaps and overlapping regions.",
+            False
+        ),
+        (
+            "Cross-Component (Z vs. R)",
+            "cross_component",
+            "Compares vertical and radial component dispersion curves.\n"
+            "Useful for multi-component MASW analysis.",
+            False
+        ),
+    ],
+    "Uncertainty & Statistics": [
+        (
+            "Data Density Heatmap",
+            "density_heatmap",
+            "2D histogram showing data point density in frequency-velocity space.\n"
+            "Reveals data concentration and sparse regions.",
+            False
+        ),
+        (
+            "Percentile Bands (5th-95th)",
+            "percentile_bands",
+            "Shows multiple percentile bands instead of just standard deviation.\n"
+            "Provides more robust uncertainty visualization.",
+            False
+        ),
+        (
+            "Bootstrap Confidence Intervals",
+            "bootstrap_ci",
+            "Confidence intervals computed via bootstrap resampling.\n"
+            "More robust for non-normal distributions.",
+            False
+        ),
+        (
+            "Per-Offset CV Comparison",
+            "cv_comparison",
+            "Compares CV values across different offsets.\n"
+            "Identifies which offsets contribute most uncertainty.",
+            False
+        ),
+        (
+            "Heterogeneity Map",
+            "heterogeneity_map",
+            "Spatial map of velocity heterogeneity along the survey line.\n"
+            "Shows lateral variations in dispersion properties.",
+            False
+        ),
+    ],
+    "Near-Field & Array": [
+        (
+            "NACD-Wavelength Analysis",
+            "nacd_wavelength",
+            "Normalized Array Center Distance vs. wavelength analysis.\n"
+            "Standard near-field assessment visualization.",
+            False
+        ),
+        (
+            "Array Response Overlay",
+            "array_response",
+            "Shows theoretical array response function with picked data.\n"
+            "Helps identify spatial aliasing effects.",
+            False
+        ),
+        (
+            "Offset-Dependent Comparison",
+            "offset_dependent",
+            "Systematic comparison of how curves change with offset.\n"
+            "Reveals near-field contamination patterns.",
+            False
+        ),
+    ],
+    "Advanced Comparison": [
+        (
+            "Forward Model vs. Observed",
+            "forward_vs_observed",
+            "Compares picked dispersion with forward-modeled theoretical curve.\n"
+            "Standard validation figure for inversion results.",
+            False
+        ),
+        (
+            "Multi-Transform Comparison",
+            "multi_transform",
+            "Compares results from different transform methods (F-K, FDBF, etc.).\n"
+            "Shows method-dependent differences.",
+            False
+        ),
+        (
+            "Active vs. Passive Merge",
+            "active_passive",
+            "Visualizes the merge zone between active and passive data.\n"
+            "Shows frequency overlap and weighting.",
+            False
+        ),
+        (
+            "Temporal Change Detection",
+            "temporal_change",
+            "Compares dispersion curves from different time periods.\n"
+            "For monitoring applications.",
+            False
+        ),
+        (
+            "Reference Curve Overlay",
+            "reference_overlay",
+            "Overlays user-provided reference curves for comparison.\n"
+            "Useful for benchmarking against published results.",
+            False
+        ),
+    ],
+    "Quality Control": [
+        (
+            "SNR vs. Frequency",
+            "snr_frequency",
+            "Signal-to-noise ratio as a function of frequency.\n"
+            "Helps identify reliable frequency bands.",
+            False
+        ),
+        (
+            "Spatial Aliasing Diagnostic",
+            "aliasing_diagnostic",
+            "Shows theoretical aliasing limits with picked data.\n"
+            "Warns about potentially aliased picks.",
+            False
+        ),
+        (
+            "Picking Consistency Check",
+            "picking_consistency",
+            "Visualizes picking consistency across offsets.\n"
+            "Identifies outliers and inconsistent picks.",
+            False
+        ),
+    ],
+}
 
 
 class PublicationFigureDialog(QtWidgets.QDialog):
@@ -59,111 +348,77 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         layout.addWidget(button_box)
 
     def _build_plot_type_tab(self):
-        """Build the Plot Type selection tab."""
+        """Build the Plot Type selection tab with tree view."""
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
 
-        # Plot type selection
-        type_group = QtWidgets.QGroupBox("Plot Type")
-        type_layout = QtWidgets.QVBoxLayout(type_group)
+        # Search box at the top
+        search_layout = QtWidgets.QHBoxLayout()
+        search_label = QtWidgets.QLabel("Search:")
+        self.plot_search_edit = QtWidgets.QLineEdit()
+        self.plot_search_edit.setPlaceholderText("Type to filter figure types...")
+        self.plot_search_edit.setClearButtonEnabled(True)
+        self.plot_search_edit.textChanged.connect(self._filter_plot_types)
+        search_layout.addWidget(search_label)
+        search_layout.addWidget(self.plot_search_edit)
+        layout.addLayout(search_layout)
 
-        # FREQUENCY DOMAIN PLOTS
-        freq_label = QtWidgets.QLabel("<b>Frequency Domain:</b>")
-        type_layout.addWidget(freq_label)
+        # Splitter for tree view (left) and description panel (right)
+        splitter = QtWidgets.QSplitter(_get_qt_orientation_horizontal())
 
-        self.plot_type_aggregated = QtWidgets.QCheckBox("Aggregated Dispersion Curve")
-        self.plot_type_per_offset = QtWidgets.QCheckBox("Per-Offset Curves")
-        self.plot_type_uncertainty = QtWidgets.QCheckBox("Uncertainty Visualization")
+        # Left panel: Tree view of figure types
+        left_widget = QtWidgets.QWidget()
+        left_layout = QtWidgets.QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.plot_type_aggregated.setChecked(True)
+        tree_label = QtWidgets.QLabel("<b>Figure Types (check to select)</b>")
+        left_layout.addWidget(tree_label)
 
-        # Add descriptions
-        desc_aggregated = QtWidgets.QLabel(
-            "Shows binned average velocity with ±1σ uncertainty envelope.\n"
-            "Suitable for final dispersion curves in publications."
-        )
-        desc_aggregated.setWordWrap(True)
-        desc_aggregated.setStyleSheet("color: gray; font-style: italic; margin-left: 20px;")
+        self.plot_tree = QtWidgets.QTreeWidget()
+        self.plot_tree.setHeaderHidden(True)
+        self.plot_tree.setRootIsDecorated(True)
+        # Use single selection for clicking, but checkboxes for multi-select
+        self.plot_tree.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection
+                                        if hasattr(QtWidgets.QAbstractItemView, 'SingleSelection')
+                                        else QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
 
-        desc_per_offset = QtWidgets.QLabel(
-            "Shows individual curves for each active offset/layer.\n"
-            "Useful for comparing multiple offsets or showing data diversity."
-        )
-        desc_per_offset.setWordWrap(True)
-        desc_per_offset.setStyleSheet("color: gray; font-style: italic; margin-left: 20px;")
+        left_layout.addWidget(self.plot_tree)
+        splitter.addWidget(left_widget)
 
-        desc_uncertainty = QtWidgets.QLabel(
-            "Shows coefficient of variation (CV = σ/μ) as a function of frequency.\n"
-            "Highlights regions with high uncertainty."
-        )
-        desc_uncertainty.setWordWrap(True)
-        desc_uncertainty.setStyleSheet("color: gray; font-style: italic; margin-left: 20px;")
+        # Right panel: Description (create BEFORE connecting signals and populating tree)
+        right_widget = QtWidgets.QWidget()
+        right_layout = QtWidgets.QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
 
-        type_layout.addWidget(self.plot_type_aggregated)
-        type_layout.addWidget(desc_aggregated)
-        type_layout.addSpacing(10)
-        type_layout.addWidget(self.plot_type_per_offset)
-        type_layout.addWidget(desc_per_offset)
-        type_layout.addSpacing(10)
-        type_layout.addWidget(self.plot_type_uncertainty)
-        type_layout.addWidget(desc_uncertainty)
+        desc_title_label = QtWidgets.QLabel("<b>Description</b>")
+        right_layout.addWidget(desc_title_label)
 
-        # WAVELENGTH DOMAIN PLOTS (STEP 1)
-        type_layout.addSpacing(15)
-        wave_label = QtWidgets.QLabel("<b>Wavelength Domain:</b>")
-        type_layout.addWidget(wave_label)
+        self.plot_desc_label = QtWidgets.QLabel("Select a figure type to see its description.")
+        self.plot_desc_label.setWordWrap(True)
+        self.plot_desc_label.setAlignment(_get_qt_align_top())
+        self.plot_desc_label.setStyleSheet("padding: 10px; background-color: palette(base);")
+        self.plot_desc_label.setMinimumHeight(100)
+        right_layout.addWidget(self.plot_desc_label)
 
-        self.plot_type_aggregated_wavelength = QtWidgets.QCheckBox("Aggregated (Wavelength)")
-        desc_agg_wave = QtWidgets.QLabel(
-            "Same as aggregated but in wavelength domain.\n"
-            "Better for depth-related interpretations (λ/2 or λ/3 rules)."
-        )
-        desc_agg_wave.setWordWrap(True)
-        desc_agg_wave.setStyleSheet("color: gray; font-style: italic; margin-left: 20px;")
+        # Status indicator
+        self.plot_status_label = QtWidgets.QLabel("")
+        self.plot_status_label.setWordWrap(True)
+        right_layout.addWidget(self.plot_status_label)
 
-        self.plot_type_per_offset_wavelength = QtWidgets.QCheckBox("Per-Offset (Wavelength)")
-        desc_offset_wave = QtWidgets.QLabel(
-            "Per-offset curves in wavelength domain.\n"
-            "Shows aperture-wavelength relationships clearly."
-        )
-        desc_offset_wave.setWordWrap(True)
-        desc_offset_wave.setStyleSheet("color: gray; font-style: italic; margin-left: 20px;")
+        # Selection count indicator
+        self.selection_count_label = QtWidgets.QLabel("")
+        self.selection_count_label.setStyleSheet("font-weight: bold; color: #0066cc;")
+        right_layout.addWidget(self.selection_count_label)
 
-        self.plot_type_dual_domain = QtWidgets.QCheckBox("Dual-Domain Comparison")
-        desc_dual = QtWidgets.QLabel(
-            "Side-by-side frequency and wavelength plots.\n"
-            "Very common in MASW publications for comprehensive presentation."
-        )
-        desc_dual.setWordWrap(True)
-        desc_dual.setStyleSheet("color: gray; font-style: italic; margin-left: 20px;")
+        right_layout.addStretch()
+        splitter.addWidget(right_widget)
 
-        type_layout.addWidget(self.plot_type_aggregated_wavelength)
-        type_layout.addWidget(desc_agg_wave)
-        type_layout.addSpacing(10)
-        type_layout.addWidget(self.plot_type_per_offset_wavelength)
-        type_layout.addWidget(desc_offset_wave)
-        type_layout.addSpacing(10)
-        type_layout.addWidget(self.plot_type_dual_domain)
-        type_layout.addWidget(desc_dual)
+        # Set initial splitter sizes (60% tree, 40% description)
+        splitter.setSizes([300, 200])
 
-        layout.addWidget(type_group)
+        layout.addWidget(splitter, 1)  # Give splitter stretch priority
 
-        # Option to generate all plot types
-        self.generate_all_check = QtWidgets.QCheckBox("Generate all plot types at once")
-        self.generate_all_check.setToolTip(
-            "When checked, all six plot types will be generated with appropriate filenames:\n"
-            "  Frequency domain:\n"
-            "    - <filename>_aggregated.ext\n"
-            "    - <filename>_per_offset.ext\n"
-            "    - <filename>_uncertainty.ext\n"
-            "  Wavelength domain:\n"
-            "    - <filename>_aggregated_wavelength.ext\n"
-            "    - <filename>_per_offset_wavelength.ext\n"
-            "    - <filename>_dual_domain.ext"
-        )
-        layout.addWidget(self.generate_all_check)
-
-        # Per-offset options (only enabled when per-offset is selected)
+        # Per-offset options (create BEFORE populating tree since selection may trigger update)
         offset_group = QtWidgets.QGroupBox("Per-Offset Options")
         offset_layout = QtWidgets.QFormLayout(offset_group)
 
@@ -174,14 +429,184 @@ class PublicationFigureDialog(QtWidgets.QDialog):
 
         layout.addWidget(offset_group)
         self.offset_group = offset_group
-
-        # Enable/disable based on selection
-        self.plot_type_per_offset.toggled.connect(self._update_per_offset_options)
-        self.plot_type_per_offset_wavelength.toggled.connect(self._update_per_offset_options)
         self.offset_group.setEnabled(False)
 
-        layout.addStretch()
+        # NOW connect signals and populate tree (after all widgets exist)
+        self.plot_tree.itemSelectionChanged.connect(self._on_tree_selection_changed)
+        self.plot_tree.itemChanged.connect(self._on_tree_item_changed)
+        self._populate_plot_tree()
+
+        # Bottom options - removed obsolete checkbox, selection is via checkboxes in tree
+        # The tree checkboxes now handle multi-selection
+
         self.tabs.addTab(tab, "Plot Type")
+
+    def _populate_plot_tree(self):
+        """Populate the tree widget with figure type categories."""
+        self.plot_tree.clear()
+
+        first_implemented_item = None
+
+        for category_name, figure_types in FIGURE_TYPES.items():
+            # Create category item
+            category_item = QtWidgets.QTreeWidgetItem([category_name])
+            category_item.setFlags(category_item.flags() & ~_get_qt_item_is_selectable())
+            category_item.setExpanded(True)
+
+            # Make category header bold
+            font = category_item.font(0)
+            font.setBold(True)
+            category_item.setFont(0, font)
+
+            for display_name, internal_key, description, is_implemented in figure_types:
+                # Create figure type item
+                if is_implemented:
+                    item_text = display_name
+                else:
+                    item_text = f"{display_name} (Coming Soon)"
+
+                fig_item = QtWidgets.QTreeWidgetItem([item_text])
+                fig_item.setData(0, _get_qt_user_role(), {
+                    'key': internal_key,
+                    'name': display_name,
+                    'description': description,
+                    'implemented': is_implemented
+                })
+
+                # Add checkbox for implemented items
+                if is_implemented:
+                    fig_item.setFlags(fig_item.flags() | _get_qt_item_is_user_checkable())
+                    fig_item.setCheckState(0, _get_qt_unchecked())
+                    if first_implemented_item is None:
+                        first_implemented_item = fig_item
+                else:
+                    # Disable unimplemented items
+                    fig_item.setFlags(fig_item.flags() & ~_get_qt_item_is_enabled())
+                    fig_item.setForeground(0, QtGui.QBrush(QtGui.QColor(128, 128, 128)))
+
+                category_item.addChild(fig_item)
+
+            self.plot_tree.addTopLevelItem(category_item)
+
+        # Check the first implemented item by default and select it
+        if first_implemented_item:
+            first_implemented_item.setCheckState(0, _get_qt_checked())
+            self.plot_tree.setCurrentItem(first_implemented_item)
+            self._update_selection_count()
+
+    def _filter_plot_types(self, text: str):
+        """Filter the tree view based on search text."""
+        search_text = text.lower().strip()
+
+        for i in range(self.plot_tree.topLevelItemCount()):
+            category = self.plot_tree.topLevelItem(i)
+            category_visible = False
+
+            for j in range(category.childCount()):
+                child = category.child(j)
+                data = child.data(0, _get_qt_user_role())
+
+                if data:
+                    # Search in name and description
+                    name_match = search_text in data['name'].lower()
+                    desc_match = search_text in data['description'].lower()
+                    key_match = search_text in data['key'].lower()
+
+                    visible = not search_text or name_match or desc_match or key_match
+                    child.setHidden(not visible)
+
+                    if visible:
+                        category_visible = True
+                else:
+                    child.setHidden(bool(search_text))
+
+            # Hide empty categories, but expand visible ones
+            category.setHidden(not category_visible)
+            if category_visible and search_text:
+                category.setExpanded(True)
+
+    def _on_tree_selection_changed(self):
+        """Handle tree selection change to update description panel."""
+        selected_items = self.plot_tree.selectedItems()
+
+        if not selected_items:
+            self.plot_desc_label.setText("Select a figure type to see its description.")
+            self.plot_status_label.setText("")
+            self.offset_group.setEnabled(False)
+            return
+
+        # Get first selected item's data
+        item = selected_items[0]
+        data = item.data(0, _get_qt_user_role())
+
+        if data:
+            self.plot_desc_label.setText(f"<b>{data['name']}</b><br><br>{data['description']}")
+
+            if data['implemented']:
+                self.plot_status_label.setText("<span style='color: green;'>Status: Available</span>")
+            else:
+                self.plot_status_label.setText("<span style='color: gray;'>Status: Coming Soon</span>")
+
+            # Enable offset options if any checked per-offset type exists
+            self._update_offset_options()
+        else:
+            # Category item selected
+            self.plot_desc_label.setText(f"Category: {item.text(0)}")
+            self.plot_status_label.setText("")
+
+    def _on_tree_item_changed(self, item, column):
+        """Handle tree item checkbox state change."""
+        # Update selection count and offset options when checkboxes change
+        self._update_selection_count()
+        self._update_offset_options()
+
+    def _update_selection_count(self):
+        """Update the selection count label."""
+        checked_types = self._get_checked_plot_types()
+        count = len(checked_types)
+        if count == 0:
+            self.selection_count_label.setText("No figures selected")
+        elif count == 1:
+            self.selection_count_label.setText("1 figure selected")
+        else:
+            self.selection_count_label.setText(f"{count} figures selected")
+
+    def _update_offset_options(self):
+        """Enable/disable offset options based on checked items."""
+        checked_types = self._get_checked_plot_types()
+        needs_offset = any('per_offset' in key for key, _ in checked_types)
+        self.offset_group.setEnabled(needs_offset)
+
+    def _get_checked_plot_types(self) -> List[Tuple[str, str]]:
+        """Get list of checked plot types from tree view (using checkboxes).
+        
+        Returns:
+            List of tuples (internal_key, suffix_for_filename)
+        """
+        checked_types = []
+
+        for i in range(self.plot_tree.topLevelItemCount()):
+            category = self.plot_tree.topLevelItem(i)
+            for j in range(category.childCount()):
+                child = category.child(j)
+                data = child.data(0, _get_qt_user_role())
+                if data and data.get('implemented', False):
+                    # Check if item is checked
+                    if child.checkState(0) == _get_qt_checked():
+                        key = data['key']
+                        checked_types.append((key, key))
+
+        return checked_types
+
+    def _get_selected_plot_types(self) -> List[Tuple[str, str]]:
+        """Get list of selected plot types from tree view.
+        
+        Now uses checkbox state instead of selection.
+        
+        Returns:
+            List of tuples (internal_key, suffix_for_filename)
+        """
+        return self._get_checked_plot_types()
 
     def _build_styling_tab(self):
         """Build the Styling options tab."""
@@ -499,15 +924,19 @@ class PublicationFigureDialog(QtWidgets.QDialog):
 
         dir_layout.addLayout(dir_select_layout)
 
-        # Filename options
+        # Project name (used as filename prefix)
         filename_layout = QtWidgets.QHBoxLayout()
-        filename_layout.addWidget(QtWidgets.QLabel("Filename:"))
+        filename_layout.addWidget(QtWidgets.QLabel("Project Name:"))
         self.filename_edit = QtWidgets.QLineEdit("dispersion_curve")
-        self.filename_edit.setPlaceholderText("Enter filename (without extension)")
+        self.filename_edit.setPlaceholderText("Enter project name (used as filename prefix)")
         filename_layout.addWidget(self.filename_edit)
         dir_layout.addLayout(filename_layout)
 
-        note_label = QtWidgets.QLabel("Note: File extension will be added automatically based on format")
+        note_label = QtWidgets.QLabel(
+            "Note: When multiple figures are selected, files are named as:\n"
+            "<project_name>_<figure_type>.<extension>\n"
+            "e.g., dispersion_curve_aggregated.pdf, dispersion_curve_per_offset.pdf"
+        )
         note_label.setStyleSheet("color: gray; font-style: italic; font-size: 9pt;")
         note_label.setWordWrap(True)
         dir_layout.addWidget(note_label)
@@ -588,11 +1017,6 @@ class PublicationFigureDialog(QtWidgets.QDialog):
 
         if dir_path:
             self.output_dir_edit.setText(dir_path)
-
-    def _update_per_offset_options(self):
-        """Enable/disable per-offset options based on plot type selection."""
-        enabled = self.plot_type_per_offset.isChecked() or self.plot_type_per_offset_wavelength.isChecked()
-        self.offset_group.setEnabled(enabled)
 
     def _gather_config(self) -> PlotConfig:
         """Gather configuration from UI widgets."""
@@ -720,177 +1144,101 @@ class PublicationFigureDialog(QtWidgets.QDialog):
             )
             return
 
-        # Determine which plot types to generate
-        generate_all = self.generate_all_check.isChecked()
+        # Get selected plot types from tree view
+        selected_types = self._get_selected_plot_types()
 
-        if generate_all:
-            # Generate all six plot types (3 frequency + 3 wavelength domain)
-            outputs_to_generate = [
-                ('aggregated', 'aggregated'),
-                ('per_offset', 'per_offset'),
-                ('uncertainty', 'uncertainty'),
-                ('aggregated_wavelength', 'aggregated_wavelength'),
-                ('per_offset_wavelength', 'per_offset_wavelength'),
-                ('dual_domain', 'dual_domain')
-            ]
+        # Validate at least one type is selected
+        if not selected_types:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "No Plot Type Selected",
+                "Please select at least one plot type to generate."
+            )
+            return
 
-            # Check if any files exist
-            files_to_create = []
-            for plot_type, suffix in outputs_to_generate:
+        # Build file list
+        files_to_create = []
+        for plot_type, suffix in selected_types:
+            # If only one type selected, don't add suffix
+            if len(selected_types) == 1:
+                output_path = str(dir_path / f"{filename_base}{extension}")
+            else:
                 output_path = str(dir_path / f"{filename_base}_{suffix}{extension}")
-                files_to_create.append((plot_type, output_path))
+            files_to_create.append((plot_type, output_path))
 
-            existing_files = [p for _, p in files_to_create if Path(p).exists()]
-            if existing_files:
-                file_list = '\n'.join(existing_files)
-                reply = QtWidgets.QMessageBox.question(
-                    self,
-                    "Files Exist",
-                    f"The following files already exist:\n{file_list}\n\nOverwrite?",
-                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                    QtWidgets.QMessageBox.No
-                )
-                if reply == QtWidgets.QMessageBox.No:
-                    return
-
-            # Generate all plots
-            try:
-                generated_files = []
-                for plot_type, output_path in files_to_create:
-                    if plot_type == 'aggregated':
-                        generator.generate_aggregated_plot(output_path=output_path, config=config)
-                    elif plot_type == 'per_offset':
-                        max_offsets = self.max_offsets_spin.value()
-                        generator.generate_per_offset_plot(
-                            output_path=output_path,
-                            config=config,
-                            max_offsets=max_offsets
-                        )
-                    elif plot_type == 'uncertainty':
-                        generator.generate_uncertainty_plot(output_path=output_path, config=config)
-                    elif plot_type == 'aggregated_wavelength':
-                        generator.generate_aggregated_wavelength_plot(output_path=output_path, config=config)
-                    elif plot_type == 'per_offset_wavelength':
-                        max_offsets = self.max_offsets_spin.value()
-                        generator.generate_per_offset_wavelength_plot(
-                            output_path=output_path,
-                            config=config,
-                            max_offsets=max_offsets
-                        )
-                    elif plot_type == 'dual_domain':
-                        generator.generate_dual_domain_plot(output_path=output_path, config=config)
-                    generated_files.append(output_path)
-
-                # Success message
-                file_list = '\n'.join(generated_files)
-                QtWidgets.QMessageBox.information(
-                    self,
-                    "Success",
-                    f"All publication figures saved:\n{file_list}"
-                )
-                self.accept()
-
-            except Exception as e:
-                QtWidgets.QMessageBox.critical(
-                    self,
-                    "Error",
-                    f"Failed to generate figures:\n{str(e)}"
-                )
-        else:
-            # Generate selected plot types
-            # Collect which checkboxes are selected
-            selected_types = []
-            if self.plot_type_aggregated.isChecked():
-                selected_types.append(('aggregated', 'aggregated'))
-            if self.plot_type_per_offset.isChecked():
-                selected_types.append(('per_offset', 'per_offset'))
-            if self.plot_type_uncertainty.isChecked():
-                selected_types.append(('uncertainty', 'uncertainty'))
-            if self.plot_type_aggregated_wavelength.isChecked():
-                selected_types.append(('aggregated_wavelength', 'aggregated_wavelength'))
-            if self.plot_type_per_offset_wavelength.isChecked():
-                selected_types.append(('per_offset_wavelength', 'per_offset_wavelength'))
-            if self.plot_type_dual_domain.isChecked():
-                selected_types.append(('dual_domain', 'dual_domain'))
-
-            # Validate at least one type is selected
-            if not selected_types:
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "No Plot Type Selected",
-                    "Please select at least one plot type to generate."
-                )
+        # Check for existing files
+        existing_files = [p for _, p in files_to_create if Path(p).exists()]
+        if existing_files:
+            file_list = '\n'.join(existing_files)
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "Files Exist",
+                f"The following files already exist:\n{file_list}\n\nOverwrite?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No
+            )
+            if reply == QtWidgets.QMessageBox.No:
                 return
 
-            # Build file list
-            files_to_create = []
-            for plot_type, suffix in selected_types:
-                # If only one type selected, don't add suffix
-                if len(selected_types) == 1:
-                    output_path = str(dir_path / f"{filename_base}{extension}")
-                else:
-                    output_path = str(dir_path / f"{filename_base}_{suffix}{extension}")
-                files_to_create.append((plot_type, output_path))
+        # Generate all selected plots
+        try:
+            generated_files = []
+            for plot_type, output_path in files_to_create:
+                self._generate_single_plot(generator, plot_type, output_path, config)
+                generated_files.append(output_path)
 
-            # Check for existing files
-            existing_files = [p for _, p in files_to_create if Path(p).exists()]
-            if existing_files:
-                file_list = '\n'.join(existing_files)
-                reply = QtWidgets.QMessageBox.question(
-                    self,
-                    "Files Exist",
-                    f"The following files already exist:\n{file_list}\n\nOverwrite?",
-                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                    QtWidgets.QMessageBox.No
-                )
-                if reply == QtWidgets.QMessageBox.No:
-                    return
+            # Success message
+            file_list = '\n'.join(generated_files)
+            if len(generated_files) == 1:
+                msg = f"Publication figure saved to:\n{file_list}"
+            else:
+                msg = f"Publication figures saved:\n{file_list}"
+            QtWidgets.QMessageBox.information(
+                self,
+                "Success",
+                msg
+            )
 
-            # Generate all selected plots
-            try:
-                generated_files = []
-                for plot_type, output_path in files_to_create:
-                    if plot_type == 'aggregated':
-                        generator.generate_aggregated_plot(output_path=output_path, config=config)
-                    elif plot_type == 'per_offset':
-                        max_offsets = self.max_offsets_spin.value()
-                        generator.generate_per_offset_plot(
-                            output_path=output_path,
-                            config=config,
-                            max_offsets=max_offsets
-                        )
-                    elif plot_type == 'uncertainty':
-                        generator.generate_uncertainty_plot(output_path=output_path, config=config)
-                    elif plot_type == 'aggregated_wavelength':
-                        generator.generate_aggregated_wavelength_plot(output_path=output_path, config=config)
-                    elif plot_type == 'per_offset_wavelength':
-                        max_offsets = self.max_offsets_spin.value()
-                        generator.generate_per_offset_wavelength_plot(
-                            output_path=output_path,
-                            config=config,
-                            max_offsets=max_offsets
-                        )
-                    elif plot_type == 'dual_domain':
-                        generator.generate_dual_domain_plot(output_path=output_path, config=config)
-                    generated_files.append(output_path)
+            # Don't close dialog - user may want to generate more figures
+            # self.accept()
 
-                # Success message
-                file_list = '\n'.join(generated_files)
-                if len(generated_files) == 1:
-                    msg = f"Publication figure saved to:\n{file_list}"
-                else:
-                    msg = f"Publication figures saved:\n{file_list}"
-                QtWidgets.QMessageBox.information(
-                    self,
-                    "Success",
-                    msg
-                )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to generate figure:\n{str(e)}"
+            )
 
-                self.accept()
-
-            except Exception as e:
-                QtWidgets.QMessageBox.critical(
-                    self,
-                    "Error",
-                    f"Failed to generate figure:\n{str(e)}"
-                )
+    def _generate_single_plot(self, generator, plot_type: str, output_path: str, config: PlotConfig):
+        """Generate a single plot type.
+        
+        Args:
+            generator: PublicationFigureGenerator instance
+            plot_type: Internal key of the plot type
+            output_path: Path to save the figure
+            config: PlotConfig instance
+        """
+        if plot_type == 'aggregated':
+            generator.generate_aggregated_plot(output_path=output_path, config=config)
+        elif plot_type == 'per_offset':
+            max_offsets = self.max_offsets_spin.value()
+            generator.generate_per_offset_plot(
+                output_path=output_path,
+                config=config,
+                max_offsets=max_offsets
+            )
+        elif plot_type == 'uncertainty':
+            generator.generate_uncertainty_plot(output_path=output_path, config=config)
+        elif plot_type == 'aggregated_wavelength':
+            generator.generate_aggregated_wavelength_plot(output_path=output_path, config=config)
+        elif plot_type == 'per_offset_wavelength':
+            max_offsets = self.max_offsets_spin.value()
+            generator.generate_per_offset_wavelength_plot(
+                output_path=output_path,
+                config=config,
+                max_offsets=max_offsets
+            )
+        elif plot_type == 'dual_domain':
+            generator.generate_dual_domain_plot(output_path=output_path, config=config)
+        else:
+            raise NotImplementedError(f"Plot type '{plot_type}' is not yet implemented.")
