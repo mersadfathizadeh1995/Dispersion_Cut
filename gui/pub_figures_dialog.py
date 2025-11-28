@@ -86,6 +86,22 @@ def _get_qt_extended_selection():
         return QtWidgets.QAbstractItemView.ExtendedSelection  # Qt5
 
 
+def _get_qt_msgbox_yes():
+    """Get QMessageBox.Yes with version compatibility."""
+    try:
+        return QtWidgets.QMessageBox.StandardButton.Yes  # Qt6
+    except AttributeError:
+        return QtWidgets.QMessageBox.Yes  # Qt5
+
+
+def _get_qt_msgbox_no():
+    """Get QMessageBox.No with version compatibility."""
+    try:
+        return QtWidgets.QMessageBox.StandardButton.No  # Qt6
+    except AttributeError:
+        return QtWidgets.QMessageBox.No  # Qt5
+
+
 # Figure type definitions organized by category
 # Each entry: (display_name, internal_key, description, is_implemented)
 FIGURE_TYPES: Dict[str, List[Tuple[str, str, str, bool]]] = {
@@ -299,6 +315,59 @@ FIGURE_TYPES: Dict[str, List[Tuple[str, str, str, bool]]] = {
             False
         ),
     ],
+    "Canvas Export": [
+        (
+            "Current View (Frequency)",
+            "canvas_frequency",
+            "Export current canvas exactly as displayed in frequency domain.\n"
+            "Includes all visible layers, current zoom/pan, and styling.",
+            True
+        ),
+        (
+            "Current View (Wavelength)",
+            "canvas_wavelength",
+            "Export current canvas converted to wavelength domain.\n"
+            "Uses wavelength = velocity / frequency transformation.",
+            True
+        ),
+        (
+            "Current View (Dual Domain)",
+            "canvas_dual",
+            "Side-by-side frequency and wavelength views of current canvas.\n"
+            "Creates a two-panel figure for comprehensive presentation.",
+            True
+        ),
+    ],
+    "Source Offset Analysis": [
+        (
+            "Individual Offset - Curve Only",
+            "offset_curve_only",
+            "Clean dispersion curve for a single offset without spectrum.\n"
+            "Select the offset from the dropdown below.",
+            True
+        ),
+        (
+            "Individual Offset - With Spectrum",
+            "offset_with_spectrum",
+            "Dispersion curve overlaid on spectrum background.\n"
+            "Requires spectrum data (.npz) to be loaded.",
+            True
+        ),
+        (
+            "Individual Offset - Spectrum Only",
+            "offset_spectrum_only",
+            "Pure spectrum visualization for selected offset.\n"
+            "Shows the frequency-velocity power spectrum.",
+            True
+        ),
+        (
+            "All Offsets - Comparison Grid",
+            "offset_grid",
+            "Multi-panel grid comparing all loaded offsets.\n"
+            "Automatic layout based on number of offsets.",
+            True
+        ),
+    ],
 }
 
 
@@ -419,13 +488,57 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         layout.addWidget(splitter, 1)  # Give splitter stretch priority
 
         # Per-offset options (create BEFORE populating tree since selection may trigger update)
-        offset_group = QtWidgets.QGroupBox("Per-Offset Options")
+        offset_group = QtWidgets.QGroupBox("Offset Options")
         offset_layout = QtWidgets.QFormLayout(offset_group)
 
+        # For per-offset plot types (existing functionality)
         self.max_offsets_spin = QtWidgets.QSpinBox()
         self.max_offsets_spin.setRange(1, 50)
         self.max_offsets_spin.setValue(10)
         offset_layout.addRow("Maximum offsets to plot:", self.max_offsets_spin)
+
+        # For individual offset analysis (new)
+        self.offset_selector_combo = QtWidgets.QComboBox()
+        self.offset_selector_combo.setMinimumWidth(200)
+        offset_layout.addRow("Select offset:", self.offset_selector_combo)
+
+        # Populate offset selector from controller
+        self._populate_offset_selector()
+
+        # Grid display mode options (for offset_grid)
+        grid_display_label = QtWidgets.QLabel("Grid display mode:")
+        self.grid_mode_curves = QtWidgets.QRadioButton("Curves Only")
+        self.grid_mode_spectrum = QtWidgets.QRadioButton("Spectrum Only")
+        self.grid_mode_both = QtWidgets.QRadioButton("Curves + Spectrum")
+        self.grid_mode_curves.setChecked(True)  # Default to curves only
+        
+        grid_mode_layout = QtWidgets.QHBoxLayout()
+        grid_mode_layout.addWidget(self.grid_mode_curves)
+        grid_mode_layout.addWidget(self.grid_mode_spectrum)
+        grid_mode_layout.addWidget(self.grid_mode_both)
+        grid_mode_layout.addStretch()
+        offset_layout.addRow(grid_display_label, grid_mode_layout)
+
+        # Grid layout options for offset_grid
+        grid_options_layout = QtWidgets.QHBoxLayout()
+        grid_options_layout.addWidget(QtWidgets.QLabel("Grid rows:"))
+        self.grid_rows_spin = QtWidgets.QSpinBox()
+        self.grid_rows_spin.setRange(1, 10)
+        self.grid_rows_spin.setValue(0)  # 0 = auto
+        self.grid_rows_spin.setSpecialValueText("Auto")
+        grid_options_layout.addWidget(self.grid_rows_spin)
+        grid_options_layout.addWidget(QtWidgets.QLabel("cols:"))
+        self.grid_cols_spin = QtWidgets.QSpinBox()
+        self.grid_cols_spin.setRange(1, 10)
+        self.grid_cols_spin.setValue(0)  # 0 = auto
+        self.grid_cols_spin.setSpecialValueText("Auto")
+        grid_options_layout.addWidget(self.grid_cols_spin)
+        grid_options_layout.addStretch()
+        offset_layout.addRow("", grid_options_layout)
+
+        offset_note = QtWidgets.QLabel("Individual offset selection for single-offset exports")
+        offset_note.setStyleSheet("color: gray; font-style: italic;")
+        offset_layout.addRow("", offset_note)
 
         layout.addWidget(offset_group)
         self.offset_group = offset_group
@@ -446,6 +559,9 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         self.plot_tree.clear()
 
         first_implemented_item = None
+        
+        # Get available offsets for Source Offset Analysis sub-items
+        available_offsets = self._get_available_offsets()
 
         for category_name, figure_types in FIGURE_TYPES.items():
             # Create category item
@@ -473,8 +589,62 @@ class PublicationFigureDialog(QtWidgets.QDialog):
                     'implemented': is_implemented
                 })
 
-                # Add checkbox for implemented items
-                if is_implemented:
+                # For individual offset types, add offset sub-items instead of checkboxes
+                if internal_key in ['offset_curve_only', 'offset_with_spectrum', 'offset_spectrum_only']:
+                    # These types have offset children - make parent non-checkable
+                    fig_item.setFlags(fig_item.flags() & ~_get_qt_item_is_user_checkable())
+                    
+                    # Determine label suffix and filter based on type
+                    if internal_key == 'offset_curve_only':
+                        label_suffix = "[curve]"
+                        filter_with_spectrum = False  # Show all offsets
+                    elif internal_key == 'offset_with_spectrum':
+                        label_suffix = "[curve + spectrum]"
+                        filter_with_spectrum = True  # Only offsets with spectrum
+                    else:  # offset_spectrum_only
+                        label_suffix = "[spectrum]"
+                        filter_with_spectrum = True  # Only offsets with spectrum
+                    
+                    # Add sub-items for each offset
+                    offset_added = False
+                    for offset_info in available_offsets:
+                        # Filter based on spectrum availability
+                        if filter_with_spectrum and not offset_info.get('has_spectrum', False):
+                            continue
+                        
+                        offset_text = f"{offset_info['name']} {label_suffix}"
+                        offset_item = QtWidgets.QTreeWidgetItem([offset_text])
+                        offset_item.setData(0, _get_qt_user_role(), {
+                            'key': internal_key,
+                            'name': offset_info['name'],
+                            'description': f"{description}\n\nOffset: {offset_info['name']}",
+                            'implemented': True,
+                            'offset_index': offset_info['index'],
+                            'offset_name': offset_info['name'],
+                            'has_spectrum': offset_info.get('has_spectrum', False)
+                        })
+                        offset_item.setFlags(offset_item.flags() | _get_qt_item_is_user_checkable())
+                        offset_item.setCheckState(0, _get_qt_unchecked())
+                        fig_item.addChild(offset_item)
+                        offset_added = True
+                        
+                        if first_implemented_item is None:
+                            first_implemented_item = offset_item
+                    
+                    # If no offsets added, add a placeholder message
+                    if not offset_added:
+                        if filter_with_spectrum:
+                            placeholder = QtWidgets.QTreeWidgetItem(["(No offsets with spectrum loaded)"])
+                        else:
+                            placeholder = QtWidgets.QTreeWidgetItem(["(No offsets loaded)"])
+                        placeholder.setFlags(placeholder.flags() & ~_get_qt_item_is_enabled())
+                        placeholder.setForeground(0, QtGui.QBrush(QtGui.QColor(128, 128, 128)))
+                        fig_item.addChild(placeholder)
+                    
+                    # Expand the parent item
+                    fig_item.setExpanded(True)
+                elif is_implemented:
+                    # Regular implemented items get checkboxes
                     fig_item.setFlags(fig_item.flags() | _get_qt_item_is_user_checkable())
                     fig_item.setCheckState(0, _get_qt_unchecked())
                     if first_implemented_item is None:
@@ -571,17 +741,83 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         else:
             self.selection_count_label.setText(f"{count} figures selected")
 
+    def _populate_offset_selector(self):
+        """Populate the offset selector combo from loaded layers."""
+        self.offset_selector_combo.clear()
+
+        # Get available offsets from controller
+        available_offsets = self._get_available_offsets()
+
+        if not available_offsets:
+            self.offset_selector_combo.addItem("No offsets loaded", None)
+            return
+
+        for offset_info in available_offsets:
+            display_text = offset_info['name']
+            if offset_info.get('has_spectrum'):
+                display_text += " [+spectrum]"
+            self.offset_selector_combo.addItem(display_text, offset_info)
+
+    def _get_available_offsets(self) -> List[Dict]:
+        """Get list of available offsets from loaded data.
+        
+        Returns:
+            List of dicts: [{'name': 'Offset 12m', 'index': 0, 'has_spectrum': True}, ...]
+        """
+        offsets = []
+
+        # Get layers from controller if available
+        try:
+            # Use the correct path: _layers_model instead of model
+            if hasattr(self.controller, '_layers_model') and hasattr(self.controller._layers_model, 'layers'):
+                layers = self.controller._layers_model.layers
+                for i, layer in enumerate(layers):
+                    # Use 'label' attribute which contains actual layer name like 'fk +66'
+                    layer_name = getattr(layer, 'label', None) or getattr(layer, 'name', None) or f'Offset {i+1}'
+                    source_pos = getattr(layer, 'source_position', None)
+                    # Check for spectrum_data attribute (the actual spectrum data)
+                    has_spectrum = (hasattr(layer, 'spectrum_data') and layer.spectrum_data is not None) or \
+                                   (hasattr(layer, 'spectrum') and layer.spectrum is not None)
+
+                    offset_info = {
+                        'name': layer_name,
+                        'index': i,
+                        'source_position': source_pos,
+                        'has_spectrum': has_spectrum,
+                        'data_points': len(layer.frequency) if hasattr(layer, 'frequency') else 0
+                    }
+                    offsets.append(offset_info)
+        except Exception:
+            # If controller not properly initialized, return empty list
+            pass
+
+        return offsets
+
     def _update_offset_options(self):
         """Enable/disable offset options based on checked items."""
         checked_types = self._get_checked_plot_types()
-        needs_offset = any('per_offset' in key for key, _ in checked_types)
+
+        # Check if any offset-related types are checked
+        # Note: Individual offset types (curve_only, with_spectrum, spectrum_only)
+        # now have sub-items so we check for per_offset and offset_grid
+        offset_keys = ['per_offset', 'offset_grid']
+        needs_offset = any(
+            any(offset_key in key for offset_key in offset_keys) 
+            for key, _, _ in checked_types
+        )
+
         self.offset_group.setEnabled(needs_offset)
 
-    def _get_checked_plot_types(self) -> List[Tuple[str, str]]:
+        # Refresh offset selector when group becomes enabled
+        if needs_offset:
+            self._populate_offset_selector()
+
+    def _get_checked_plot_types(self) -> List[Tuple[str, str, Optional[Dict]]]:
         """Get list of checked plot types from tree view (using checkboxes).
         
         Returns:
-            List of tuples (internal_key, suffix_for_filename)
+            List of tuples (internal_key, suffix_for_filename, offset_info_or_None)
+            For offset types, offset_info contains 'offset_index', 'offset_name', etc.
         """
         checked_types = []
 
@@ -590,21 +826,41 @@ class PublicationFigureDialog(QtWidgets.QDialog):
             for j in range(category.childCount()):
                 child = category.child(j)
                 data = child.data(0, _get_qt_user_role())
+                
                 if data and data.get('implemented', False):
-                    # Check if item is checked
+                    # Check if item is checked (for regular items)
                     if child.checkState(0) == _get_qt_checked():
                         key = data['key']
-                        checked_types.append((key, key))
+                        checked_types.append((key, key, None))
+                
+                # Check grandchildren (offset sub-items)
+                for k in range(child.childCount()):
+                    grandchild = child.child(k)
+                    grandchild_data = grandchild.data(0, _get_qt_user_role())
+                    
+                    if grandchild_data and grandchild_data.get('implemented', False):
+                        if grandchild.checkState(0) == _get_qt_checked():
+                            key = grandchild_data['key']
+                            offset_name = grandchild_data.get('offset_name', '')
+                            # Create unique suffix for filename
+                            suffix = f"{key}_{offset_name.replace(' ', '_').lower()}"
+                            
+                            offset_info = {
+                                'offset_index': grandchild_data.get('offset_index'),
+                                'offset_name': grandchild_data.get('offset_name'),
+                                'has_spectrum': grandchild_data.get('has_spectrum', False)
+                            }
+                            checked_types.append((key, suffix, offset_info))
 
         return checked_types
 
-    def _get_selected_plot_types(self) -> List[Tuple[str, str]]:
+    def _get_selected_plot_types(self) -> List[Tuple[str, str, Optional[Dict]]]:
         """Get list of selected plot types from tree view.
         
         Now uses checkbox state instead of selection.
         
         Returns:
-            List of tuples (internal_key, suffix_for_filename)
+            List of tuples (internal_key, suffix_for_filename, offset_info_or_None)
         """
         return self._get_checked_plot_types()
 
@@ -749,6 +1005,62 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         color_layout.addRow("Uncertainty alpha:", self.uncertainty_alpha_spin)
 
         scroll_layout.addWidget(color_group)
+
+        # Spectrum Options (for Source Offset Analysis)
+        spectrum_group = QtWidgets.QGroupBox("Spectrum Options")
+        spectrum_layout = QtWidgets.QFormLayout(spectrum_group)
+
+        self.spectrum_colormap_combo = QtWidgets.QComboBox()
+        self.spectrum_colormap_combo.addItems([
+            'viridis', 'plasma', 'inferno', 'magma', 'cividis',
+            'jet', 'hot', 'coolwarm', 'RdYlBu', 'Spectral', 'turbo'
+        ])
+        spectrum_layout.addRow("Colormap:", self.spectrum_colormap_combo)
+
+        self.spectrum_render_mode_combo = QtWidgets.QComboBox()
+        self.spectrum_render_mode_combo.addItems(['imshow (fast)', 'contour (smooth)'])
+        spectrum_layout.addRow("Render mode:", self.spectrum_render_mode_combo)
+
+        self.spectrum_alpha_spin = QtWidgets.QDoubleSpinBox()
+        self.spectrum_alpha_spin.setRange(0.0, 1.0)
+        self.spectrum_alpha_spin.setValue(0.8)
+        self.spectrum_alpha_spin.setSingleStep(0.1)
+        spectrum_layout.addRow("Transparency:", self.spectrum_alpha_spin)
+
+        self.spectrum_levels_spin = QtWidgets.QSpinBox()
+        self.spectrum_levels_spin.setRange(10, 100)
+        self.spectrum_levels_spin.setValue(30)
+        spectrum_layout.addRow("Contour levels:", self.spectrum_levels_spin)
+
+        spectrum_note = QtWidgets.QLabel("Used for offset analysis with spectrum background")
+        spectrum_note.setStyleSheet("color: gray; font-style: italic;")
+        spectrum_layout.addRow("", spectrum_note)
+
+        scroll_layout.addWidget(spectrum_group)
+
+        # Peak Overlay Options (for spectrum plots)
+        peak_group = QtWidgets.QGroupBox("Peak/Curve Overlay")
+        peak_layout = QtWidgets.QFormLayout(peak_group)
+
+        self.peak_color_combo = QtWidgets.QComboBox()
+        self.peak_color_combo.addItems(['white', 'black', 'yellow', 'cyan', 'magenta', 'lime', 'red'])
+        peak_layout.addRow("Curve color:", self.peak_color_combo)
+
+        self.peak_outline_check = QtWidgets.QCheckBox("Show contrast outline")
+        self.peak_outline_check.setChecked(True)
+        peak_layout.addRow("", self.peak_outline_check)
+
+        self.peak_line_width_spin = QtWidgets.QDoubleSpinBox()
+        self.peak_line_width_spin.setRange(1.0, 6.0)
+        self.peak_line_width_spin.setValue(2.5)
+        self.peak_line_width_spin.setSingleStep(0.5)
+        peak_layout.addRow("Line width:", self.peak_line_width_spin)
+
+        peak_note = QtWidgets.QLabel("Styling for curves overlaid on spectrum background")
+        peak_note.setStyleSheet("color: gray; font-style: italic;")
+        peak_layout.addRow("", peak_note)
+
+        scroll_layout.addWidget(peak_group)
 
         scroll_layout.addStretch()
         scroll.setWidget(scroll_content)
@@ -951,6 +1263,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         self.format_png = QtWidgets.QRadioButton("PNG (raster)")
         self.format_svg = QtWidgets.QRadioButton("SVG (vector)")
         self.format_eps = QtWidgets.QRadioButton("EPS (vector)")
+        self.format_pptx = QtWidgets.QRadioButton("PPTX (PowerPoint)")
 
         self.format_pdf.setChecked(True)
 
@@ -958,6 +1271,26 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         format_layout.addWidget(self.format_png)
         format_layout.addWidget(self.format_svg)
         format_layout.addWidget(self.format_eps)
+        format_layout.addWidget(self.format_pptx)
+        
+        # PPTX-specific options (only visible when PPTX selected)
+        self.pptx_options_widget = QtWidgets.QWidget()
+        pptx_options_layout = QtWidgets.QVBoxLayout(self.pptx_options_widget)
+        pptx_options_layout.setContentsMargins(20, 0, 0, 0)  # Indent
+        
+        self.pptx_combine_check = QtWidgets.QCheckBox("Combine all figures into one PPTX file")
+        self.pptx_combine_check.setChecked(True)
+        pptx_options_layout.addWidget(self.pptx_combine_check)
+        
+        self.pptx_grid_slides_check = QtWidgets.QCheckBox("For grids: create individual slides + combined slide")
+        self.pptx_grid_slides_check.setChecked(True)
+        pptx_options_layout.addWidget(self.pptx_grid_slides_check)
+        
+        self.pptx_options_widget.setVisible(False)
+        format_layout.addWidget(self.pptx_options_widget)
+        
+        # Connect format radio buttons to show/hide PPTX options
+        self.format_pptx.toggled.connect(self.pptx_options_widget.setVisible)
 
         layout.addWidget(format_group)
 
@@ -1027,6 +1360,8 @@ class PublicationFigureDialog(QtWidgets.QDialog):
             output_format = 'png'
         elif self.format_svg.isChecked():
             output_format = 'svg'
+        elif self.format_pptx.isChecked():
+            output_format = 'pptx'
         else:
             output_format = 'eps'
 
@@ -1124,8 +1459,15 @@ class PublicationFigureDialog(QtWidgets.QDialog):
             extension = ".png"
         elif self.format_svg.isChecked():
             extension = ".svg"
+        elif self.format_pptx.isChecked():
+            extension = ".pptx"
         else:
             extension = ".eps"
+
+        # Check if PPTX is selected
+        is_pptx = self.format_pptx.isChecked()
+        pptx_combine = is_pptx and self.pptx_combine_check.isChecked()
+        pptx_grid_slides = is_pptx and self.pptx_grid_slides_check.isChecked()
 
         # Remove extension from filename if user added one
         filename_base = Path(filename).stem
@@ -1156,36 +1498,63 @@ class PublicationFigureDialog(QtWidgets.QDialog):
             )
             return
 
-        # Build file list
+        # Build file list - now handles (plot_type, suffix, offset_info) tuples
         files_to_create = []
-        for plot_type, suffix in selected_types:
+        for plot_type, suffix, offset_info in selected_types:
             # If only one type selected, don't add suffix
             if len(selected_types) == 1:
                 output_path = str(dir_path / f"{filename_base}{extension}")
             else:
                 output_path = str(dir_path / f"{filename_base}_{suffix}{extension}")
-            files_to_create.append((plot_type, output_path))
+            files_to_create.append((plot_type, output_path, offset_info))
 
         # Check for existing files
-        existing_files = [p for _, p in files_to_create if Path(p).exists()]
-        if existing_files:
-            file_list = '\n'.join(existing_files)
-            reply = QtWidgets.QMessageBox.question(
-                self,
-                "Files Exist",
-                f"The following files already exist:\n{file_list}\n\nOverwrite?",
-                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                QtWidgets.QMessageBox.No
-            )
-            if reply == QtWidgets.QMessageBox.No:
-                return
+        if pptx_combine:
+            # For combined PPTX, only one output file
+            combined_pptx_path = str(dir_path / f"{filename_base}{extension}")
+            if Path(combined_pptx_path).exists():
+                reply = QtWidgets.QMessageBox.question(
+                    self,
+                    "File Exists",
+                    f"The file already exists:\n{combined_pptx_path}\n\nOverwrite?",
+                    _get_qt_msgbox_yes() | _get_qt_msgbox_no(),
+                    _get_qt_msgbox_no()
+                )
+                if reply == _get_qt_msgbox_no():
+                    return
+        else:
+            existing_files = [p for _, p, _ in files_to_create if Path(p).exists()]
+            if existing_files:
+                file_list = '\n'.join(existing_files)
+                reply = QtWidgets.QMessageBox.question(
+                    self,
+                    "Files Exist",
+                    f"The following files already exist:\n{file_list}\n\nOverwrite?",
+                    _get_qt_msgbox_yes() | _get_qt_msgbox_no(),
+                    _get_qt_msgbox_no()
+                )
+                if reply == _get_qt_msgbox_no():
+                    return
 
         # Generate all selected plots
         try:
-            generated_files = []
-            for plot_type, output_path in files_to_create:
-                self._generate_single_plot(generator, plot_type, output_path, config)
-                generated_files.append(output_path)
+            if is_pptx and pptx_combine:
+                # Generate all figures to a single PPTX
+                generated_files = self._generate_combined_pptx(
+                    generator, files_to_create, combined_pptx_path, config
+                )
+            elif is_pptx:
+                # Generate separate PPTX files for each figure
+                generated_files = []
+                for plot_type, output_path, offset_info in files_to_create:
+                    self._generate_single_pptx(generator, plot_type, output_path, config, offset_info)
+                    generated_files.append(output_path)
+            else:
+                # Regular image format export
+                generated_files = []
+                for plot_type, output_path, offset_info in files_to_create:
+                    self._generate_single_plot(generator, plot_type, output_path, config, offset_info)
+                    generated_files.append(output_path)
 
             # Success message
             file_list = '\n'.join(generated_files)
@@ -1208,8 +1577,164 @@ class PublicationFigureDialog(QtWidgets.QDialog):
                 "Error",
                 f"Failed to generate figure:\n{str(e)}"
             )
+    
+    def _generate_combined_pptx(self, generator, files_to_create, output_path: str, config: PlotConfig) -> List[str]:
+        """Generate all figures into a single PowerPoint file.
+        
+        Args:
+            generator: PublicationFigureGenerator instance
+            files_to_create: List of (plot_type, _, offset_info) tuples
+            output_path: Path to save the combined PPTX
+            config: PlotConfig instance
+            
+        Returns:
+            List containing the output path
+        """
+        import tempfile
+        try:
+            from pptx import Presentation
+            from pptx.util import Inches, Pt
+            from pptx.dml.color import RgbColor
+            from pptx.enum.text import PP_ALIGN
+        except ImportError:
+            raise ImportError(
+                "python-pptx is required for PowerPoint export.\n"
+                "Install it with: pip install python-pptx"
+            )
+        
+        # Create presentation
+        prs = Presentation()
+        prs.slide_width = Inches(13.333)  # 16:9 aspect ratio (standard widescreen)
+        prs.slide_height = Inches(7.5)
+        
+        blank_slide_layout = prs.slide_layouts[6]  # Blank layout
+        
+        # Build a lookup for display names from FIGURE_TYPES
+        display_names = {}
+        for category_types in FIGURE_TYPES.values():
+            for display_name, internal_key, _, _ in category_types:
+                display_names[internal_key] = display_name
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            slide_count = 0
+            for plot_type, _, offset_info in files_to_create:
+                # Generate figure to temp PNG
+                temp_png = Path(temp_dir) / f"{plot_type}_{slide_count}.png"
+                
+                # Temporarily override format to PNG
+                original_format = config.output_format
+                temp_config = PlotConfig(**{**config.__dict__, 'output_format': 'png'})
+                
+                self._generate_single_plot(generator, plot_type, str(temp_png), temp_config, offset_info)
+                
+                # Add slide with image and title
+                slide = prs.slides.add_slide(blank_slide_layout)
+                
+                # Create title text
+                base_name = display_names.get(plot_type, plot_type.replace('_', ' ').title())
+                if offset_info and offset_info.get('offset_name'):
+                    slide_title = f"{base_name}: {offset_info['offset_name']}"
+                else:
+                    slide_title = base_name
+                
+                # Add title text box
+                title_box = slide.shapes.add_textbox(
+                    Inches(0.5), Inches(0.2), Inches(12.333), Inches(0.5)
+                )
+                title_frame = title_box.text_frame
+                title_para = title_frame.paragraphs[0]
+                title_para.text = slide_title
+                title_para.font.name = "Times New Roman"
+                title_para.font.size = Pt(24)
+                title_para.font.bold = True
+                title_para.alignment = PP_ALIGN.CENTER
+                
+                # Add image below title
+                left = Inches(0.5)
+                top = Inches(0.8)
+                width = Inches(12.333)
+                
+                slide.shapes.add_picture(str(temp_png), left, top, width=width)
+                slide_count += 1
+        
+        prs.save(output_path)
+        return [output_path]
+    
+    def _generate_single_pptx(self, generator, plot_type: str, output_path: str, config: PlotConfig,
+                              offset_info: Optional[Dict] = None):
+        """Generate a single figure as a PowerPoint file with one slide.
+        
+        Args:
+            generator: PublicationFigureGenerator instance
+            plot_type: Internal key of the plot type
+            output_path: Path to save the PPTX
+            config: PlotConfig instance
+            offset_info: Optional dict with offset details
+        """
+        import tempfile
+        try:
+            from pptx import Presentation
+            from pptx.util import Inches, Pt
+            from pptx.enum.text import PP_ALIGN
+        except ImportError:
+            raise ImportError(
+                "python-pptx is required for PowerPoint export.\n"
+                "Install it with: pip install python-pptx"
+            )
+        
+        # Build a lookup for display names from FIGURE_TYPES
+        display_names = {}
+        for category_types in FIGURE_TYPES.values():
+            for display_name, internal_key, _, _ in category_types:
+                display_names[internal_key] = display_name
+        
+        # Create presentation with single slide
+        prs = Presentation()
+        prs.slide_width = Inches(13.333)
+        prs.slide_height = Inches(7.5)
+        
+        blank_slide_layout = prs.slide_layouts[6]
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_png = Path(temp_dir) / "figure.png"
+            
+            # Generate figure to temp PNG
+            temp_config = PlotConfig(**{**config.__dict__, 'output_format': 'png'})
+            self._generate_single_plot(generator, plot_type, str(temp_png), temp_config, offset_info)
+            
+            # Add slide with image and title
+            slide = prs.slides.add_slide(blank_slide_layout)
+            
+            # Create title text
+            base_name = display_names.get(plot_type, plot_type.replace('_', ' ').title())
+            if offset_info and offset_info.get('offset_name'):
+                slide_title = f"{base_name}: {offset_info['offset_name']}"
+            else:
+                slide_title = base_name
+            
+            # Add title text box
+            title_box = slide.shapes.add_textbox(
+                Inches(0.5), Inches(0.2), Inches(12.333), Inches(0.5)
+            )
+            title_frame = title_box.text_frame
+            title_para = title_frame.paragraphs[0]
+            title_para.text = slide_title
+            title_para.font.name = "Times New Roman"
+            title_para.font.size = Pt(24)
+            title_para.font.bold = True
+            title_para.alignment = PP_ALIGN.CENTER
+            
+            # Add image below title
+            left = Inches(0.5)
+            top = Inches(0.8)
+            width = Inches(12.333)
+            
+            slide.shapes.add_picture(str(temp_png), left, top, width=width)
+        
+        prs.save(output_path)
 
-    def _generate_single_plot(self, generator, plot_type: str, output_path: str, config: PlotConfig):
+    def _generate_single_plot(self, generator, plot_type: str, output_path: str, config: PlotConfig, 
+                              offset_info: Optional[Dict] = None):
         """Generate a single plot type.
         
         Args:
@@ -1217,6 +1742,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
             plot_type: Internal key of the plot type
             output_path: Path to save the figure
             config: PlotConfig instance
+            offset_info: Optional dict with offset details (for individual offset plots)
         """
         if plot_type == 'aggregated':
             generator.generate_aggregated_plot(output_path=output_path, config=config)
@@ -1240,5 +1766,69 @@ class PublicationFigureDialog(QtWidgets.QDialog):
             )
         elif plot_type == 'dual_domain':
             generator.generate_dual_domain_plot(output_path=output_path, config=config)
+        # Canvas Export types
+        elif plot_type == 'canvas_frequency':
+            generator.generate_canvas_frequency(output_path=output_path, config=config)
+        elif plot_type == 'canvas_wavelength':
+            generator.generate_canvas_wavelength(output_path=output_path, config=config)
+        elif plot_type == 'canvas_dual':
+            generator.generate_canvas_dual(output_path=output_path, config=config)
+        # Source Offset Analysis types (individual offsets)
+        elif plot_type == 'offset_curve_only':
+            if offset_info and offset_info.get('offset_index') is not None:
+                generator.generate_offset_curve_only(
+                    output_path=output_path, 
+                    config=config,
+                    offset_index=offset_info['offset_index']
+                )
+            else:
+                raise ValueError("offset_curve_only requires offset_info with offset_index")
+        elif plot_type == 'offset_with_spectrum':
+            if offset_info and offset_info.get('offset_index') is not None:
+                generator.generate_offset_with_spectrum(
+                    output_path=output_path, 
+                    config=config,
+                    offset_index=offset_info['offset_index']
+                )
+            else:
+                raise ValueError("offset_with_spectrum requires offset_info with offset_index")
+        elif plot_type == 'offset_spectrum_only':
+            if offset_info and offset_info.get('offset_index') is not None:
+                generator.generate_offset_spectrum_only(
+                    output_path=output_path, 
+                    config=config,
+                    offset_index=offset_info['offset_index']
+                )
+            else:
+                raise ValueError("offset_spectrum_only requires offset_info with offset_index")
+        elif plot_type == 'offset_grid':
+            # Grid uses grid layout and display mode from offset options
+            rows_widget = getattr(self, 'grid_rows_spin', None)
+            cols_widget = getattr(self, 'grid_cols_spin', None)
+            rows = rows_widget.value() if rows_widget else None
+            cols = cols_widget.value() if cols_widget else None
+            
+            # Determine display mode from radio buttons
+            include_spectrum = False
+            include_curves = True
+            if hasattr(self, 'grid_mode_spectrum') and self.grid_mode_spectrum.isChecked():
+                include_spectrum = True
+                include_curves = False
+            elif hasattr(self, 'grid_mode_both') and self.grid_mode_both.isChecked():
+                include_spectrum = True
+                include_curves = True
+            
+            # Pass spectrum data list for spectrum modes
+            spectrum_data_list = generator.spectrum_data_list if include_spectrum else None
+            
+            generator.generate_offset_grid(
+                output_path=output_path, 
+                config=config, 
+                rows=rows, 
+                cols=cols,
+                include_spectrum=include_spectrum,
+                spectrum_data_list=spectrum_data_list,
+                include_curves=include_curves
+            )
         else:
             raise NotImplementedError(f"Plot type '{plot_type}' is not yet implemented.")

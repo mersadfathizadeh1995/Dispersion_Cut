@@ -85,6 +85,18 @@ class PlotConfig:
     output_format: str = 'pdf'  # 'pdf', 'png', 'svg', 'eps'
     tight_layout: bool = True
 
+    # Spectrum options (for offset analysis with spectrum background)
+    spectrum_colormap: str = 'viridis'
+    spectrum_render_mode: str = 'imshow'  # 'imshow' or 'contour'
+    spectrum_alpha: float = 0.8
+    spectrum_levels: int = 30
+
+    # Peak/curve overlay options (for curves on spectrum background)
+    peak_color: str = '#FFFFFF'  # White default for visibility
+    peak_outline: bool = True
+    peak_outline_color: str = '#000000'
+    peak_line_width: float = 2.5
+
 
 class PublicationFigureGenerator:
     """Generate publication-quality dispersion curve figures."""
@@ -97,6 +109,7 @@ class PublicationFigureGenerator:
         layer_labels: List[str],
         active_flags: List[bool],
         array_positions: Optional[np.ndarray] = None,
+        spectrum_data_list: Optional[List[Optional[Dict[str, np.ndarray]]]] = None,
     ):
         """Initialize the figure generator.
 
@@ -107,6 +120,7 @@ class PublicationFigureGenerator:
             layer_labels: List of labels for each layer/offset
             active_flags: List of boolean flags indicating if layer is active
             array_positions: Receiver positions for NACD computation (optional)
+            spectrum_data_list: List of spectrum data dicts for each layer (optional)
         """
         self.velocity_arrays = velocity_arrays
         self.frequency_arrays = frequency_arrays
@@ -114,6 +128,7 @@ class PublicationFigureGenerator:
         self.layer_labels = layer_labels
         self.active_flags = active_flags
         self.array_positions = array_positions
+        self.spectrum_data_list = spectrum_data_list or [None] * len(velocity_arrays)
 
         # Precompute aggregated data
         self._binned_avg = None
@@ -153,14 +168,34 @@ class PublicationFigureGenerator:
             # No layers model, assume all visible
             active_flags = [True] * n
 
-        return cls(
+        # Extract spectrum data from layers if available
+        spectrum_data_list = []
+        if hasattr(controller, '_layers_model') and controller._layers_model is not None:
+            try:
+                for i in range(n):
+                    if i < len(controller._layers_model.layers):
+                        layer = controller._layers_model.layers[i]
+                        # Check for spectrum_data attribute
+                        spec_data = getattr(layer, 'spectrum_data', None)
+                        spectrum_data_list.append(spec_data)
+                    else:
+                        spectrum_data_list.append(None)
+            except Exception:
+                spectrum_data_list = [None] * n
+        else:
+            spectrum_data_list = [None] * n
+
+        generator = cls(
             velocity_arrays=controller.velocity_arrays,
             frequency_arrays=controller.frequency_arrays,
             wavelength_arrays=controller.wavelength_arrays,
             layer_labels=layer_labels,
             active_flags=active_flags,
             array_positions=getattr(controller, 'array_positions', None),
+            spectrum_data_list=spectrum_data_list,
         )
+        
+        return generator
 
     @classmethod
     def from_arrays(
@@ -195,6 +230,7 @@ class PublicationFigureGenerator:
             layer_labels=layer_labels,
             active_flags=active_flags,
             array_positions=array_positions,
+            spectrum_data_list=None,  # No spectrum data for raw arrays
         )
 
     def _compute_binned_aggregates(self, config: PlotConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -1034,3 +1070,695 @@ class PublicationFigureGenerator:
             )
 
         return fig
+
+    # =========================================================================
+    # Canvas Export Methods (New)
+    # =========================================================================
+
+    def generate_canvas_frequency(
+        self,
+        output_path: Optional[str] = None,
+        config: Optional[PlotConfig] = None,
+        xlim: Optional[Tuple[float, float]] = None,
+        ylim: Optional[Tuple[float, float]] = None,
+    ) -> Figure:
+        """Generate figure of current canvas view in frequency domain.
+
+        Args:
+            output_path: Optional path to save figure
+            config: PlotConfig instance (uses defaults if None)
+            xlim: Optional x-axis limits (uses current canvas limits if None)
+            ylim: Optional y-axis limits (uses current canvas limits if None)
+
+        Returns:
+            matplotlib Figure object
+        """
+        if config is None:
+            config = PlotConfig()
+
+        self._apply_style(config)
+        fig, ax = plt.subplots(figsize=config.figsize, dpi=config.dpi)
+
+        colors = self._get_colors(config, len(self.velocity_arrays))
+
+        # Plot each active layer
+        for i, (freq, vel, label, active) in enumerate(zip(
+            self.frequency_arrays, self.velocity_arrays,
+            self.layer_labels, self.active_flags
+        )):
+            if active and len(freq) > 0:
+                color = colors[i % len(colors)]
+                ax.semilogx(
+                    freq, vel,
+                    marker=config.marker_style,
+                    color=color,
+                    markersize=config.marker_size,
+                    linewidth=config.line_width,
+                    label=label,
+                )
+
+        # Grid
+        if config.show_grid:
+            ax.grid(True, alpha=config.grid_alpha, linestyle='--')
+
+        # Labels
+        ax.set_xlabel(config.xlabel)
+        ax.set_ylabel(config.ylabel)
+
+        # Title
+        if config.title:
+            ax.set_title(config.title, fontsize=config.title_fontsize or config.font_size + 2)
+
+        # Limits
+        if xlim:
+            ax.set_xlim(xlim)
+        elif config.xlim:
+            ax.set_xlim(config.xlim)
+        if ylim:
+            ax.set_ylim(ylim)
+        elif config.ylim:
+            ax.set_ylim(config.ylim)
+
+        # Legend
+        ax.legend(loc=config.legend_position, ncol=config.legend_columns,
+                  frameon=config.legend_frameon)
+
+        # Layout
+        if config.tight_layout:
+            fig.tight_layout()
+
+        # Save if path provided
+        if output_path:
+            self._save_figure(fig, output_path, config)
+
+        return fig
+
+    def generate_canvas_wavelength(
+        self,
+        output_path: Optional[str] = None,
+        config: Optional[PlotConfig] = None,
+        xlim: Optional[Tuple[float, float]] = None,
+        ylim: Optional[Tuple[float, float]] = None,
+    ) -> Figure:
+        """Generate figure of current canvas converted to wavelength domain.
+
+        Args:
+            output_path: Optional path to save figure
+            config: PlotConfig instance (uses defaults if None)
+            xlim: Optional x-axis limits (wavelength)
+            ylim: Optional y-axis limits (velocity)
+
+        Returns:
+            matplotlib Figure object
+        """
+        if config is None:
+            config = PlotConfig()
+
+        self._apply_style(config)
+        fig, ax = plt.subplots(figsize=config.figsize, dpi=config.dpi)
+
+        colors = self._get_colors(config, len(self.velocity_arrays))
+
+        # Plot each active layer in wavelength domain
+        for i, (wl, vel, label, active) in enumerate(zip(
+            self.wavelength_arrays, self.velocity_arrays,
+            self.layer_labels, self.active_flags
+        )):
+            if active and len(wl) > 0:
+                color = colors[i % len(colors)]
+                ax.semilogx(
+                    wl, vel,
+                    marker=config.marker_style,
+                    color=color,
+                    markersize=config.marker_size,
+                    linewidth=config.line_width,
+                    label=label,
+                )
+
+        # Grid
+        if config.show_grid:
+            ax.grid(True, alpha=config.grid_alpha, linestyle='--')
+
+        # Labels - override for wavelength domain
+        ax.set_xlabel('Wavelength (m)')
+        ax.set_ylabel(config.ylabel)
+
+        # Title
+        if config.title:
+            ax.set_title(config.title, fontsize=config.title_fontsize or config.font_size + 2)
+
+        # Limits
+        if xlim:
+            ax.set_xlim(xlim)
+        if ylim:
+            ax.set_ylim(ylim)
+        elif config.ylim:
+            ax.set_ylim(config.ylim)
+
+        # Legend
+        ax.legend(loc=config.legend_position, ncol=config.legend_columns,
+                  frameon=config.legend_frameon)
+
+        # Layout
+        if config.tight_layout:
+            fig.tight_layout()
+
+        # Save if path provided
+        if output_path:
+            self._save_figure(fig, output_path, config)
+
+        return fig
+
+    def generate_canvas_dual(
+        self,
+        output_path: Optional[str] = None,
+        config: Optional[PlotConfig] = None,
+    ) -> Figure:
+        """Generate side-by-side frequency and wavelength views.
+
+        Args:
+            output_path: Optional path to save figure
+            config: PlotConfig instance (uses defaults if None)
+
+        Returns:
+            matplotlib Figure object
+        """
+        if config is None:
+            config = PlotConfig()
+
+        self._apply_style(config)
+
+        # Create figure with two subplots
+        fig, (ax1, ax2) = plt.subplots(
+            1, 2,
+            figsize=(config.figsize[0] * 2, config.figsize[1]),
+            dpi=config.dpi
+        )
+
+        colors = self._get_colors(config, len(self.velocity_arrays))
+
+        # Plot each active layer in both domains
+        for i, (freq, wl, vel, label, active) in enumerate(zip(
+            self.frequency_arrays, self.wavelength_arrays,
+            self.velocity_arrays, self.layer_labels, self.active_flags
+        )):
+            if active and len(freq) > 0:
+                color = colors[i % len(colors)]
+
+                # Frequency domain (left)
+                ax1.semilogx(
+                    freq, vel,
+                    marker=config.marker_style,
+                    color=color,
+                    markersize=config.marker_size,
+                    linewidth=config.line_width,
+                    label=label,
+                )
+
+                # Wavelength domain (right)
+                ax2.semilogx(
+                    wl, vel,
+                    marker=config.marker_style,
+                    color=color,
+                    markersize=config.marker_size,
+                    linewidth=config.line_width,
+                    label=label,
+                )
+
+        # Configure axes
+        for ax, xlabel in [(ax1, config.xlabel), (ax2, 'Wavelength (m)')]:
+            if config.show_grid:
+                ax.grid(True, alpha=config.grid_alpha, linestyle='--')
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(config.ylabel)
+            if config.ylim:
+                ax.set_ylim(config.ylim)
+
+        # Add subplot titles
+        ax1.set_title('Frequency Domain')
+        ax2.set_title('Wavelength Domain')
+
+        # Shared legend at bottom
+        handles, labels = ax1.get_legend_handles_labels()
+        fig.legend(handles, labels, loc='lower center',
+                   ncol=min(len(labels), 4), frameon=config.legend_frameon,
+                   bbox_to_anchor=(0.5, -0.02))
+
+        # Main title
+        if config.title:
+            fig.suptitle(config.title, fontsize=config.title_fontsize or config.font_size + 2)
+
+        # Layout
+        if config.tight_layout:
+            fig.tight_layout()
+            fig.subplots_adjust(bottom=0.15)  # Make room for legend
+
+        # Save if path provided
+        if output_path:
+            self._save_figure(fig, output_path, config)
+
+        return fig
+
+    # =========================================================================
+    # Source Offset Analysis Methods (New)
+    # =========================================================================
+
+    def generate_offset_curve_only(
+        self,
+        offset_index: int,
+        output_path: Optional[str] = None,
+        config: Optional[PlotConfig] = None,
+    ) -> Figure:
+        """Generate dispersion curve for a single offset without spectrum.
+
+        Args:
+            offset_index: Index of the offset to plot
+            output_path: Optional path to save figure
+            config: PlotConfig instance (uses defaults if None)
+
+        Returns:
+            matplotlib Figure object
+        """
+        if config is None:
+            config = PlotConfig()
+
+        if offset_index < 0 or offset_index >= len(self.velocity_arrays):
+            raise ValueError(f"Invalid offset_index {offset_index}. "
+                           f"Must be 0-{len(self.velocity_arrays)-1}")
+
+        self._apply_style(config)
+        fig, ax = plt.subplots(figsize=config.figsize, dpi=config.dpi)
+
+        freq = self.frequency_arrays[offset_index]
+        vel = self.velocity_arrays[offset_index]
+        label = self.layer_labels[offset_index]
+
+        colors = self._get_colors(config, 1)
+
+        ax.semilogx(
+            freq, vel,
+            marker=config.marker_style,
+            color=colors[0],
+            markersize=config.marker_size,
+            linewidth=config.line_width,
+            label=label,
+        )
+
+        # Grid
+        if config.show_grid:
+            ax.grid(True, alpha=config.grid_alpha, linestyle='--')
+
+        # Labels
+        ax.set_xlabel(config.xlabel)
+        ax.set_ylabel(config.ylabel)
+
+        # Title
+        if config.title:
+            ax.set_title(config.title, fontsize=config.title_fontsize or config.font_size + 2)
+        else:
+            ax.set_title(f'Dispersion Curve: {label}')
+
+        # Limits
+        if config.xlim:
+            ax.set_xlim(config.xlim)
+        if config.ylim:
+            ax.set_ylim(config.ylim)
+
+        # Legend
+        ax.legend(loc=config.legend_position, frameon=config.legend_frameon)
+
+        # Layout
+        if config.tight_layout:
+            fig.tight_layout()
+
+        # Save if path provided
+        if output_path:
+            self._save_figure(fig, output_path, config)
+
+        return fig
+
+    def generate_offset_with_spectrum(
+        self,
+        offset_index: int,
+        spectrum_data: Optional[Dict[str, np.ndarray]] = None,
+        output_path: Optional[str] = None,
+        config: Optional[PlotConfig] = None,
+    ) -> Figure:
+        """Generate dispersion curve overlaid on spectrum background.
+
+        Args:
+            offset_index: Index of the offset to plot
+            spectrum_data: Dictionary with 'frequencies', 'velocities', 'power' arrays
+                          If None, will attempt to get from internal spectrum_data_list
+            output_path: Optional path to save figure
+            config: PlotConfig instance (uses defaults if None)
+
+        Returns:
+            matplotlib Figure object
+        """
+        if config is None:
+            config = PlotConfig()
+
+        if offset_index < 0 or offset_index >= len(self.velocity_arrays):
+            raise ValueError(f"Invalid offset_index {offset_index}. "
+                           f"Must be 0-{len(self.velocity_arrays)-1}")
+
+        # Get spectrum data from internal list if not provided
+        if spectrum_data is None:
+            if self.spectrum_data_list and offset_index < len(self.spectrum_data_list):
+                spectrum_data = self.spectrum_data_list[offset_index]
+            if spectrum_data is None:
+                raise ValueError("No spectrum data provided. Load spectrum .npz file first.")
+
+        self._apply_style(config)
+        fig, ax = plt.subplots(figsize=config.figsize, dpi=config.dpi)
+
+        # Extract spectrum data
+        spec_freqs = spectrum_data.get('frequencies')
+        spec_vels = spectrum_data.get('velocities')
+        spec_power = spectrum_data.get('power')
+
+        if spec_freqs is None or spec_vels is None or spec_power is None:
+            raise ValueError("Spectrum data must contain 'frequencies', 'velocities', and 'power'")
+
+        # Plot spectrum background
+        if config.spectrum_render_mode == 'contour':
+            cf = ax.contourf(
+                spec_freqs, spec_vels, spec_power,
+                levels=config.spectrum_levels,
+                cmap=config.spectrum_colormap,
+                alpha=config.spectrum_alpha
+            )
+            plt.colorbar(cf, ax=ax, label='Normalized Power')
+        else:
+            # imshow mode
+            extent = [spec_freqs.min(), spec_freqs.max(),
+                     spec_vels.min(), spec_vels.max()]
+            im = ax.imshow(
+                spec_power, aspect='auto', origin='lower',
+                extent=extent,
+                cmap=config.spectrum_colormap,
+                alpha=config.spectrum_alpha
+            )
+            plt.colorbar(im, ax=ax, label='Normalized Power')
+
+        # Overlay dispersion curve
+        freq = self.frequency_arrays[offset_index]
+        vel = self.velocity_arrays[offset_index]
+        label = self.layer_labels[offset_index]
+
+        # Plot with outline for visibility
+        if config.peak_outline:
+            ax.plot(
+                freq, vel,
+                color=config.peak_outline_color,
+                linewidth=config.peak_line_width + 1,
+                zorder=10,
+            )
+
+        ax.plot(
+            freq, vel,
+            color=config.peak_color,
+            linewidth=config.peak_line_width,
+            label=label,
+            zorder=11,
+        )
+
+        # Grid
+        if config.show_grid:
+            ax.grid(True, alpha=config.grid_alpha, linestyle='--', color='white')
+
+        # Labels
+        ax.set_xlabel(config.xlabel)
+        ax.set_ylabel(config.ylabel)
+
+        # Title
+        if config.title:
+            ax.set_title(config.title, fontsize=config.title_fontsize or config.font_size + 2)
+        else:
+            ax.set_title(f'Dispersion with Spectrum: {label}')
+
+        # Limits
+        if config.xlim:
+            ax.set_xlim(config.xlim)
+        if config.ylim:
+            ax.set_ylim(config.ylim)
+
+        # Legend
+        ax.legend(loc=config.legend_position, frameon=config.legend_frameon)
+
+        # Layout
+        if config.tight_layout:
+            fig.tight_layout()
+
+        # Save if path provided
+        if output_path:
+            self._save_figure(fig, output_path, config)
+
+        return fig
+
+    def generate_offset_spectrum_only(
+        self,
+        offset_index: Optional[int] = None,
+        spectrum_data: Optional[Dict[str, np.ndarray]] = None,
+        output_path: Optional[str] = None,
+        config: Optional[PlotConfig] = None,
+        title: Optional[str] = None,
+    ) -> Figure:
+        """Generate spectrum visualization without dispersion curve.
+
+        Args:
+            offset_index: Index of the offset to get spectrum for (uses internal spectrum_data_list)
+            spectrum_data: Dictionary with 'frequencies', 'velocities', 'power' arrays (overrides offset_index)
+            output_path: Optional path to save figure
+            config: PlotConfig instance (uses defaults if None)
+            title: Optional title for the plot
+
+        Returns:
+            matplotlib Figure object
+        """
+        if config is None:
+            config = PlotConfig()
+
+        # Get spectrum data from offset_index if not directly provided
+        if spectrum_data is None:
+            if offset_index is None:
+                raise ValueError("Either offset_index or spectrum_data must be provided")
+            if offset_index < 0 or offset_index >= len(self.spectrum_data_list):
+                raise ValueError(f"Invalid offset_index {offset_index}")
+            spectrum_data = self.spectrum_data_list[offset_index]
+            if spectrum_data is None:
+                raise ValueError(f"No spectrum data provided. Load spectrum .npz file first.")
+            # Auto-generate title from layer label if not provided
+            if title is None:
+                title = f"Spectrum: {self.layer_labels[offset_index]}"
+
+        self._apply_style(config)
+        fig, ax = plt.subplots(figsize=config.figsize, dpi=config.dpi)
+
+        # Extract spectrum data
+        spec_freqs = spectrum_data.get('frequencies')
+        spec_vels = spectrum_data.get('velocities')
+        spec_power = spectrum_data.get('power')
+
+        if spec_freqs is None or spec_vels is None or spec_power is None:
+            raise ValueError("Spectrum data must contain 'frequencies', 'velocities', and 'power'")
+
+        # Plot spectrum
+        if config.spectrum_render_mode == 'contour':
+            cf = ax.contourf(
+                spec_freqs, spec_vels, spec_power,
+                levels=config.spectrum_levels,
+                cmap=config.spectrum_colormap,
+            )
+            plt.colorbar(cf, ax=ax, label='Normalized Power')
+        else:
+            # imshow mode
+            extent = [spec_freqs.min(), spec_freqs.max(),
+                     spec_vels.min(), spec_vels.max()]
+            im = ax.imshow(
+                spec_power, aspect='auto', origin='lower',
+                extent=extent,
+                cmap=config.spectrum_colormap,
+            )
+            plt.colorbar(im, ax=ax, label='Normalized Power')
+
+        # Grid
+        if config.show_grid:
+            ax.grid(True, alpha=config.grid_alpha, linestyle='--', color='white')
+
+        # Labels
+        ax.set_xlabel(config.xlabel)
+        ax.set_ylabel(config.ylabel)
+
+        # Title
+        if title:
+            ax.set_title(title, fontsize=config.title_fontsize or config.font_size + 2)
+        elif config.title:
+            ax.set_title(config.title, fontsize=config.title_fontsize or config.font_size + 2)
+        else:
+            ax.set_title('Frequency-Velocity Spectrum')
+
+        # Limits
+        if config.xlim:
+            ax.set_xlim(config.xlim)
+        if config.ylim:
+            ax.set_ylim(config.ylim)
+
+        # Layout
+        if config.tight_layout:
+            fig.tight_layout()
+
+        # Save if path provided
+        if output_path:
+            self._save_figure(fig, output_path, config)
+
+        return fig
+
+    def generate_offset_grid(
+        self,
+        output_path: Optional[str] = None,
+        config: Optional[PlotConfig] = None,
+        rows: Optional[int] = None,
+        cols: Optional[int] = None,
+        include_spectrum: bool = False,
+        spectrum_data_list: Optional[List[Dict[str, np.ndarray]]] = None,
+        include_curves: bool = True,
+    ) -> Figure:
+        """Generate comparison grid of all offsets.
+
+        Args:
+            output_path: Optional path to save figure
+            config: PlotConfig instance (uses defaults if None)
+            rows: Number of rows (auto if None)
+            cols: Number of columns (auto if None)
+            include_spectrum: Whether to include spectrum background
+            spectrum_data_list: List of spectrum data dicts for each offset
+            include_curves: Whether to include dispersion curves (default True)
+
+        Returns:
+            matplotlib Figure object
+        """
+        if config is None:
+            config = PlotConfig()
+        
+        # Use internal spectrum data if not provided
+        if include_spectrum and spectrum_data_list is None:
+            spectrum_data_list = self.spectrum_data_list
+
+        # Count active offsets
+        active_indices = [i for i, active in enumerate(self.active_flags) if active]
+        n_offsets = len(active_indices)
+
+        if n_offsets == 0:
+            # Create empty figure with message
+            fig, ax = plt.subplots(figsize=config.figsize, dpi=config.dpi)
+            ax.text(0.5, 0.5, 'No active offsets', ha='center', va='center',
+                   transform=ax.transAxes, fontsize=14)
+            ax.axis('off')
+            return fig
+
+        # Compute grid layout
+        if rows is None or cols is None or rows == 0 or cols == 0:
+            cols = int(np.ceil(np.sqrt(n_offsets)))
+            rows = int(np.ceil(n_offsets / cols))
+
+        self._apply_style(config)
+
+        # Create figure
+        fig, axes = plt.subplots(
+            rows, cols,
+            figsize=(config.figsize[0] * cols * 0.6, config.figsize[1] * rows * 0.6),
+            dpi=config.dpi,
+            squeeze=False
+        )
+
+        colors = self._get_colors(config, n_offsets)
+
+        # Track global axis limits for consistency
+        all_freqs = []
+        all_vels = []
+        for i in active_indices:
+            if len(self.frequency_arrays[i]) > 0:
+                all_freqs.extend(self.frequency_arrays[i])
+                all_vels.extend(self.velocity_arrays[i])
+
+        # Plot each offset
+        plot_idx = 0
+        for r in range(rows):
+            for c in range(cols):
+                ax = axes[r, c]
+
+                if plot_idx < n_offsets:
+                    offset_idx = active_indices[plot_idx]
+                    freq = self.frequency_arrays[offset_idx]
+                    vel = self.velocity_arrays[offset_idx]
+                    label = self.layer_labels[offset_idx]
+
+                    # Plot spectrum if requested
+                    if include_spectrum and spectrum_data_list and offset_idx < len(spectrum_data_list):
+                        spec_data = spectrum_data_list[offset_idx]
+                        if spec_data:
+                            spec_freqs = spec_data.get('frequencies')
+                            spec_vels = spec_data.get('velocities')
+                            spec_power = spec_data.get('power')
+
+                            if spec_freqs is not None and spec_vels is not None and spec_power is not None:
+                                ax.contourf(
+                                    spec_freqs, spec_vels, spec_power,
+                                    levels=config.spectrum_levels,
+                                    cmap=config.spectrum_colormap,
+                                    alpha=config.spectrum_alpha * 0.7
+                                )
+
+                    # Plot dispersion curve if requested
+                    if include_curves and len(freq) > 0:
+                        ax.semilogx(
+                            freq, vel,
+                            marker=config.marker_style,
+                            color=colors[plot_idx % len(colors)] if not include_spectrum else config.peak_color,
+                            markersize=max(2, config.marker_size * 0.7),
+                            linewidth=config.line_width * 0.8,
+                        )
+
+                    ax.set_title(label, fontsize=config.font_size - 1)
+
+                    if config.show_grid:
+                        ax.grid(True, alpha=config.grid_alpha * 0.5, linestyle='--')
+
+                    # Only show labels on edge plots
+                    if r == rows - 1:
+                        ax.set_xlabel('Freq (Hz)', fontsize=config.font_size - 2)
+                    if c == 0:
+                        ax.set_ylabel('V (m/s)', fontsize=config.font_size - 2)
+
+                    plot_idx += 1
+                else:
+                    # Hide unused subplots
+                    ax.axis('off')
+
+        # Main title
+        if config.title:
+            fig.suptitle(config.title, fontsize=config.title_fontsize or config.font_size + 2)
+
+        # Layout
+        if config.tight_layout:
+            fig.tight_layout()
+
+        # Save if path provided
+        if output_path:
+            self._save_figure(fig, output_path, config)
+
+        return fig
+
+    def _save_figure(self, fig: Figure, output_path: str, config: PlotConfig):
+        """Helper method to save figure with proper settings."""
+        is_raster = config.output_format.lower() in ['png', 'jpg', 'jpeg']
+        transparent = not is_raster
+        fig.savefig(
+            output_path,
+            dpi=config.dpi,
+            bbox_inches='tight',
+            facecolor='white' if is_raster else 'none',
+            transparent=transparent
+        )
