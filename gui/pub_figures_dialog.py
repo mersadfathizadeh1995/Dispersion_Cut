@@ -1056,6 +1056,11 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         self.peak_line_width_spin.setSingleStep(0.5)
         peak_layout.addRow("Line width:", self.peak_line_width_spin)
 
+        # Curve overlay style (line/markers/both)
+        self.curve_overlay_style_combo = QtWidgets.QComboBox()
+        self.curve_overlay_style_combo.addItems(['Line Only', 'Markers Only', 'Line + Markers'])
+        peak_layout.addRow("Overlay style:", self.curve_overlay_style_combo)
+
         peak_note = QtWidgets.QLabel("Styling for curves overlaid on spectrum background")
         peak_note.setStyleSheet("color: gray; font-style: italic;")
         peak_layout.addRow("", peak_note)
@@ -1408,9 +1413,30 @@ class PublicationFigureDialog(QtWidgets.QDialog):
             ylim=ylim,
             output_format=output_format,
             tight_layout=self.tight_layout_check.isChecked(),
+            # Spectrum options
+            spectrum_colormap=self.spectrum_colormap_combo.currentText(),
+            spectrum_render_mode='contour' if 'contour' in self.spectrum_render_mode_combo.currentText().lower() else 'imshow',
+            spectrum_alpha=self.spectrum_alpha_spin.value(),
+            spectrum_levels=self.spectrum_levels_spin.value(),
+            # Peak overlay options
+            peak_color=self.peak_color_combo.currentText(),
+            peak_outline=self.peak_outline_check.isChecked(),
+            peak_line_width=self.peak_line_width_spin.value(),
+            # Curve overlay style
+            curve_overlay_style=self._get_curve_overlay_style(),
         )
 
         return config
+
+    def _get_curve_overlay_style(self) -> str:
+        """Convert combo text to curve overlay style value."""
+        text = self.curve_overlay_style_combo.currentText()
+        if 'Markers Only' in text:
+            return 'markers'
+        elif 'Line + Markers' in text:
+            return 'line+markers'
+        else:
+            return 'line'
 
     def _on_generate(self):
         """Generate the publication figure(s)."""

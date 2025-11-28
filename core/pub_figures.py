@@ -96,6 +96,7 @@ class PlotConfig:
     peak_outline: bool = True
     peak_outline_color: str = '#000000'
     peak_line_width: float = 2.5
+    curve_overlay_style: str = 'line'  # 'line', 'markers', or 'line+markers'
 
 
 class PublicationFigureGenerator:
@@ -387,6 +388,99 @@ class PublicationFigureGenerator:
             while len(colors) < n:
                 colors.extend(default_colors)
             return colors[:n]
+
+    def _compute_smart_axis_limits(
+        self,
+        freq_data: np.ndarray,
+        vel_data: np.ndarray,
+        config: PlotConfig,
+        x_margin_left: float = 1.0,
+        x_margin_right: float = 5.0,
+        y_margin: float = 100.0,
+        y_floor: float = 0.0,
+    ) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
+        """Compute smart axis limits based on dispersion curve data.
+
+        Args:
+            freq_data: Frequency data array
+            vel_data: Velocity data array
+            config: PlotConfig with xlim/ylim overrides
+            x_margin_left: Left margin for frequency axis (Hz)
+            x_margin_right: Right margin for frequency axis (Hz)
+            y_margin: Margin for velocity axis (m/s)
+            y_floor: Minimum Y value (0 to hide negatives, or -50 for some margin)
+
+        Returns:
+            Tuple of (xlim, ylim) tuples or None if using config values
+        """
+        # Use explicit config limits if set
+        xlim = config.xlim
+        ylim = config.ylim
+
+        # Compute auto limits if not specified
+        if xlim is None and len(freq_data) > 0:
+            freq_min = float(np.nanmin(freq_data))
+            freq_max = float(np.nanmax(freq_data))
+            xlim = (max(0.0, freq_min - x_margin_left), freq_max + x_margin_right)
+
+        if ylim is None and len(vel_data) > 0:
+            vel_min = float(np.nanmin(vel_data))
+            vel_max = float(np.nanmax(vel_data))
+            # Apply floor (don't show negative values unless curve goes there)
+            ylim_low = max(y_floor, vel_min - y_margin)
+            ylim = (ylim_low, vel_max + y_margin)
+
+        return xlim, ylim
+
+    def _compute_grid_smart_limits(
+        self,
+        config: PlotConfig,
+        active_indices: List[int],
+        x_margin_left: float = 1.0,
+        x_margin_right: float = 5.0,
+        y_margin: float = 100.0,
+        y_floor: float = 0.0,
+    ) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
+        """Compute consistent axis limits across all active offsets.
+
+        Args:
+            config: PlotConfig with xlim/ylim overrides
+            active_indices: List of active offset indices
+            x_margin_left: Left margin for frequency axis (Hz)
+            x_margin_right: Right margin for frequency axis (Hz)
+            y_margin: Margin for velocity axis (m/s)
+            y_floor: Minimum Y value (0 to hide negatives)
+
+        Returns:
+            Tuple of (xlim, ylim) tuples for consistent grid axes
+        """
+        # Use explicit config limits if set
+        if config.xlim is not None and config.ylim is not None:
+            return config.xlim, config.ylim
+
+        # Gather all data from active offsets
+        all_freqs = []
+        all_vels = []
+        for i in active_indices:
+            if len(self.frequency_arrays[i]) > 0:
+                all_freqs.extend(self.frequency_arrays[i])
+                all_vels.extend(self.velocity_arrays[i])
+
+        xlim = config.xlim
+        ylim = config.ylim
+
+        if xlim is None and len(all_freqs) > 0:
+            freq_min = float(np.nanmin(all_freqs))
+            freq_max = float(np.nanmax(all_freqs))
+            xlim = (max(0.0, freq_min - x_margin_left), freq_max + x_margin_right)
+
+        if ylim is None and len(all_vels) > 0:
+            vel_min = float(np.nanmin(all_vels))
+            vel_max = float(np.nanmax(all_vels))
+            ylim_low = max(y_floor, vel_min - y_margin)
+            ylim = (ylim_low, vel_max + y_margin)
+
+        return xlim, ylim
 
     def generate_aggregated_plot(
         self,
@@ -1462,27 +1556,70 @@ class PublicationFigureGenerator:
             )
             plt.colorbar(im, ax=ax, label='Normalized Power')
 
-        # Overlay dispersion curve
+        # Overlay dispersion curve based on curve_overlay_style
         freq = self.frequency_arrays[offset_index]
         vel = self.velocity_arrays[offset_index]
         label = self.layer_labels[offset_index]
 
-        # Plot with outline for visibility
-        if config.peak_outline:
+        # Determine overlay style
+        overlay_style = config.curve_overlay_style
+
+        # Plot with outline for visibility (only for line or line+markers styles)
+        if config.peak_outline and overlay_style in ('line', 'line+markers'):
+            if overlay_style == 'line+markers':
+                ax.plot(
+                    freq, vel,
+                    color=config.peak_outline_color,
+                    linewidth=config.peak_line_width + 1,
+                    marker=config.marker_style,
+                    markersize=config.marker_size + 2,
+                    zorder=10,
+                )
+            else:
+                ax.plot(
+                    freq, vel,
+                    color=config.peak_outline_color,
+                    linewidth=config.peak_line_width + 1,
+                    zorder=10,
+                )
+
+        # Main curve/markers
+        if overlay_style == 'line':
             ax.plot(
                 freq, vel,
-                color=config.peak_outline_color,
-                linewidth=config.peak_line_width + 1,
-                zorder=10,
+                color=config.peak_color,
+                linewidth=config.peak_line_width,
+                label=label,
+                zorder=11,
             )
-
-        ax.plot(
-            freq, vel,
-            color=config.peak_color,
-            linewidth=config.peak_line_width,
-            label=label,
-            zorder=11,
-        )
+        elif overlay_style == 'markers':
+            # Outline for markers
+            if config.peak_outline:
+                ax.scatter(
+                    freq, vel,
+                    c=config.peak_outline_color,
+                    s=(config.marker_size + 2)**2,
+                    marker=config.marker_style,
+                    zorder=10,
+                )
+            ax.scatter(
+                freq, vel,
+                c=config.peak_color,
+                s=config.marker_size**2,
+                marker=config.marker_style,
+                label=label,
+                zorder=11,
+            )
+        else:  # line+markers
+            ax.plot(
+                freq, vel,
+                color=config.peak_color,
+                linewidth=config.peak_line_width,
+                marker=config.marker_style,
+                markersize=config.marker_size,
+                label=label,
+                zorder=11,
+            )
 
         # Grid
         if config.show_grid:
@@ -1498,11 +1635,12 @@ class PublicationFigureGenerator:
         else:
             ax.set_title(f'Dispersion with Spectrum: {label}')
 
-        # Limits
-        if config.xlim:
-            ax.set_xlim(config.xlim)
-        if config.ylim:
-            ax.set_ylim(config.ylim)
+        # Compute smart axis limits
+        xlim, ylim = self._compute_smart_axis_limits(freq, vel, config)
+        if xlim:
+            ax.set_xlim(xlim)
+        if ylim:
+            ax.set_ylim(ylim)
 
         # Legend
         ax.legend(loc=config.legend_position, frameon=config.legend_frameon)
@@ -1599,11 +1737,21 @@ class PublicationFigureGenerator:
         else:
             ax.set_title('Frequency-Velocity Spectrum')
 
-        # Limits
-        if config.xlim:
-            ax.set_xlim(config.xlim)
-        if config.ylim:
-            ax.set_ylim(config.ylim)
+        # Compute smart axis limits (use spectrum bounds if dispersion curve not available)
+        if offset_index is not None and len(self.frequency_arrays[offset_index]) > 0:
+            # Use dispersion curve data for limits
+            freq = self.frequency_arrays[offset_index]
+            vel = self.velocity_arrays[offset_index]
+            xlim, ylim = self._compute_smart_axis_limits(freq, vel, config)
+        else:
+            # Fallback to config limits or spectrum bounds
+            xlim = config.xlim
+            ylim = config.ylim
+
+        if xlim:
+            ax.set_xlim(xlim)
+        if ylim:
+            ax.set_ylim(ylim)
 
         # Layout
         if config.tight_layout:
@@ -1675,13 +1823,8 @@ class PublicationFigureGenerator:
 
         colors = self._get_colors(config, n_offsets)
 
-        # Track global axis limits for consistency
-        all_freqs = []
-        all_vels = []
-        for i in active_indices:
-            if len(self.frequency_arrays[i]) > 0:
-                all_freqs.extend(self.frequency_arrays[i])
-                all_vels.extend(self.velocity_arrays[i])
+        # Compute smart consistent axis limits for the grid
+        grid_xlim, grid_ylim = self._compute_grid_smart_limits(config, active_indices)
 
         # Plot each offset
         plot_idx = 0
@@ -1713,18 +1856,72 @@ class PublicationFigureGenerator:
 
                     # Plot dispersion curve if requested
                     if include_curves and len(freq) > 0:
-                        ax.semilogx(
-                            freq, vel,
-                            marker=config.marker_style,
-                            color=colors[plot_idx % len(colors)] if not include_spectrum else config.peak_color,
-                            markersize=max(2, config.marker_size * 0.7),
-                            linewidth=config.line_width * 0.8,
-                        )
+                        curve_color = config.peak_color if include_spectrum else colors[plot_idx % len(colors)]
+                        overlay_style = config.curve_overlay_style
+
+                        # Outline for visibility on spectrum
+                        if include_spectrum and config.peak_outline and overlay_style in ('line', 'line+markers'):
+                            if overlay_style == 'line+markers':
+                                ax.plot(
+                                    freq, vel,
+                                    color=config.peak_outline_color,
+                                    linewidth=config.peak_line_width * 0.8 + 1,
+                                    marker=config.marker_style,
+                                    markersize=max(2, config.marker_size * 0.7) + 1,
+                                    zorder=10,
+                                )
+                            else:
+                                ax.plot(
+                                    freq, vel,
+                                    color=config.peak_outline_color,
+                                    linewidth=config.peak_line_width * 0.8 + 1,
+                                    zorder=10,
+                                )
+
+                        # Main curve/markers based on overlay style
+                        if overlay_style == 'line':
+                            ax.plot(
+                                freq, vel,
+                                color=curve_color,
+                                linewidth=config.line_width * 0.8,
+                                zorder=11,
+                            )
+                        elif overlay_style == 'markers':
+                            if include_spectrum and config.peak_outline:
+                                ax.scatter(
+                                    freq, vel,
+                                    c=config.peak_outline_color,
+                                    s=(max(2, config.marker_size * 0.7) + 1)**2,
+                                    marker=config.marker_style,
+                                    zorder=10,
+                                )
+                            ax.scatter(
+                                freq, vel,
+                                c=curve_color,
+                                s=max(2, config.marker_size * 0.7)**2,
+                                marker=config.marker_style,
+                                zorder=11,
+                            )
+                        else:  # line+markers
+                            ax.plot(
+                                freq, vel,
+                                color=curve_color,
+                                marker=config.marker_style,
+                                markersize=max(2, config.marker_size * 0.7),
+                                linewidth=config.line_width * 0.8,
+                                zorder=11,
+                            )
 
                     ax.set_title(label, fontsize=config.font_size - 1)
 
                     if config.show_grid:
                         ax.grid(True, alpha=config.grid_alpha * 0.5, linestyle='--')
+
+                    # Apply consistent axis limits
+                    if grid_xlim:
+                        ax.set_xlim(grid_xlim)
+                    if grid_ylim:
+                        ax.set_ylim(grid_ylim)
 
                     # Only show labels on edge plots
                     if r == rows - 1:
