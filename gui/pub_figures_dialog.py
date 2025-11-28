@@ -922,7 +922,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         fig_layout.addRow("Height (inches):", self.figsize_height_spin)
 
         self.dpi_spin = QtWidgets.QSpinBox()
-        self.dpi_spin.setRange(72, 600)
+        self.dpi_spin.setRange(72, 2400)
         self.dpi_spin.setValue(300)
         self.dpi_spin.setSingleStep(50)
         fig_layout.addRow("DPI:", self.dpi_spin)
@@ -934,13 +934,17 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         font_layout = QtWidgets.QFormLayout(font_group)
 
         self.font_family_combo = QtWidgets.QComboBox()
-        self.font_family_combo.addItems(['serif', 'sans-serif', 'monospace'])
+        self.font_family_combo.addItems(['serif', 'sans-serif', 'monospace', 'Times New Roman', 'Arial', 'Helvetica'])
         font_layout.addRow("Font family:", self.font_family_combo)
 
         self.font_size_spin = QtWidgets.QSpinBox()
         self.font_size_spin.setRange(6, 24)
         self.font_size_spin.setValue(11)
         font_layout.addRow("Font size:", self.font_size_spin)
+
+        self.font_bold_check = QtWidgets.QCheckBox("Bold")
+        self.font_bold_check.setChecked(False)
+        font_layout.addRow("Font weight:", self.font_bold_check)
 
         scroll_layout.addWidget(font_group)
 
@@ -1391,6 +1395,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
             dpi=self.dpi_spin.value(),
             font_family=self.font_family_combo.currentText(),
             font_size=self.font_size_spin.value(),
+            font_weight='bold' if self.font_bold_check.isChecked() else 'normal',
             line_width=self.line_width_spin.value(),
             marker_size=self.marker_size_spin.value(),
             marker_style=marker_style,

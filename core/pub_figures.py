@@ -46,6 +46,7 @@ class PlotConfig:
     # Styling
     font_family: str = 'serif'
     font_size: int = 11
+    font_weight: str = 'normal'  # 'normal' or 'bold'
     line_width: float = 1.5
     marker_size: float = 4.0
     marker_style: str = 'o'  # 'o', 's', '^', 'D', 'x', '+', '.'
@@ -111,6 +112,7 @@ class PublicationFigureGenerator:
         active_flags: List[bool],
         array_positions: Optional[np.ndarray] = None,
         spectrum_data_list: Optional[List[Optional[Dict[str, np.ndarray]]]] = None,
+        spectrum_visible_flags: Optional[List[bool]] = None,
     ):
         """Initialize the figure generator.
 
@@ -122,6 +124,7 @@ class PublicationFigureGenerator:
             active_flags: List of boolean flags indicating if layer is active
             array_positions: Receiver positions for NACD computation (optional)
             spectrum_data_list: List of spectrum data dicts for each layer (optional)
+            spectrum_visible_flags: List of booleans indicating if spectrum is visible (optional)
         """
         self.velocity_arrays = velocity_arrays
         self.frequency_arrays = frequency_arrays
@@ -130,6 +133,7 @@ class PublicationFigureGenerator:
         self.active_flags = active_flags
         self.array_positions = array_positions
         self.spectrum_data_list = spectrum_data_list or [None] * len(velocity_arrays)
+        self.spectrum_visible_flags = spectrum_visible_flags or [False] * len(velocity_arrays)
 
         # Precompute aggregated data
         self._binned_avg = None
@@ -171,6 +175,7 @@ class PublicationFigureGenerator:
 
         # Extract spectrum data from layers if available
         spectrum_data_list = []
+        spectrum_visible_flags = []
         if hasattr(controller, '_layers_model') and controller._layers_model is not None:
             try:
                 for i in range(n):
@@ -179,12 +184,18 @@ class PublicationFigureGenerator:
                         # Check for spectrum_data attribute
                         spec_data = getattr(layer, 'spectrum_data', None)
                         spectrum_data_list.append(spec_data)
+                        # Check for spectrum_visible flag
+                        spec_visible = getattr(layer, 'spectrum_visible', False)
+                        spectrum_visible_flags.append(spec_visible)
                     else:
                         spectrum_data_list.append(None)
+                        spectrum_visible_flags.append(False)
             except Exception:
                 spectrum_data_list = [None] * n
+                spectrum_visible_flags = [False] * n
         else:
             spectrum_data_list = [None] * n
+            spectrum_visible_flags = [False] * n
 
         generator = cls(
             velocity_arrays=controller.velocity_arrays,
@@ -194,6 +205,7 @@ class PublicationFigureGenerator:
             active_flags=active_flags,
             array_positions=getattr(controller, 'array_positions', None),
             spectrum_data_list=spectrum_data_list,
+            spectrum_visible_flags=spectrum_visible_flags,
         )
         
         return generator
@@ -345,11 +357,27 @@ class PublicationFigureGenerator:
         # Determine if we're using a raster format (needs white background)
         is_raster = config.output_format.lower() in ['png', 'jpg', 'jpeg']
 
+        # Handle font family with fallback for specific fonts
+        font_family = config.font_family
+        if font_family in ('Times New Roman', 'Arial', 'Helvetica'):
+            # Try to use specific font, fallback to generic if not available
+            try:
+                import matplotlib.font_manager as fm
+                available_fonts = [f.name for f in fm.fontManager.ttflist]
+                if font_family not in available_fonts:
+                    logger.warning(f"Font '{font_family}' not found, falling back to 'serif'")
+                    font_family = 'serif'
+            except Exception:
+                font_family = 'serif'
+
         plt.rcParams.update({
-            'font.family': config.font_family,
+            'font.family': font_family,
             'font.size': config.font_size,
+            'font.weight': config.font_weight,
             'axes.linewidth': 1.0,
             'axes.labelsize': config.font_size,
+            'axes.labelweight': config.font_weight,
+            'axes.titleweight': config.font_weight,
             'xtick.labelsize': config.font_size - 1,
             'ytick.labelsize': config.font_size - 1,
             'legend.fontsize': config.font_size - 1,
@@ -1175,6 +1203,7 @@ class PublicationFigureGenerator:
         config: Optional[PlotConfig] = None,
         xlim: Optional[Tuple[float, float]] = None,
         ylim: Optional[Tuple[float, float]] = None,
+        include_spectrum: bool = True,
     ) -> Figure:
         """Generate figure of current canvas view in frequency domain.
 
@@ -1183,6 +1212,7 @@ class PublicationFigureGenerator:
             config: PlotConfig instance (uses defaults if None)
             xlim: Optional x-axis limits (uses current canvas limits if None)
             ylim: Optional y-axis limits (uses current canvas limits if None)
+            include_spectrum: Whether to include visible spectrum backgrounds
 
         Returns:
             matplotlib Figure object
@@ -1194,6 +1224,26 @@ class PublicationFigureGenerator:
         fig, ax = plt.subplots(figsize=config.figsize, dpi=config.dpi)
 
         colors = self._get_colors(config, len(self.velocity_arrays))
+
+        # Render visible spectrum backgrounds first (so curves are on top)
+        if include_spectrum:
+            for i, (active, spec_visible) in enumerate(zip(self.active_flags, self.spectrum_visible_flags)):
+                if active and spec_visible and i < len(self.spectrum_data_list):
+                    spec_data = self.spectrum_data_list[i]
+                    if spec_data is not None:
+                        spec_freqs = spec_data.get('frequencies')
+                        spec_vels = spec_data.get('velocities')
+                        spec_power = spec_data.get('power')
+                        if spec_freqs is not None and spec_vels is not None and spec_power is not None:
+                            # Use reduced alpha for overlapping spectra
+                            alpha = config.spectrum_alpha * 0.6
+                            ax.contourf(
+                                spec_freqs, spec_vels, spec_power,
+                                levels=config.spectrum_levels,
+                                cmap=config.spectrum_colormap,
+                                alpha=alpha,
+                                zorder=1,
+                            )
 
         # Plot each active layer
         for i, (freq, vel, label, active) in enumerate(zip(
@@ -1209,6 +1259,7 @@ class PublicationFigureGenerator:
                     markersize=config.marker_size,
                     linewidth=config.line_width,
                     label=label,
+                    zorder=10,
                 )
 
         # Grid
@@ -1253,6 +1304,7 @@ class PublicationFigureGenerator:
         config: Optional[PlotConfig] = None,
         xlim: Optional[Tuple[float, float]] = None,
         ylim: Optional[Tuple[float, float]] = None,
+        include_spectrum: bool = False,
     ) -> Figure:
         """Generate figure of current canvas converted to wavelength domain.
 
@@ -1261,6 +1313,7 @@ class PublicationFigureGenerator:
             config: PlotConfig instance (uses defaults if None)
             xlim: Optional x-axis limits (wavelength)
             ylim: Optional y-axis limits (velocity)
+            include_spectrum: Whether to include visible spectrum (not typically used for wavelength domain)
 
         Returns:
             matplotlib Figure object
@@ -1287,6 +1340,7 @@ class PublicationFigureGenerator:
                     markersize=config.marker_size,
                     linewidth=config.line_width,
                     label=label,
+                    zorder=10,
                 )
 
         # Grid
@@ -1327,12 +1381,14 @@ class PublicationFigureGenerator:
         self,
         output_path: Optional[str] = None,
         config: Optional[PlotConfig] = None,
+        include_spectrum: bool = True,
     ) -> Figure:
         """Generate side-by-side frequency and wavelength views.
 
         Args:
             output_path: Optional path to save figure
             config: PlotConfig instance (uses defaults if None)
+            include_spectrum: Whether to include visible spectrum backgrounds (frequency domain only)
 
         Returns:
             matplotlib Figure object
@@ -1351,6 +1407,25 @@ class PublicationFigureGenerator:
 
         colors = self._get_colors(config, len(self.velocity_arrays))
 
+        # Render visible spectrum backgrounds on frequency domain (left plot) first
+        if include_spectrum:
+            for i, (active, spec_visible) in enumerate(zip(self.active_flags, self.spectrum_visible_flags)):
+                if active and spec_visible and i < len(self.spectrum_data_list):
+                    spec_data = self.spectrum_data_list[i]
+                    if spec_data is not None:
+                        spec_freqs = spec_data.get('frequencies')
+                        spec_vels = spec_data.get('velocities')
+                        spec_power = spec_data.get('power')
+                        if spec_freqs is not None and spec_vels is not None and spec_power is not None:
+                            alpha = config.spectrum_alpha * 0.6
+                            ax1.contourf(
+                                spec_freqs, spec_vels, spec_power,
+                                levels=config.spectrum_levels,
+                                cmap=config.spectrum_colormap,
+                                alpha=alpha,
+                                zorder=1,
+                            )
+
         # Plot each active layer in both domains
         for i, (freq, wl, vel, label, active) in enumerate(zip(
             self.frequency_arrays, self.wavelength_arrays,
@@ -1367,6 +1442,7 @@ class PublicationFigureGenerator:
                     markersize=config.marker_size,
                     linewidth=config.line_width,
                     label=label,
+                    zorder=10,
                 )
 
                 # Wavelength domain (right)
@@ -1392,20 +1468,35 @@ class PublicationFigureGenerator:
         ax1.set_title('Frequency Domain')
         ax2.set_title('Wavelength Domain')
 
-        # Shared legend at bottom
+        # Shared legend at bottom with dynamic layout
         handles, labels = ax1.get_legend_handles_labels()
-        fig.legend(handles, labels, loc='lower center',
-                   ncol=min(len(labels), 4), frameon=config.legend_frameon,
-                   bbox_to_anchor=(0.5, -0.02))
+        n_labels = len(labels)
+        
+        # Dynamic column count: more columns for more items, but cap at reasonable max
+        if n_labels <= 4:
+            ncol = n_labels
+        elif n_labels <= 8:
+            ncol = 4
+        else:
+            ncol = min(6, (n_labels + 1) // 2)  # 2 rows max for many items
+        
+        # Compute legend rows for margin adjustment
+        n_legend_rows = (n_labels + ncol - 1) // ncol if ncol > 0 else 1
+        
+        # Position legend inside figure at bottom
+        fig.legend(handles, labels, loc='upper center',
+                   ncol=ncol, frameon=config.legend_frameon,
+                   bbox_to_anchor=(0.5, 0.02))
 
         # Main title
         if config.title:
             fig.suptitle(config.title, fontsize=config.title_fontsize or config.font_size + 2)
 
-        # Layout
+        # Layout with dynamic bottom margin based on legend rows
         if config.tight_layout:
             fig.tight_layout()
-            fig.subplots_adjust(bottom=0.15)  # Make room for legend
+            bottom_margin = 0.08 + 0.04 * n_legend_rows
+            fig.subplots_adjust(bottom=bottom_margin)
 
         # Save if path provided
         if output_path:
