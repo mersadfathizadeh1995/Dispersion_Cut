@@ -320,12 +320,36 @@ class LauncherWindow(QtWidgets.QMainWindow):
             spectrum_path = spec.get('spectrum_path')
             if spectrum_path:
                 try:
-                    # For now, load the spectrum for the first layer (combined CSV case)
-                    # TODO: Future enhancement - support per-offset spectra
-                    if hasattr(ctrl, 'load_spectrum_for_layer'):
+                    # Try loading as combined spectrum first (for combined CSV files)
+                    # This will match spectra to layers by offset labels
+                    if hasattr(ctrl, 'load_combined_spectrum_for_layers'):
+                        try:
+                            results = ctrl.load_combined_spectrum_for_layers(spectrum_path)
+                            if results:
+                                # Combined spectrum loaded successfully
+                                matched = sum(1 for v in results.values() if v)
+                                try:
+                                    from dc_cut.services import log
+                                    log.info(f"Loaded combined spectrum: {matched} layers matched")
+                                except Exception:
+                                    pass
+                            else:
+                                # No matches - try as single spectrum for layer 0
+                                raise ValueError("Not a combined spectrum or no matches")
+                        except ValueError:
+                            # Fall back to single-layer spectrum loading
+                            if hasattr(ctrl, 'load_spectrum_for_layer'):
+                                success = ctrl.load_spectrum_for_layer(0, spectrum_path)
+                                if not success:
+                                    try:
+                                        from dc_cut.services import log
+                                        log.warning(f"Failed to load spectrum from {spectrum_path}")
+                                    except Exception:
+                                        pass
+                    elif hasattr(ctrl, 'load_spectrum_for_layer'):
+                        # Fallback: no combined method available
                         success = ctrl.load_spectrum_for_layer(0, spectrum_path)
                         if not success:
-                            # Log warning but don't fail the load
                             try:
                                 from dc_cut.services import log
                                 log.warning(f"Failed to load spectrum from {spectrum_path}")

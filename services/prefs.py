@@ -24,8 +24,9 @@ _DEFAULTS: Dict[str, Any] = {
     # Spectrum backgrounds
     "show_spectra": True,  # Master enable/disable for spectrum backgrounds
     "default_spectrum_alpha": 0.5,  # Default opacity for new spectrum backgrounds
-    "spectrum_colormap": "viridis",  # Default colormap: viridis, plasma, hot, gray
-    "spectrum_display_mode": "active_only",  # "active_only" or "all_visible"
+    "spectrum_colormap": "viridis",  # Default colormap: viridis, plasma, hot, gray, jet
+    "spectrum_display_mode": "per_layer",  # "active_only", "all_visible", or "per_layer"
+    "spectrum_render_mode": "imshow",  # "imshow" (fast pixel grid) or "contour" (smooth contours)
     "auto_load_spectra": True,  # Auto-detect and load spectrum files at startup
 }
 

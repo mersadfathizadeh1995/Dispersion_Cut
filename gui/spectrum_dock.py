@@ -46,7 +46,7 @@ class SpectrumDock(QtWidgets.QDockWidget):
         cmap_layout = QtWidgets.QHBoxLayout()
         cmap_label = QtWidgets.QLabel("Colormap:", master_group)
         self.cmap_combo = QtWidgets.QComboBox(master_group)
-        self.cmap_combo.addItems(["viridis", "plasma", "hot", "gray"])
+        self.cmap_combo.addItems(["viridis", "plasma", "hot", "gray", "jet"])
 
         # Load current colormap from preferences
         try:
@@ -62,6 +62,28 @@ class SpectrumDock(QtWidgets.QDockWidget):
         cmap_layout.addWidget(cmap_label)
         cmap_layout.addWidget(self.cmap_combo, 1)
         master_layout.addLayout(cmap_layout)
+
+        # Render mode selection (imshow vs contour)
+        render_layout = QtWidgets.QHBoxLayout()
+        render_label = QtWidgets.QLabel("Render:", master_group)
+        self.render_combo = QtWidgets.QComboBox(master_group)
+        self.render_combo.addItems(["Image (fast)", "Contour (smooth)"])
+
+        # Load current render mode from preferences
+        try:
+            from dc_cut.services.prefs import get_pref
+            current_mode = get_pref("spectrum_render_mode", "imshow")
+            if current_mode == "contour":
+                self.render_combo.setCurrentIndex(1)
+            else:
+                self.render_combo.setCurrentIndex(0)
+        except Exception:
+            pass
+
+        self.render_combo.currentIndexChanged.connect(self._on_render_mode_changed)
+        render_layout.addWidget(render_label)
+        render_layout.addWidget(self.render_combo, 1)
+        master_layout.addLayout(render_layout)
 
         v.addWidget(master_group)
 
@@ -88,8 +110,11 @@ class SpectrumDock(QtWidgets.QDockWidget):
         self.rebuild()
 
     def showEvent(self, event) -> None:
-        """Rebuild when dock is shown."""
-        self.rebuild()
+        """Rebuild when dock is shown (if not already built)."""
+        # Only rebuild if we don't have any layer widgets yet
+        # This prevents tab reordering issues when switching tabs
+        if not self.layer_widgets:
+            self.rebuild()
         super().showEvent(event)
 
     def rebuild(self) -> None:
@@ -207,6 +232,22 @@ class SpectrumDock(QtWidgets.QDockWidget):
             pass
 
         # Re-render all spectra with new colormap
+        if hasattr(self.c, '_render_spectrum_backgrounds'):
+            self.c._render_spectrum_backgrounds()
+
+    def _on_render_mode_changed(self, index: int) -> None:
+        """Handle render mode selection change."""
+        # Convert combo index to mode string
+        mode = "contour" if index == 1 else "imshow"
+        
+        # Save preference
+        try:
+            from dc_cut.services.prefs import set_pref
+            set_pref("spectrum_render_mode", mode)
+        except Exception:
+            pass
+
+        # Re-render all spectra with new render mode
         if hasattr(self.c, '_render_spectrum_backgrounds'):
             self.c._render_spectrum_backgrounds()
 

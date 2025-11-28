@@ -606,6 +606,58 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
             except Exception:
                 pass
 
+    # --- Spectrum State Preservation Helpers ---
+    def _preserve_spectrum_state(self) -> dict:
+        """Capture spectrum state from LayersModel before rebuild.
+        
+        Returns dict mapping layer index -> spectrum info dict.
+        This must be called BEFORE LayersModel.from_arrays() to preserve
+        spectrum_data, spectrum_visible, spectrum_alpha.
+        """
+        spectrum_state = {}
+        try:
+            if hasattr(self, '_layers_model') and self._layers_model is not None:
+                for i, layer in enumerate(self._layers_model.layers):
+                    if layer.spectrum_data is not None:
+                        spectrum_state[i] = {
+                            'spectrum_data': layer.spectrum_data,
+                            'spectrum_visible': layer.spectrum_visible,
+                            'spectrum_alpha': layer.spectrum_alpha,
+                            # Note: spectrum_image is NOT preserved - it needs re-rendering
+                        }
+        except Exception:
+            pass
+        return spectrum_state
+
+    def _restore_spectrum_state(self, spectrum_state: dict) -> None:
+        """Restore spectrum state to LayersModel after rebuild.
+        
+        Args:
+            spectrum_state: Dict from _preserve_spectrum_state()
+        
+        This must be called AFTER LayersModel.from_arrays() to restore
+        spectrum references that would otherwise be lost.
+        """
+        try:
+            if not spectrum_state:
+                return
+            if not hasattr(self, '_layers_model') or self._layers_model is None:
+                return
+            for i, data in spectrum_state.items():
+                if i < len(self._layers_model.layers):
+                    layer = self._layers_model.layers[i]
+                    layer.spectrum_data = data['spectrum_data']
+                    layer.spectrum_visible = data['spectrum_visible']
+                    layer.spectrum_alpha = data['spectrum_alpha']
+            # Re-render spectrum backgrounds with restored data
+            self._render_spectrum_backgrounds()
+        except Exception as e:
+            try:
+                from dc_cut.services import log
+                log.error(f"Failed to restore spectrum state: {e}")
+            except Exception:
+                pass
+
     # --- State persistence enrichments ---
     def get_current_state(self):  # type: ignore[override]
         try:
@@ -622,9 +674,30 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
                 S['freq_custom_ticks'] = list(getattr(self, 'freq_custom_ticks'))
         except Exception:
             pass
+        # Persist spectrum visibility/alpha settings per layer
+        try:
+            if hasattr(self, '_layers_model') and self._layers_model is not None:
+                S['layer_spectrum_settings'] = []
+                for layer in self._layers_model.layers:
+                    S['layer_spectrum_settings'].append({
+                        'has_spectrum': layer.spectrum_data is not None,
+                        'spectrum_visible': layer.spectrum_visible,
+                        'spectrum_alpha': layer.spectrum_alpha,
+                    })
+        except Exception:
+            pass
         return S
 
     def apply_state(self, state_dict):  # type: ignore[override]
+        # PRESERVE spectrum state before any model rebuild
+        spectrum_state = self._preserve_spectrum_state()
+        
+        # Clear existing spectrum images to avoid orphans
+        try:
+            self._clear_all_spectrum_backgrounds()
+        except Exception:
+            pass
+        
         try:
             super().apply_state(state_dict)
         except Exception:
@@ -647,9 +720,25 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
             self._layers_model = LayersModel.from_arrays(self.velocity_arrays, self.frequency_arrays, self.wavelength_arrays, labels)
         except Exception:
             pass
+        
+        # RESTORE spectrum state after model rebuild
+        self._restore_spectrum_state(spectrum_state)
+        
+        # Restore spectrum settings from saved state if available
+        try:
+            if 'layer_spectrum_settings' in state_dict:
+                settings = state_dict['layer_spectrum_settings']
+                for i, s in enumerate(settings):
+                    if i < len(self._layers_model.layers):
+                        layer = self._layers_model.layers[i]
+                        layer.spectrum_visible = s.get('spectrum_visible', False)
+                        layer.spectrum_alpha = s.get('spectrum_alpha', 0.5)
+        except Exception:
+            pass
+        
         try:
             from dc_cut.services import log
-            log.info("State applied; model rebuilt; ticks/guides/limits applied")
+            log.info("State applied; model rebuilt; spectrum restored; ticks/guides/limits applied")
         except Exception:
             pass
         # Restore tick style and custom ticks (if present)
@@ -1016,6 +1105,15 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
             except Exception:
                 super()._on_delete(event)
         finally:
+            # PRESERVE spectrum state before model rebuild
+            spectrum_state = self._preserve_spectrum_state()
+            
+            # Clear existing spectrum images to avoid orphans
+            try:
+                self._clear_all_spectrum_backgrounds()
+            except Exception:
+                pass
+            
             # Rebuild model from arrays after deletions
             try:
                 from dc_cut.core.model import LayersModel
@@ -1023,6 +1121,10 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
                 self._layers_model = LayersModel.from_arrays(self.velocity_arrays, self.frequency_arrays, self.wavelength_arrays, labels)
             except Exception:
                 pass
+            
+            # RESTORE spectrum state after model rebuild
+            self._restore_spectrum_state(spectrum_state)
+            
             try:
                 self._apply_axis_limits(); self.fig.canvas.draw_idle()
             except Exception:
@@ -1414,8 +1516,88 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
                 pass
             return False
 
+    def load_combined_spectrum_for_layers(self, npz_path: str) -> Dict[int, bool]:
+        """Load combined power spectrum NPZ and assign to matching layers.
+
+        For combined CSV files, the NPZ contains spectra for multiple offsets.
+        This method matches each layer's label to the appropriate spectrum.
+
+        Args:
+            npz_path: Path to combined spectrum .npz file
+
+        Returns:
+            Dictionary mapping layer index to success (True/False)
+        """
+        results = {}
+        try:
+            from dc_cut.core.spectrum_loader import (
+                load_combined_spectrum_npz,
+                match_csv_labels_to_spectrum
+            )
+            from dc_cut.services.prefs import get_pref
+
+            if not hasattr(self, '_layers_model') or self._layers_model is None:
+                return results
+
+            # Load all spectra from combined NPZ
+            spectra_by_offset = load_combined_spectrum_npz(npz_path)
+            if not spectra_by_offset:
+                try:
+                    from dc_cut.services import log
+                    log.warning(f"No spectra found in combined NPZ: {npz_path}")
+                except Exception:
+                    pass
+                return results
+
+            # Get layer labels
+            csv_labels = [layer.label for layer in self._layers_model.layers]
+
+            # Match labels to spectrum offsets
+            matches = match_csv_labels_to_spectrum(csv_labels, spectra_by_offset)
+
+            # Assign spectra to matching layers
+            default_alpha = get_pref('default_spectrum_alpha', 0.5)
+            show_spectra = get_pref('show_spectra', True)
+
+            for layer_idx, offset_key in matches.items():
+                try:
+                    layer = self._layers_model.layers[layer_idx]
+                    layer.spectrum_data = spectra_by_offset[offset_key]
+                    layer.spectrum_alpha = default_alpha
+                    layer.spectrum_visible = show_spectra
+                    results[layer_idx] = True
+                except Exception as e:
+                    results[layer_idx] = False
+                    try:
+                        from dc_cut.services import log
+                        log.warning(f"Failed to assign spectrum to layer {layer_idx}: {e}")
+                    except Exception:
+                        pass
+
+            # Log summary
+            try:
+                from dc_cut.services import log
+                matched = sum(1 for v in results.values() if v)
+                total = len(self._layers_model.layers)
+                log.info(f"Combined spectrum: matched {matched}/{total} layers from {npz_path}")
+            except Exception:
+                pass
+
+            # Render all spectra
+            if any(results.values()):
+                self._render_spectrum_backgrounds()
+
+        except Exception as e:
+            try:
+                from dc_cut.services import log
+                log.error(f"Failed to load combined spectrum: {e}")
+            except Exception:
+                pass
+
+        return results
+
     def _render_spectrum_backgrounds(self) -> None:
-        """Render spectrum backgrounds for all layers based on preferences."""
+        """Render spectrum backgrounds for all layers based on their individual visibility settings."""
         try:
             from dc_cut.services.prefs import get_pref
 
@@ -1423,9 +1605,6 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
             if not get_pref('show_spectra', True):
                 self._clear_all_spectrum_backgrounds()
                 return
-
-            # Get display mode
-            display_mode = get_pref('spectrum_display_mode', 'active_only')
 
             if not hasattr(self, '_layers_model') or self._layers_model is None:
                 return
@@ -1439,24 +1618,11 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
                         pass
                     layer.spectrum_image = None
 
-            # Render based on display mode
-            if display_mode == 'active_only':
-                # Find the active layer (first visible one, or first one)
-                active_idx = 0
-                for i, layer in enumerate(self._layers_model.layers):
-                    if layer.visible:
-                        active_idx = i
-                        break
-
-                # Render only the active layer's spectrum
-                if 0 <= active_idx < len(self._layers_model.layers):
-                    self._render_single_spectrum(active_idx)
-
-            else:  # 'all_visible'
-                # Render spectra for all visible layers
-                for i, layer in enumerate(self._layers_model.layers):
-                    if layer.visible:
-                        self._render_single_spectrum(i)
+            # Render spectra for all layers that have spectrum_visible=True
+            # Each layer's spectrum_visible flag controls its individual visibility
+            for i, layer in enumerate(self._layers_model.layers):
+                if layer.spectrum_visible and layer.spectrum_data is not None:
+                    self._render_single_spectrum(i)
 
             # Redraw canvas
             try:
@@ -1480,6 +1646,7 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
         try:
             from dc_cut.services.prefs import get_pref
             import matplotlib.cm as cm
+            import numpy as np
 
             if not hasattr(self, '_layers_model') or self._layers_model is None:
                 return
@@ -1505,25 +1672,37 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
             except Exception:
                 cmap = cm.get_cmap('viridis')
 
-            # Define extent for imshow (frequency range and velocity range)
-            extent = [
-                frequencies[0],
-                frequencies[-1],
-                velocities[0],
-                velocities[-1]
-            ]
+            # Get render mode: 'imshow' (default) or 'contour'
+            render_mode = get_pref('spectrum_render_mode', 'imshow')
 
-            # Render on frequency axis
-            layer.spectrum_image = self.ax_freq.imshow(
-                power,
-                aspect='auto',
-                origin='lower',
-                extent=extent,
-                cmap=cmap,
-                alpha=layer.spectrum_alpha,
-                zorder=0,  # Behind all data points
-                interpolation='bilinear'
-            )
+            if render_mode == 'contour':
+                # Contourf rendering (smooth contours, handles log-scale correctly)
+                F, V = np.meshgrid(frequencies, velocities)
+                layer.spectrum_image = self.ax_freq.contourf(
+                    F, V, power,
+                    levels=30,
+                    cmap=cmap,
+                    alpha=layer.spectrum_alpha,
+                    zorder=0,  # Behind all data points
+                )
+            else:
+                # Imshow rendering (default, faster pixel-based)
+                extent = [
+                    frequencies[0],
+                    frequencies[-1],
+                    velocities[0],
+                    velocities[-1]
+                ]
+                layer.spectrum_image = self.ax_freq.imshow(
+                    power,
+                    aspect='auto',
+                    origin='lower',
+                    extent=extent,
+                    cmap=cmap,
+                    alpha=layer.spectrum_alpha,
+                    zorder=0,  # Behind all data points
+                    interpolation='bilinear'
+                )
 
         except Exception as e:
             try:
@@ -1533,7 +1712,7 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
                 pass
 
     def _clear_all_spectrum_backgrounds(self) -> None:
-        """Remove all spectrum background images."""
+        """Remove all spectrum background images (handles both imshow and contourf)."""
         try:
             if not hasattr(self, '_layers_model') or self._layers_model is None:
                 return
@@ -1541,7 +1720,17 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
             for layer in self._layers_model.layers:
                 if layer.spectrum_image is not None:
                     try:
-                        layer.spectrum_image.remove()
+                        # Check if it's a QuadContourSet (from contourf) or AxesImage (from imshow)
+                        if hasattr(layer.spectrum_image, 'collections'):
+                            # QuadContourSet from contourf - remove all collections
+                            for coll in layer.spectrum_image.collections:
+                                try:
+                                    coll.remove()
+                                except Exception:
+                                    pass
+                        else:
+                            # AxesImage from imshow - simple remove
+                            layer.spectrum_image.remove()
                     except Exception:
                         pass
                     layer.spectrum_image = None
