@@ -188,6 +188,42 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
 
+        # Use scroll area for styling tab
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll_content = QtWidgets.QWidget()
+        scroll_layout = QtWidgets.QVBoxLayout(scroll_content)
+
+        # Journal Preset (NEW)
+        preset_group = QtWidgets.QGroupBox("Journal Preset")
+        preset_layout = QtWidgets.QFormLayout(preset_group)
+
+        self.journal_preset_combo = QtWidgets.QComboBox()
+        self.journal_preset_combo.addItems(['Custom', 'Nature', 'AGU', 'Geophysics', 'Presentation', 'Poster'])
+        self.journal_preset_combo.currentTextChanged.connect(self._on_preset_changed)
+        preset_layout.addRow("Preset:", self.journal_preset_combo)
+
+        preset_note = QtWidgets.QLabel("Presets auto-configure figure size, DPI, and fonts")
+        preset_note.setStyleSheet("color: gray; font-style: italic;")
+        preset_layout.addRow("", preset_note)
+
+        scroll_layout.addWidget(preset_group)
+
+        # Title Settings (NEW)
+        title_group = QtWidgets.QGroupBox("Title")
+        title_layout = QtWidgets.QFormLayout(title_group)
+
+        self.title_edit = QtWidgets.QLineEdit()
+        self.title_edit.setPlaceholderText("Optional figure title")
+        title_layout.addRow("Title:", self.title_edit)
+
+        self.title_fontsize_spin = QtWidgets.QSpinBox()
+        self.title_fontsize_spin.setRange(8, 24)
+        self.title_fontsize_spin.setValue(14)
+        title_layout.addRow("Title font size:", self.title_fontsize_spin)
+
+        scroll_layout.addWidget(title_group)
+
         # Figure settings
         fig_group = QtWidgets.QGroupBox("Figure Settings")
         fig_layout = QtWidgets.QFormLayout(fig_group)
@@ -210,7 +246,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         self.dpi_spin.setSingleStep(50)
         fig_layout.addRow("DPI:", self.dpi_spin)
 
-        layout.addWidget(fig_group)
+        scroll_layout.addWidget(fig_group)
 
         # Font settings
         font_group = QtWidgets.QGroupBox("Font Settings")
@@ -225,7 +261,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         self.font_size_spin.setValue(11)
         font_layout.addRow("Font size:", self.font_size_spin)
 
-        layout.addWidget(font_group)
+        scroll_layout.addWidget(font_group)
 
         # Line/marker settings
         line_group = QtWidgets.QGroupBox("Line & Marker Settings")
@@ -243,14 +279,38 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         self.marker_size_spin.setSingleStep(0.5)
         line_layout.addRow("Marker size:", self.marker_size_spin)
 
-        layout.addWidget(line_group)
+        # Marker style (NEW)
+        self.marker_style_combo = QtWidgets.QComboBox()
+        self.marker_style_combo.addItems(['o (circle)', 's (square)', '^ (triangle)', 'D (diamond)', 'x (cross)', '+ (plus)', '. (point)'])
+        line_layout.addRow("Marker style:", self.marker_style_combo)
+
+        scroll_layout.addWidget(line_group)
+
+        # Legend settings (NEW)
+        legend_group = QtWidgets.QGroupBox("Legend")
+        legend_layout = QtWidgets.QFormLayout(legend_group)
+
+        self.legend_position_combo = QtWidgets.QComboBox()
+        self.legend_position_combo.addItems(['best', 'upper left', 'upper right', 'lower left', 'lower right', 'center left', 'center right', 'upper center', 'lower center'])
+        legend_layout.addRow("Position:", self.legend_position_combo)
+
+        self.legend_columns_spin = QtWidgets.QSpinBox()
+        self.legend_columns_spin.setRange(1, 5)
+        self.legend_columns_spin.setValue(1)
+        legend_layout.addRow("Columns:", self.legend_columns_spin)
+
+        self.legend_frameon_check = QtWidgets.QCheckBox("Show legend frame")
+        self.legend_frameon_check.setChecked(False)
+        legend_layout.addRow("", self.legend_frameon_check)
+
+        scroll_layout.addWidget(legend_group)
 
         # Color settings
         color_group = QtWidgets.QGroupBox("Color Settings")
         color_layout = QtWidgets.QFormLayout(color_group)
 
         self.color_palette_combo = QtWidgets.QComboBox()
-        self.color_palette_combo.addItems(['vibrant', 'muted', 'bright'])
+        self.color_palette_combo.addItems(['vibrant', 'muted', 'bright', 'high_contrast'])
         color_layout.addRow("Color palette:", self.color_palette_combo)
 
         palette_note = QtWidgets.QLabel("All palettes are colorblind-friendly")
@@ -263,10 +323,31 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         self.uncertainty_alpha_spin.setSingleStep(0.05)
         color_layout.addRow("Uncertainty alpha:", self.uncertainty_alpha_spin)
 
-        layout.addWidget(color_group)
+        scroll_layout.addWidget(color_group)
 
-        layout.addStretch()
+        scroll_layout.addStretch()
+        scroll.setWidget(scroll_content)
+        layout.addWidget(scroll)
         self.tabs.addTab(tab, "Styling")
+
+    def _on_preset_changed(self, preset_name: str):
+        """Apply journal preset settings."""
+        presets = {
+            'Nature': {'width': 3.5, 'height': 3.5, 'dpi': 300, 'font': 'sans-serif', 'font_size': 8},
+            'AGU': {'width': 3.74, 'height': 4.53, 'dpi': 300, 'font': 'sans-serif', 'font_size': 9},
+            'Geophysics': {'width': 3.5, 'height': 4.0, 'dpi': 600, 'font': 'sans-serif', 'font_size': 9},
+            'Presentation': {'width': 10, 'height': 7.5, 'dpi': 150, 'font': 'sans-serif', 'font_size': 14},
+            'Poster': {'width': 12, 'height': 9, 'dpi': 150, 'font': 'sans-serif', 'font_size': 16},
+        }
+        if preset_name in presets:
+            p = presets[preset_name]
+            self.figsize_width_spin.setValue(p['width'])
+            self.figsize_height_spin.setValue(p['height'])
+            self.dpi_spin.setValue(p['dpi'])
+            idx = self.font_family_combo.findText(p['font'])
+            if idx >= 0:
+                self.font_family_combo.setCurrentIndex(idx)
+            self.font_size_spin.setValue(p['font_size'])
 
     def _build_axes_tab(self):
         """Build the Axes configuration tab."""
@@ -534,6 +615,13 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         if not self.ylim_auto_check.isChecked():
             ylim = (self.ylim_min_spin.value(), self.ylim_max_spin.value())
 
+        # Get marker style (extract first character)
+        marker_text = self.marker_style_combo.currentText()
+        marker_style = marker_text.split(' ')[0] if marker_text else 'o'
+
+        # Get title (empty string = None)
+        title = self.title_edit.text().strip() or None
+
         config = PlotConfig(
             figsize=(self.figsize_width_spin.value(), self.figsize_height_spin.value()),
             dpi=self.dpi_spin.value(),
@@ -541,6 +629,12 @@ class PublicationFigureDialog(QtWidgets.QDialog):
             font_size=self.font_size_spin.value(),
             line_width=self.line_width_spin.value(),
             marker_size=self.marker_size_spin.value(),
+            marker_style=marker_style,
+            title=title,
+            title_fontsize=self.title_fontsize_spin.value(),
+            legend_position=self.legend_position_combo.currentText(),
+            legend_columns=self.legend_columns_spin.value(),
+            legend_frameon=self.legend_frameon_check.isChecked(),
             color_palette=self.color_palette_combo.currentText(),
             uncertainty_alpha=self.uncertainty_alpha_spin.value(),
             near_field_alpha=self.nf_alpha_spin.value(),
