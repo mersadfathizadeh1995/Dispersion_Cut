@@ -526,7 +526,7 @@ class PublicationFigureGenerator:
         """Apply legend with support for outside positions.
 
         Handles 'Outside Right', 'Outside Top', 'Outside Bottom' positions
-        by adjusting bbox_to_anchor and figure margins.
+        by using bbox_to_anchor for proper placement.
 
         Args:
             ax: Matplotlib Axes
@@ -541,24 +541,31 @@ class PublicationFigureGenerator:
                 bbox_to_anchor=(1.02, 0.5),
                 ncol=config.legend_columns,
                 frameon=config.legend_frameon,
+                borderaxespad=0,
             )
-            fig.subplots_adjust(right=0.78)
+            # Adjust figure to make room for legend
+            fig.tight_layout()
+            fig.subplots_adjust(right=0.75)
         elif pos == 'Outside Top':
             ax.legend(
                 loc='lower center',
                 bbox_to_anchor=(0.5, 1.02),
                 ncol=config.legend_columns,
                 frameon=config.legend_frameon,
+                borderaxespad=0,
             )
+            fig.tight_layout()
             fig.subplots_adjust(top=0.85)
         elif pos == 'Outside Bottom':
             ax.legend(
                 loc='upper center',
-                bbox_to_anchor=(0.5, -0.12),
+                bbox_to_anchor=(0.5, -0.15),
                 ncol=config.legend_columns,
                 frameon=config.legend_frameon,
+                borderaxespad=0,
             )
-            fig.subplots_adjust(bottom=0.18)
+            fig.tight_layout()
+            fig.subplots_adjust(bottom=0.22)
         else:
             # Standard position (inside figure)
             ax.legend(
@@ -575,7 +582,10 @@ class PublicationFigureGenerator:
         config: PlotConfig,
         label: str = 'Power',
     ) -> None:
-        """Add colorbar with configurable orientation.
+        """Add colorbar by appending axes (maintains plot size).
+
+        Uses make_axes_locatable to add colorbar without shrinking the main plot.
+        The colorbar is placed adjacent to the plot.
 
         Args:
             fig: Matplotlib Figure
@@ -584,15 +594,20 @@ class PublicationFigureGenerator:
             config: PlotConfig with colorbar settings
             label: Label for the colorbar
         """
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
+        
         orientation = config.spectrum_colorbar_orientation
+        divider = make_axes_locatable(ax)
         
         if orientation == 'horizontal':
-            cbar = fig.colorbar(mappable, ax=ax, orientation='horizontal', 
-                               pad=0.15, aspect=30, shrink=0.8)
+            # Add colorbar below the plot
+            cax = divider.append_axes("bottom", size="5%", pad=0.5)
+            cbar = fig.colorbar(mappable, cax=cax, orientation='horizontal')
             cbar.set_label(label, fontsize=config.font_size - 1)
         else:  # vertical (default)
-            cbar = fig.colorbar(mappable, ax=ax, orientation='vertical',
-                               pad=0.02, aspect=20, shrink=0.9)
+            # Add colorbar to the right of the plot
+            cax = divider.append_axes("right", size="5%", pad=0.1)
+            cbar = fig.colorbar(mappable, cax=cax, orientation='vertical')
             cbar.set_label(label, fontsize=config.font_size - 1)
 
     def generate_aggregated_plot(
@@ -1310,6 +1325,10 @@ class PublicationFigureGenerator:
 
         colors = self._get_colors(config, len(self.velocity_arrays))
 
+        # Track last contourf for colorbar
+        last_contourf = None
+        spectrum_rendered = False
+
         # Render visible spectrum backgrounds first (so curves are on top)
         if include_spectrum:
             for i, (active, spec_visible) in enumerate(zip(self.active_flags, self.spectrum_visible_flags)):
@@ -1322,13 +1341,14 @@ class PublicationFigureGenerator:
                         if spec_freqs is not None and spec_vels is not None and spec_power is not None:
                             # Use reduced alpha for overlapping spectra
                             alpha = config.spectrum_alpha * 0.6
-                            ax.contourf(
+                            last_contourf = ax.contourf(
                                 spec_freqs, spec_vels, spec_power,
                                 levels=config.spectrum_levels,
                                 cmap=config.spectrum_colormap,
                                 alpha=alpha,
                                 zorder=1,
                             )
+                            spectrum_rendered = True
 
         # Plot each active layer
         for i, (freq, vel, label, active) in enumerate(zip(
@@ -1392,6 +1412,11 @@ class PublicationFigureGenerator:
 
         # Legend with outside position support
         self._apply_legend(ax, fig, config)
+
+        # Add colorbar if spectrum was rendered and colorbar enabled
+        if spectrum_rendered and last_contourf is not None:
+            if config.show_spectrum_colorbar and config.spectrum_colorbar_orientation != 'none':
+                self._add_colorbar(fig, ax, last_contourf, config)
 
         # Layout
         if config.tight_layout:
@@ -1534,6 +1559,10 @@ class PublicationFigureGenerator:
 
         colors = self._get_colors(config, len(self.velocity_arrays))
 
+        # Track spectrum for colorbar
+        last_contourf = None
+        spectrum_rendered = False
+
         # Render visible spectrum backgrounds on frequency domain (left plot) first
         if include_spectrum:
             for i, (active, spec_visible) in enumerate(zip(self.active_flags, self.spectrum_visible_flags)):
@@ -1545,13 +1574,14 @@ class PublicationFigureGenerator:
                         spec_power = spec_data.get('power')
                         if spec_freqs is not None and spec_vels is not None and spec_power is not None:
                             alpha = config.spectrum_alpha * 0.6
-                            ax1.contourf(
+                            last_contourf = ax1.contourf(
                                 spec_freqs, spec_vels, spec_power,
                                 levels=config.spectrum_levels,
                                 cmap=config.spectrum_colormap,
                                 alpha=alpha,
                                 zorder=1,
                             )
+                            spectrum_rendered = True
 
         # Plot each active layer in both domains
         for i, (freq, wl, vel, label, active) in enumerate(zip(
@@ -1654,6 +1684,11 @@ class PublicationFigureGenerator:
         # Main title
         if config.title:
             fig.suptitle(config.title, fontsize=config.title_fontsize or config.font_size + 2)
+
+        # Add colorbar to frequency domain if spectrum was rendered
+        if spectrum_rendered and last_contourf is not None:
+            if config.show_spectrum_colorbar and config.spectrum_colorbar_orientation != 'none':
+                self._add_colorbar(fig, ax1, last_contourf, config)
 
         # Layout with dynamic bottom margin based on legend rows
         if config.tight_layout:
