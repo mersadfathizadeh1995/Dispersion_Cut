@@ -361,10 +361,10 @@ FIGURE_TYPES: Dict[str, List[Tuple[str, str, str, bool]]] = {
             True
         ),
         (
-            "All Offsets - Comparison Grid",
+            "Comparison Grid",
             "offset_grid",
-            "Multi-panel grid comparing all loaded offsets.\n"
-            "Automatic layout based on number of offsets.",
+            "Multi-panel grid comparing selected offsets.\n"
+            "Select which offsets to include and configure shared colorbar.",
             True
         ),
     ],
@@ -497,15 +497,45 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         self.max_offsets_spin.setValue(10)
         offset_layout.addRow("Maximum offsets to plot:", self.max_offsets_spin)
 
-        # For individual offset analysis (new)
+        # For individual offset analysis (single offset selection)
         self.offset_selector_combo = QtWidgets.QComboBox()
         self.offset_selector_combo.setMinimumWidth(200)
-        offset_layout.addRow("Select offset:", self.offset_selector_combo)
+        self.offset_selector_label = QtWidgets.QLabel("Select offset:")
+        offset_layout.addRow(self.offset_selector_label, self.offset_selector_combo)
 
         # Populate offset selector from controller
         self._populate_offset_selector()
 
+        # ------------------------------------------------------------------
+        # Grid offset selection (for Comparison Grid)
+        # ------------------------------------------------------------------
+        self.grid_offset_selection_label = QtWidgets.QLabel("<b>Select Offsets for Grid:</b>")
+        offset_layout.addRow(self.grid_offset_selection_label)
+        
+        # Selection buttons
+        grid_buttons_layout = QtWidgets.QHBoxLayout()
+        self.select_all_btn = QtWidgets.QPushButton("Select All")
+        self.deselect_all_btn = QtWidgets.QPushButton("Deselect All")
+        self.select_all_btn.clicked.connect(self._select_all_grid_offsets)
+        self.deselect_all_btn.clicked.connect(self._deselect_all_grid_offsets)
+        grid_buttons_layout.addWidget(self.select_all_btn)
+        grid_buttons_layout.addWidget(self.deselect_all_btn)
+        grid_buttons_layout.addStretch()
+        offset_layout.addRow("", grid_buttons_layout)
+        
+        # List widget with checkboxes for offset selection
+        self.grid_offset_list = QtWidgets.QListWidget()
+        self.grid_offset_list.setMinimumHeight(120)
+        self.grid_offset_list.setMaximumHeight(180)
+        self.grid_offset_list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
+        offset_layout.addRow("", self.grid_offset_list)
+        
+        # Populate the grid offset list
+        self._populate_grid_offset_list()
+
+        # ------------------------------------------------------------------
         # Grid display mode options (for offset_grid)
+        # ------------------------------------------------------------------
         grid_display_label = QtWidgets.QLabel("Grid display mode:")
         self.grid_mode_curves = QtWidgets.QRadioButton("Curves Only")
         self.grid_mode_spectrum = QtWidgets.QRadioButton("Spectrum Only")
@@ -536,7 +566,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         grid_options_layout.addStretch()
         offset_layout.addRow("", grid_options_layout)
 
-        offset_note = QtWidgets.QLabel("Individual offset selection for single-offset exports")
+        offset_note = QtWidgets.QLabel("Note: Colorbar settings are in Styling tab > Spectrum Options")
         offset_note.setStyleSheet("color: gray; font-style: italic;")
         offset_layout.addRow("", offset_note)
 
@@ -758,6 +788,58 @@ class PublicationFigureDialog(QtWidgets.QDialog):
                 display_text += " [+spectrum]"
             self.offset_selector_combo.addItem(display_text, offset_info)
 
+    def _populate_grid_offset_list(self):
+        """Populate the grid offset selection list with checkboxes."""
+        self.grid_offset_list.clear()
+        
+        available_offsets = self._get_available_offsets()
+        
+        if not available_offsets:
+            item = QtWidgets.QListWidgetItem("No offsets loaded")
+            item.setFlags(item.flags() & ~_get_qt_item_is_user_checkable())
+            self.grid_offset_list.addItem(item)
+            return
+        
+        for offset_info in available_offsets:
+            display_text = offset_info['name']
+            if offset_info.get('has_spectrum'):
+                display_text += " [+spectrum]"
+            
+            item = QtWidgets.QListWidgetItem(display_text)
+            item.setFlags(item.flags() | _get_qt_item_is_user_checkable())
+            item.setCheckState(_get_qt_checked())  # Default: all selected
+            item.setData(_get_qt_user_role(), offset_info)
+            self.grid_offset_list.addItem(item)
+    
+    def _select_all_grid_offsets(self):
+        """Select all offsets in the grid list."""
+        for i in range(self.grid_offset_list.count()):
+            item = self.grid_offset_list.item(i)
+            if item.flags() & _get_qt_item_is_user_checkable():
+                item.setCheckState(_get_qt_checked())
+    
+    def _deselect_all_grid_offsets(self):
+        """Deselect all offsets in the grid list."""
+        for i in range(self.grid_offset_list.count()):
+            item = self.grid_offset_list.item(i)
+            if item.flags() & _get_qt_item_is_user_checkable():
+                item.setCheckState(_get_qt_unchecked())
+    
+    def _get_selected_grid_offsets(self) -> List[int]:
+        """Get list of selected offset indices for grid export.
+        
+        Returns:
+            List of offset indices that are checked
+        """
+        selected_indices = []
+        for i in range(self.grid_offset_list.count()):
+            item = self.grid_offset_list.item(i)
+            if item.checkState() == _get_qt_checked():
+                offset_info = item.data(_get_qt_user_role())
+                if offset_info and 'index' in offset_info:
+                    selected_indices.append(offset_info['index'])
+        return selected_indices
+
     def _get_available_offsets(self) -> List[Dict]:
         """Get list of available offsets from loaded data.
         
@@ -808,10 +890,29 @@ class PublicationFigureDialog(QtWidgets.QDialog):
 
         self.offset_group.setEnabled(needs_offset)
 
+        # Check if offset_grid is selected
+        is_grid_selected = any('offset_grid' in key for key, _, _ in checked_types)
+        
+        # Show/hide appropriate UI elements based on figure type
+        # Grid selection UI (for Comparison Grid)
+        self.grid_offset_selection_label.setVisible(is_grid_selected)
+        self.select_all_btn.setVisible(is_grid_selected)
+        self.deselect_all_btn.setVisible(is_grid_selected)
+        self.grid_offset_list.setVisible(is_grid_selected)
+        
+        # Single offset selector (for individual offset types)
+        is_single_offset = any(
+            key in ['offset_curve_only', 'offset_with_spectrum', 'offset_spectrum_only']
+            for key, _, _ in checked_types
+        )
+        self.offset_selector_label.setVisible(is_single_offset)
+        self.offset_selector_combo.setVisible(is_single_offset)
+
         # Refresh offset selector when group becomes enabled
         if needs_offset:
             self._populate_offset_selector()
-
+            self._populate_grid_offset_list()
+        
     def _get_checked_plot_types(self) -> List[Tuple[str, str, Optional[Dict]]]:
         """Get list of checked plot types from tree view (using checkboxes).
         
@@ -976,7 +1077,9 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         legend_layout = QtWidgets.QFormLayout(legend_group)
 
         self.legend_position_combo = QtWidgets.QComboBox()
-        self.legend_position_combo.addItems(['best', 'upper left', 'upper right', 'lower left', 'lower right', 'center left', 'center right', 'upper center', 'lower center'])
+        self.legend_position_combo.addItems(['best', 'upper left', 'upper right', 'lower left', 'lower right', 
+                                              'center left', 'center right', 'upper center', 'lower center',
+                                              'outside right', 'outside top', 'outside bottom'])
         legend_layout.addRow("Position:", self.legend_position_combo)
 
         self.legend_columns_spin = QtWidgets.QSpinBox()
@@ -1035,6 +1138,11 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         self.spectrum_levels_spin.setRange(10, 100)
         self.spectrum_levels_spin.setValue(30)
         spectrum_layout.addRow("Contour levels:", self.spectrum_levels_spin)
+
+        # Colorbar orientation option (replaces simple show/hide checkbox)
+        self.colorbar_orientation_combo = QtWidgets.QComboBox()
+        self.colorbar_orientation_combo.addItems(['Vertical (Right)', 'Horizontal (Bottom)', 'None (Hidden)'])
+        spectrum_layout.addRow("Colorbar:", self.colorbar_orientation_combo)
 
         spectrum_note = QtWidgets.QLabel("Used for offset analysis with spectrum background")
         spectrum_note.setStyleSheet("color: gray; font-style: italic;")
@@ -1423,15 +1531,28 @@ class PublicationFigureDialog(QtWidgets.QDialog):
             spectrum_render_mode='contour' if 'contour' in self.spectrum_render_mode_combo.currentText().lower() else 'imshow',
             spectrum_alpha=self.spectrum_alpha_spin.value(),
             spectrum_levels=self.spectrum_levels_spin.value(),
+            show_spectrum_colorbar=self._get_colorbar_orientation() != 'none',
+            spectrum_colorbar_orientation=self._get_colorbar_orientation(),
             # Peak overlay options
             peak_color=self.peak_color_combo.currentText(),
             peak_outline=self.peak_outline_check.isChecked(),
             peak_line_width=self.peak_line_width_spin.value(),
             # Curve overlay style
             curve_overlay_style=self._get_curve_overlay_style(),
+            # Grid options
+            grid_offset_indices=self._get_selected_grid_offsets() or None,
         )
 
         return config
+
+    def _get_colorbar_orientation(self) -> str:
+        """Get colorbar orientation from combo box."""
+        text = self.colorbar_orientation_combo.currentText()
+        if 'Vertical' in text:
+            return 'vertical'
+        elif 'Horizontal' in text:
+            return 'horizontal'
+        return 'none'
 
     def _get_curve_overlay_style(self) -> str:
         """Convert combo text to curve overlay style value."""

@@ -91,6 +91,7 @@ class PlotConfig:
     spectrum_render_mode: str = 'imshow'  # 'imshow' or 'contour'
     spectrum_alpha: float = 0.8
     spectrum_levels: int = 30
+    show_spectrum_colorbar: bool = True  # Show/hide colorbar for spectrum plots
 
     # Peak/curve overlay options (for curves on spectrum background)
     peak_color: str = '#FFFFFF'  # White default for visibility
@@ -98,6 +99,12 @@ class PlotConfig:
     peak_outline_color: str = '#000000'
     peak_line_width: float = 2.5
     curve_overlay_style: str = 'line'  # 'line', 'markers', or 'line+markers'
+
+    # Colorbar options (for spectrum plots)
+    spectrum_colorbar_orientation: str = 'vertical'  # 'none', 'vertical', 'horizontal'
+
+    # Grid options (for Comparison Grid)
+    grid_offset_indices: Optional[List[int]] = None  # None = all offsets
 
 
 class PublicationFigureGenerator:
@@ -509,6 +516,84 @@ class PublicationFigureGenerator:
             ylim = (ylim_low, vel_max + y_margin)
 
         return xlim, ylim
+
+    def _apply_legend(
+        self,
+        ax: plt.Axes,
+        fig: Figure,
+        config: PlotConfig,
+    ) -> None:
+        """Apply legend with support for outside positions.
+
+        Handles 'Outside Right', 'Outside Top', 'Outside Bottom' positions
+        by adjusting bbox_to_anchor and figure margins.
+
+        Args:
+            ax: Matplotlib Axes
+            fig: Matplotlib Figure
+            config: PlotConfig with legend settings
+        """
+        pos = config.legend_position
+        
+        if pos == 'Outside Right':
+            ax.legend(
+                loc='center left',
+                bbox_to_anchor=(1.02, 0.5),
+                ncol=config.legend_columns,
+                frameon=config.legend_frameon,
+            )
+            fig.subplots_adjust(right=0.78)
+        elif pos == 'Outside Top':
+            ax.legend(
+                loc='lower center',
+                bbox_to_anchor=(0.5, 1.02),
+                ncol=config.legend_columns,
+                frameon=config.legend_frameon,
+            )
+            fig.subplots_adjust(top=0.85)
+        elif pos == 'Outside Bottom':
+            ax.legend(
+                loc='upper center',
+                bbox_to_anchor=(0.5, -0.12),
+                ncol=config.legend_columns,
+                frameon=config.legend_frameon,
+            )
+            fig.subplots_adjust(bottom=0.18)
+        else:
+            # Standard position (inside figure)
+            ax.legend(
+                loc=pos,
+                ncol=config.legend_columns,
+                frameon=config.legend_frameon,
+            )
+
+    def _add_colorbar(
+        self,
+        fig: Figure,
+        ax: plt.Axes,
+        mappable,
+        config: PlotConfig,
+        label: str = 'Power',
+    ) -> None:
+        """Add colorbar with configurable orientation.
+
+        Args:
+            fig: Matplotlib Figure
+            ax: Matplotlib Axes
+            mappable: The plot object (contourf, imshow result)
+            config: PlotConfig with colorbar settings
+            label: Label for the colorbar
+        """
+        orientation = config.spectrum_colorbar_orientation
+        
+        if orientation == 'horizontal':
+            cbar = fig.colorbar(mappable, ax=ax, orientation='horizontal', 
+                               pad=0.15, aspect=30, shrink=0.8)
+            cbar.set_label(label, fontsize=config.font_size - 1)
+        else:  # vertical (default)
+            cbar = fig.colorbar(mappable, ax=ax, orientation='vertical',
+                               pad=0.02, aspect=20, shrink=0.9)
+            cbar.set_label(label, fontsize=config.font_size - 1)
 
     def generate_aggregated_plot(
         self,
@@ -1274,19 +1359,39 @@ class PublicationFigureGenerator:
         if config.title:
             ax.set_title(config.title, fontsize=config.title_fontsize or config.font_size + 2)
 
-        # Limits
+        # Compute smart axis limits from curve data (not spectrum)
+        all_freqs = []
+        all_vels = []
+        for i, (freq, vel, active) in enumerate(zip(
+            self.frequency_arrays, self.velocity_arrays, self.active_flags
+        )):
+            if active and len(freq) > 0:
+                all_freqs.extend(freq)
+                all_vels.extend(vel)
+        
+        # Apply limits: explicit > config > smart auto
         if xlim:
             ax.set_xlim(xlim)
         elif config.xlim:
             ax.set_xlim(config.xlim)
+        elif len(all_freqs) > 0:
+            # Smart auto limits based on curve data
+            freq_min = float(np.nanmin(all_freqs))
+            freq_max = float(np.nanmax(all_freqs))
+            ax.set_xlim(max(0.0, freq_min - 1.0), freq_max + 5.0)
+            
         if ylim:
             ax.set_ylim(ylim)
         elif config.ylim:
             ax.set_ylim(config.ylim)
+        elif len(all_vels) > 0:
+            # Smart auto limits based on curve data
+            vel_min = float(np.nanmin(all_vels))
+            vel_max = float(np.nanmax(all_vels))
+            ax.set_ylim(max(0.0, vel_min - 100), vel_max + 100)
 
-        # Legend
-        ax.legend(loc=config.legend_position, ncol=config.legend_columns,
-                  frameon=config.legend_frameon)
+        # Legend with outside position support
+        self._apply_legend(ax, fig, config)
 
         # Layout
         if config.tight_layout:
@@ -1355,17 +1460,39 @@ class PublicationFigureGenerator:
         if config.title:
             ax.set_title(config.title, fontsize=config.title_fontsize or config.font_size + 2)
 
-        # Limits
+        # Compute smart axis limits from curve data
+        all_wls = []
+        all_vels = []
+        for i, (wl, vel, active) in enumerate(zip(
+            self.wavelength_arrays, self.velocity_arrays, self.active_flags
+        )):
+            if active and len(wl) > 0:
+                all_wls.extend(wl)
+                all_vels.extend(vel)
+        
+        # Apply limits: explicit > config > smart auto
         if xlim:
             ax.set_xlim(xlim)
+        elif config.xlim:
+            ax.set_xlim(config.xlim)
+        elif len(all_wls) > 0:
+            # Smart auto limits for wavelength domain
+            wl_min = float(np.nanmin(all_wls))
+            wl_max = float(np.nanmax(all_wls))
+            ax.set_xlim(max(0.1, wl_min * 0.8), wl_max * 1.2)
+            
         if ylim:
             ax.set_ylim(ylim)
         elif config.ylim:
             ax.set_ylim(config.ylim)
+        elif len(all_vels) > 0:
+            # Smart auto limits based on curve data
+            vel_min = float(np.nanmin(all_vels))
+            vel_max = float(np.nanmax(all_vels))
+            ax.set_ylim(max(0.0, vel_min - 100), vel_max + 100)
 
-        # Legend
-        ax.legend(loc=config.legend_position, ncol=config.legend_columns,
-                  frameon=config.legend_frameon)
+        # Legend with outside position support
+        self._apply_legend(ax, fig, config)
 
         # Layout
         if config.tight_layout:
@@ -1461,8 +1588,44 @@ class PublicationFigureGenerator:
                 ax.grid(True, alpha=config.grid_alpha, linestyle='--')
             ax.set_xlabel(xlabel)
             ax.set_ylabel(config.ylabel)
-            if config.ylim:
-                ax.set_ylim(config.ylim)
+
+        # Compute smart axis limits from curve data
+        all_freqs = []
+        all_wls = []
+        all_vels = []
+        for i, (freq, wl, vel, active) in enumerate(zip(
+            self.frequency_arrays, self.wavelength_arrays,
+            self.velocity_arrays, self.active_flags
+        )):
+            if active and len(freq) > 0:
+                all_freqs.extend(freq)
+                all_wls.extend(wl)
+                all_vels.extend(vel)
+        
+        # Apply smart limits for frequency domain (ax1)
+        if config.xlim:
+            ax1.set_xlim(config.xlim)
+        elif len(all_freqs) > 0:
+            freq_min = float(np.nanmin(all_freqs))
+            freq_max = float(np.nanmax(all_freqs))
+            ax1.set_xlim(max(0.0, freq_min - 1.0), freq_max + 5.0)
+            
+        # Apply smart limits for wavelength domain (ax2)
+        if len(all_wls) > 0:
+            wl_min = float(np.nanmin(all_wls))
+            wl_max = float(np.nanmax(all_wls))
+            ax2.set_xlim(max(0.1, wl_min * 0.8), wl_max * 1.2)
+            
+        # Apply velocity limits to both axes
+        if config.ylim:
+            ax1.set_ylim(config.ylim)
+            ax2.set_ylim(config.ylim)
+        elif len(all_vels) > 0:
+            vel_min = float(np.nanmin(all_vels))
+            vel_max = float(np.nanmax(all_vels))
+            smart_ylim = (max(0.0, vel_min - 100), vel_max + 100)
+            ax1.set_ylim(smart_ylim)
+            ax2.set_ylim(smart_ylim)
 
         # Add subplot titles
         ax1.set_title('Frequency Domain')
@@ -1569,8 +1732,8 @@ class PublicationFigureGenerator:
         if config.ylim:
             ax.set_ylim(config.ylim)
 
-        # Legend
-        ax.legend(loc=config.legend_position, frameon=config.legend_frameon)
+        # Legend with outside position support
+        self._apply_legend(ax, fig, config)
 
         # Layout
         if config.tight_layout:
@@ -1634,7 +1797,8 @@ class PublicationFigureGenerator:
                 cmap=config.spectrum_colormap,
                 alpha=config.spectrum_alpha
             )
-            plt.colorbar(cf, ax=ax, label='Normalized Power')
+            if config.show_spectrum_colorbar and config.spectrum_colorbar_orientation != 'none':
+                self._add_colorbar(fig, ax, cf, config)
         else:
             # imshow mode
             extent = [spec_freqs.min(), spec_freqs.max(),
@@ -1645,7 +1809,8 @@ class PublicationFigureGenerator:
                 cmap=config.spectrum_colormap,
                 alpha=config.spectrum_alpha
             )
-            plt.colorbar(im, ax=ax, label='Normalized Power')
+            if config.show_spectrum_colorbar and config.spectrum_colorbar_orientation != 'none':
+                self._add_colorbar(fig, ax, im, config)
 
         # Overlay dispersion curve based on curve_overlay_style
         freq = self.frequency_arrays[offset_index]
@@ -1733,8 +1898,8 @@ class PublicationFigureGenerator:
         if ylim:
             ax.set_ylim(ylim)
 
-        # Legend
-        ax.legend(loc=config.legend_position, frameon=config.legend_frameon)
+        # Legend with outside position support
+        self._apply_legend(ax, fig, config)
 
         # Layout
         if config.tight_layout:
@@ -1800,7 +1965,8 @@ class PublicationFigureGenerator:
                 levels=config.spectrum_levels,
                 cmap=config.spectrum_colormap,
             )
-            plt.colorbar(cf, ax=ax, label='Normalized Power')
+            if config.show_spectrum_colorbar and config.spectrum_colorbar_orientation != 'none':
+                self._add_colorbar(fig, ax, cf, config)
         else:
             # imshow mode
             extent = [spec_freqs.min(), spec_freqs.max(),
@@ -1810,7 +1976,8 @@ class PublicationFigureGenerator:
                 extent=extent,
                 cmap=config.spectrum_colormap,
             )
-            plt.colorbar(im, ax=ax, label='Normalized Power')
+            if config.show_spectrum_colorbar and config.spectrum_colorbar_orientation != 'none':
+                self._add_colorbar(fig, ax, im, config)
 
         # Grid
         if config.show_grid:
@@ -1864,7 +2031,7 @@ class PublicationFigureGenerator:
         spectrum_data_list: Optional[List[Dict[str, np.ndarray]]] = None,
         include_curves: bool = True,
     ) -> Figure:
-        """Generate comparison grid of all offsets.
+        """Generate comparison grid of selected offsets.
 
         Args:
             output_path: Optional path to save figure
@@ -1885,8 +2052,15 @@ class PublicationFigureGenerator:
         if include_spectrum and spectrum_data_list is None:
             spectrum_data_list = self.spectrum_data_list
 
-        # Count active offsets
-        active_indices = [i for i, active in enumerate(self.active_flags) if active]
+        # Use config.grid_offset_indices if specified, otherwise use all active offsets
+        if config.grid_offset_indices:
+            # Filter to only include indices that are also active
+            active_set = set(i for i, active in enumerate(self.active_flags) if active)
+            active_indices = [i for i in config.grid_offset_indices if i in active_set]
+        else:
+            # Default: all active offsets
+            active_indices = [i for i, active in enumerate(self.active_flags) if active]
+        
         n_offsets = len(active_indices)
 
         if n_offsets == 0:
@@ -1904,10 +2078,20 @@ class PublicationFigureGenerator:
 
         self._apply_style(config)
 
+        # Determine figure size accounting for shared colorbar
+        base_width = config.figsize[0] * cols * 0.6
+        base_height = config.figsize[1] * rows * 0.6
+        
+        # Add extra space for colorbar if enabled
+        if include_spectrum and config.grid_shared_colorbar == 'vertical':
+            base_width += 0.8  # Extra width for vertical colorbar
+        elif include_spectrum and config.grid_shared_colorbar == 'horizontal':
+            base_height += 0.6  # Extra height for horizontal colorbar
+
         # Create figure
         fig, axes = plt.subplots(
             rows, cols,
-            figsize=(config.figsize[0] * cols * 0.6, config.figsize[1] * rows * 0.6),
+            figsize=(base_width, base_height),
             dpi=config.dpi,
             squeeze=False
         )
@@ -1916,6 +2100,9 @@ class PublicationFigureGenerator:
 
         # Compute smart consistent axis limits for the grid
         grid_xlim, grid_ylim = self._compute_grid_smart_limits(config, active_indices)
+
+        # Track contourf mappable for shared colorbar
+        last_contourf = None
 
         # Plot each offset
         plot_idx = 0
@@ -1938,12 +2125,13 @@ class PublicationFigureGenerator:
                             spec_power = spec_data.get('power')
 
                             if spec_freqs is not None and spec_vels is not None and spec_power is not None:
-                                ax.contourf(
+                                contourf_result = ax.contourf(
                                     spec_freqs, spec_vels, spec_power,
                                     levels=config.spectrum_levels,
                                     cmap=config.spectrum_colormap,
                                     alpha=config.spectrum_alpha * 0.7
                                 )
+                                last_contourf = contourf_result
 
                     # Plot dispersion curve if requested
                     if include_curves and len(freq) > 0:
@@ -2032,6 +2220,22 @@ class PublicationFigureGenerator:
         # Layout
         if config.tight_layout:
             fig.tight_layout()
+
+        # Add shared colorbar if enabled and spectrum is shown
+        if include_spectrum and last_contourf is not None and config.show_spectrum_colorbar:
+            if config.spectrum_colorbar_orientation == 'horizontal':
+                # Horizontal colorbar at bottom
+                fig.subplots_adjust(bottom=0.12)
+                cbar_ax = fig.add_axes([0.15, 0.04, 0.7, 0.02])
+                cbar = fig.colorbar(last_contourf, cax=cbar_ax, orientation='horizontal')
+                cbar.set_label('Power', fontsize=config.font_size - 2)
+            elif config.spectrum_colorbar_orientation == 'vertical':
+                # Vertical colorbar on right
+                fig.subplots_adjust(right=0.88)
+                cbar_ax = fig.add_axes([0.91, 0.15, 0.02, 0.7])
+                cbar = fig.colorbar(last_contourf, cax=cbar_ax, orientation='vertical')
+                cbar.set_label('Power', fontsize=config.font_size - 2)
+            # 'none' = no colorbar
 
         # Save if path provided
         if output_path:
