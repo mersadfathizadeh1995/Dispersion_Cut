@@ -525,7 +525,7 @@ class PublicationFigureGenerator:
     ) -> None:
         """Apply legend with support for outside positions.
 
-        Handles 'Outside Right', 'Outside Top', 'Outside Bottom' positions
+        Handles 'outside right', 'outside top', 'outside bottom' positions
         by using bbox_to_anchor for proper placement.
 
         Args:
@@ -533,9 +533,9 @@ class PublicationFigureGenerator:
             fig: Matplotlib Figure
             config: PlotConfig with legend settings
         """
-        pos = config.legend_position
+        pos = config.legend_position.lower()  # Normalize to lowercase
         
-        if pos == 'Outside Right':
+        if pos == 'outside right':
             ax.legend(
                 loc='center left',
                 bbox_to_anchor=(1.02, 0.5),
@@ -546,7 +546,7 @@ class PublicationFigureGenerator:
             # Adjust figure to make room for legend
             fig.tight_layout()
             fig.subplots_adjust(right=0.75)
-        elif pos == 'Outside Top':
+        elif pos == 'outside top':
             ax.legend(
                 loc='lower center',
                 bbox_to_anchor=(0.5, 1.02),
@@ -556,7 +556,7 @@ class PublicationFigureGenerator:
             )
             fig.tight_layout()
             fig.subplots_adjust(top=0.85)
-        elif pos == 'Outside Bottom':
+        elif pos == 'outside bottom':
             ax.legend(
                 loc='upper center',
                 bbox_to_anchor=(0.5, -0.15),
@@ -569,7 +569,7 @@ class PublicationFigureGenerator:
         else:
             # Standard position (inside figure)
             ax.legend(
-                loc=pos,
+                loc=config.legend_position,  # Use original case for matplotlib
                 ncol=config.legend_columns,
                 frameon=config.legend_frameon,
             )
