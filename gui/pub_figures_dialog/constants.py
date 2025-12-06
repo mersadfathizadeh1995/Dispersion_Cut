@@ -272,8 +272,3 @@ FIGURE_TYPES: Dict[str, List[Tuple[str, str, str, bool]]] = {
 }
 
 
-class PublicationFigureDialog(QtWidgets.QDialog):
-    """Dialog for configuring and generating publication-quality figures."""
-
-    def __init__(self, controller, parent: Optional[QtWidgets.QWidget] = None):
-

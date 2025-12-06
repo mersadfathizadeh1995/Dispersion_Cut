@@ -1,14 +1,15 @@
 """Offset analysis plot methods."""
-from matplotlib.figure import Figure
 
 from __future__ import annotations
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 from typing import Optional, List, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..config import PlotConfig
+
 
 class OffsetAnalysisMixin:
     """Mixin for offset analysis plots."""
@@ -84,12 +85,6 @@ class OffsetAnalysisMixin:
         # Save if path provided
         if output_path:
             self._save_figure(fig, output_path, config)
-
-        return fig
-
-    def generate_offset_with_spectrum(
-
-
 
 
     def generate_offset_with_spectrum(
@@ -256,12 +251,6 @@ class OffsetAnalysisMixin:
         if output_path:
             self._save_figure(fig, output_path, config)
 
-        return fig
-
-    def generate_offset_spectrum_only(
-
-
-
 
     def generate_offset_spectrum_only(
         self,
@@ -370,12 +359,6 @@ class OffsetAnalysisMixin:
         # Save if path provided
         if output_path:
             self._save_figure(fig, output_path, config)
-
-        return fig
-
-    def generate_offset_grid(
-
-
 
 
     def generate_offset_grid(
@@ -597,11 +580,5 @@ class OffsetAnalysisMixin:
         # Save if path provided
         if output_path:
             self._save_figure(fig, output_path, config)
-
-        return fig
-
-    def _save_figure(self, fig: Figure, output_path: str, config: PlotConfig):
-
-
 
 

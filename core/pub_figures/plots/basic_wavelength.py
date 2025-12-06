@@ -1,14 +1,15 @@
 """Basic wavelength domain plot methods."""
-from matplotlib.figure import Figure
 
 from __future__ import annotations
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 from typing import Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..config import PlotConfig
+
 
 class BasicWavelengthPlotsMixin:
     """Mixin for basic wavelength domain plots."""
@@ -39,10 +40,6 @@ class BasicWavelengthPlotsMixin:
         self._binned_wave_centers = bin_centers
         self._binned_wave_avg = avg_vals
         self._binned_wave_std = std_vals
-
-    def generate_aggregated_wavelength_plot(
-
-
 
 
     def generate_aggregated_wavelength_plot(
@@ -135,12 +132,6 @@ class BasicWavelengthPlotsMixin:
                 facecolor='white' if is_raster else 'none',
                 transparent=transparent
             )
-
-        return fig
-
-    def generate_per_offset_wavelength_plot(
-
-
 
 
     def generate_per_offset_wavelength_plot(
@@ -235,12 +226,6 @@ class BasicWavelengthPlotsMixin:
                 facecolor='white' if is_raster else 'none',
                 transparent=transparent
             )
-
-        return fig
-
-    def generate_dual_domain_plot(
-
-
 
 
     def generate_dual_domain_plot(
@@ -354,11 +339,5 @@ class BasicWavelengthPlotsMixin:
                 facecolor='white' if is_raster else 'none',
                 transparent=transparent
             )
-
-        return fig
-
-    def generate_uncertainty_plot(
-
-
 
 

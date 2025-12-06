@@ -1,14 +1,15 @@
 """Basic frequency domain plot methods."""
-from matplotlib.figure import Figure
 
 from __future__ import annotations
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..config import PlotConfig
+
 
 class BasicFrequencyPlotsMixin:
     """Mixin for basic frequency domain plots."""
@@ -149,10 +150,6 @@ class BasicFrequencyPlotsMixin:
 
         return fig
 
-    def generate_per_offset_plot(
-
-
-
 
     def generate_per_offset_plot(
         self,
@@ -247,12 +244,6 @@ class BasicFrequencyPlotsMixin:
             )
 
         return fig
-
-    # ==================== WAVELENGTH-DOMAIN PLOTS (STEP 1) ====================
-
-    def _compute_wavelength_aggregates(self, num_bins: int = 50, log_bias: float = 0.7):
-
-
 
 
     def generate_uncertainty_plot(
@@ -374,15 +365,5 @@ class BasicFrequencyPlotsMixin:
                 facecolor='white' if is_raster else 'none',
                 transparent=transparent
             )
-
-        return fig
-
-    # =========================================================================
-    # Canvas Export Methods (New)
-    # =========================================================================
-
-    def generate_canvas_frequency(
-
-
 
 

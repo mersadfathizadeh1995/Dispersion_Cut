@@ -1,18 +1,18 @@
-"""Canvas export methods for embedding in GUI."""
-from matplotlib.figure import Figure
+"""Canvas export plot methods."""
 
 from __future__ import annotations
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..config import PlotConfig
 
+
 class CanvasExportMixin:
-    """Mixin for canvas export methods."""
+    """Mixin for canvas export plots."""
 
     def generate_canvas_frequency(
         self,
@@ -143,12 +143,6 @@ class CanvasExportMixin:
         if output_path:
             self._save_figure(fig, output_path, config)
 
-        return fig
-
-    def generate_canvas_wavelength(
-
-
-
 
     def generate_canvas_wavelength(
         self,
@@ -248,12 +242,6 @@ class CanvasExportMixin:
         # Save if path provided
         if output_path:
             self._save_figure(fig, output_path, config)
-
-        return fig
-
-    def generate_canvas_dual(
-
-
 
 
     def generate_canvas_dual(
@@ -431,10 +419,4 @@ class CanvasExportMixin:
 
     # =========================================================================
     # Source Offset Analysis Methods (New)
-    # =========================================================================
-
-    def generate_offset_curve_only(
-
-
-
 
