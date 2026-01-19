@@ -133,6 +133,14 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
                 shortcut=None,
                 callback=lambda: self._on_save_passive_stats(None),
             )
+            # Add Load Spectrum action
+            if self.actions.try_get('file.load_spectrum') is None:
+                self.actions.add(
+                    id="file.load_spectrum",
+                    text="Load Spectrum…",
+                    shortcut=None,
+                    callback=lambda: self._on_load_spectrum(None),
+                )
             # Ensure Save State and Save Txt exist as well if not registered by legacy
             if self.actions.try_get('file.save_state') is None:
                 self.actions.add(id="file.save_state", text="Save State…", shortcut="Ctrl+S", callback=lambda: self._on_save_session(None))
@@ -674,7 +682,7 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
                 S['freq_custom_ticks'] = list(getattr(self, 'freq_custom_ticks'))
         except Exception:
             pass
-        # Persist spectrum visibility/alpha settings per layer
+        # Persist spectrum visibility/alpha settings per layer (NOT the actual data)
         try:
             if hasattr(self, '_layers_model') and self._layers_model is not None:
                 S['layer_spectrum_settings'] = []
@@ -684,6 +692,12 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
                         'spectrum_visible': layer.spectrum_visible,
                         'spectrum_alpha': layer.spectrum_alpha,
                     })
+        except Exception:
+            pass
+        # Save spectrum file path if one was loaded (for reload prompt)
+        try:
+            if hasattr(self, '_last_spectrum_path') and self._last_spectrum_path:
+                S['spectrum_path'] = self._last_spectrum_path
         except Exception:
             pass
         return S
@@ -721,7 +735,7 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
         except Exception:
             pass
         
-        # RESTORE spectrum state after model rebuild
+        # RESTORE spectrum state after model rebuild - first from preserved state (if any)
         self._restore_spectrum_state(spectrum_state)
         
         # Restore spectrum settings from saved state if available
@@ -738,7 +752,7 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
         
         try:
             from dc_cut.services import log
-            log.info("State applied; model rebuilt; spectrum restored; ticks/guides/limits applied")
+            log.info("State applied; model rebuilt; ticks/guides/limits applied")
         except Exception:
             pass
         # Restore tick style and custom ticks (if present)
@@ -769,6 +783,112 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
             pass
         try:
             self._apply_axis_limits(); self.fig.canvas.draw_idle()
+        except Exception:
+            pass
+
+    # --- Qt Load Spectrum (to load spectrum after state restore) ---
+    def _on_load_spectrum(self, event):
+        """Load combined spectrum NPZ file and assign to matching layers."""
+        try:
+            from matplotlib.backends import qt_compat
+            QtWidgets = qt_compat.QtWidgets
+            path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self.fig.canvas.manager.window,  # type: ignore[attr-defined]
+                "Load Combined Spectrum",
+                "",
+                "NPZ files (*.npz);;All Files (*.*)")
+            if not path:
+                return
+            
+            # Load combined spectrum and assign to layers
+            results = self.load_combined_spectrum_for_layers(path)
+            
+            if results:
+                matched = sum(1 for v in results.values() if v)
+                total = len(results)
+                QtWidgets.QMessageBox.information(
+                    self.fig.canvas.manager.window,
+                    "Load Spectrum",
+                    f"Loaded spectrum for {matched}/{total} layers from:\n{path}"
+                )
+            else:
+                QtWidgets.QMessageBox.warning(
+                    self.fig.canvas.manager.window,
+                    "Load Spectrum",
+                    f"No matching layers found in spectrum file:\n{path}"
+                )
+        except Exception as e:
+            try:
+                from matplotlib.backends import qt_compat
+                QtWidgets = qt_compat.QtWidgets
+                QtWidgets.QMessageBox.critical(
+                    self.fig.canvas.manager.window,
+                    "Load Spectrum Error",
+                    f"Failed to load spectrum:\n{str(e)}"
+                )
+            except Exception:
+                pass
+
+    def _prompt_load_spectrum(self, saved_path: str):
+        """Prompt user to load spectrum file that was associated with saved state.
+        
+        Args:
+            saved_path: Path to spectrum file that was saved in state
+        """
+        try:
+            from matplotlib.backends import qt_compat
+            QtWidgets = qt_compat.QtWidgets
+            import os
+            
+            # Check if file exists at saved path
+            file_exists = os.path.exists(saved_path)
+            
+            if file_exists:
+                # Ask user if they want to load the spectrum
+                reply = QtWidgets.QMessageBox.question(
+                    self.fig.canvas.manager.window,
+                    "Load Spectrum?",
+                    f"This state had spectrum data loaded from:\n{saved_path}\n\nWould you like to load it now?",
+                    QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                    QtWidgets.QMessageBox.StandardButton.Yes
+                )
+                
+                if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+                    results = self.load_combined_spectrum_for_layers(saved_path)
+                    if results:
+                        matched = sum(1 for v in results.values() if v)
+                        try:
+                            from dc_cut.services import log
+                            log.info(f"Loaded spectrum for {matched} layers from saved path")
+                        except Exception:
+                            pass
+            else:
+                # File not found - ask user to locate it
+                reply = QtWidgets.QMessageBox.question(
+                    self.fig.canvas.manager.window,
+                    "Spectrum File Not Found",
+                    f"The spectrum file from the saved state was not found:\n{saved_path}\n\nWould you like to locate it?",
+                    QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                    QtWidgets.QMessageBox.StandardButton.Yes
+                )
+                
+                if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+                    # Open file dialog
+                    path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                        self.fig.canvas.manager.window,
+                        "Locate Spectrum File",
+                        "",
+                        "NPZ files (*.npz);;All Files (*.*)"
+                    )
+                    if path:
+                        results = self.load_combined_spectrum_for_layers(path)
+                        if results:
+                            matched = sum(1 for v in results.values() if v)
+                            try:
+                                from dc_cut.services import log
+                                log.info(f"Loaded spectrum for {matched} layers from user-selected path")
+                            except Exception:
+                                pass
         except Exception:
             pass
 
@@ -1583,9 +1703,20 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
             except Exception:
                 pass
 
+            # Save the spectrum path for state persistence
+            if any(results.values()):
+                self._last_spectrum_path = npz_path
+
             # Render all spectra
             if any(results.values()):
                 self._render_spectrum_backgrounds()
+                
+                # Notify spectrum dock to rebuild (if exists)
+                try:
+                    if hasattr(self, 'on_spectrum_loaded') and self.on_spectrum_loaded:
+                        self.on_spectrum_loaded()
+                except Exception:
+                    pass
 
         except Exception as e:
             try:
@@ -1597,7 +1728,13 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
         return results
 
     def _render_spectrum_backgrounds(self) -> None:
-        """Render spectrum backgrounds for all layers based on their individual visibility settings."""
+        """Render spectrum background for the currently active spectrum layer.
+        
+        Only ONE spectrum is shown at a time to avoid overlapping.
+        The shown spectrum is determined by:
+        1. The first layer with spectrum_visible=True and visible line, OR
+        2. If no match, the first layer with spectrum_visible=True
+        """
         try:
             from dc_cut.services.prefs import get_pref
 
@@ -1613,16 +1750,42 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
             for layer in self._layers_model.layers:
                 if layer.spectrum_image is not None:
                     try:
-                        layer.spectrum_image.remove()
+                        if hasattr(layer.spectrum_image, 'collections'):
+                            for coll in layer.spectrum_image.collections:
+                                try:
+                                    coll.remove()
+                                except Exception:
+                                    pass
+                        else:
+                            layer.spectrum_image.remove()
                     except Exception:
                         pass
                     layer.spectrum_image = None
 
-            # Render spectra for all layers that have spectrum_visible=True
-            # Each layer's spectrum_visible flag controls its individual visibility
+            # Find which layer's spectrum to show (only one at a time)
+            # Priority: layer with spectrum_visible AND visible line
+            spectrum_to_show = None
+            
             for i, layer in enumerate(self._layers_model.layers):
                 if layer.spectrum_visible and layer.spectrum_data is not None:
-                    self._render_single_spectrum(i)
+                    # Check if this layer's line is visible
+                    try:
+                        if i < len(self.lines_freq) and self.lines_freq[i].get_visible():
+                            spectrum_to_show = i
+                            break  # Use first visible layer with spectrum
+                    except Exception:
+                        pass
+            
+            # If no layer with visible line found, use first with spectrum_visible
+            if spectrum_to_show is None:
+                for i, layer in enumerate(self._layers_model.layers):
+                    if layer.spectrum_visible and layer.spectrum_data is not None:
+                        spectrum_to_show = i
+                        break
+            
+            # Render the selected spectrum
+            if spectrum_to_show is not None:
+                self._render_single_spectrum(spectrum_to_show)
 
             # Redraw canvas
             try:

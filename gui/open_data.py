@@ -331,6 +331,16 @@ class OpenDataDialog(QtWidgets.QDialog):
         row.addWidget(btn)
         form.addRow("State file:", row)
         
+        # Spectrum file picker (optional)
+        row_spec = QtWidgets.QHBoxLayout()
+        self.state_spectrum_path = QtWidgets.QLineEdit(w)
+        self.state_spectrum_path.setPlaceholderText("(Optional) Select spectrum .npz file...")
+        btn_spec = QtWidgets.QPushButton("Browse", w)
+        btn_spec.clicked.connect(lambda: self._pick_file(self.state_spectrum_path, "Spectrum", "*.npz"))
+        row_spec.addWidget(self.state_spectrum_path, 1)
+        row_spec.addWidget(btn_spec)
+        form.addRow("Spectrum:", row_spec)
+        
         # dx optional (used for geometry when state lacks it)
         self.state_dx = QtWidgets.QDoubleSpinBox(w)
         self.state_dx.setRange(0.1, 100.0)
@@ -493,10 +503,12 @@ class OpenDataDialog(QtWidgets.QDialog):
             path = self.state_path.text().strip()
             if not path:
                 QtWidgets.QMessageBox.warning(self, "State", "Please select a .pkl file."); return
+            spectrum_path = self.state_spectrum_path.text().strip() if hasattr(self, 'state_spectrum_path') else ''
             self.result = {
                 'mode': 'state',
                 'path': path,
                 'dx': float(self.state_dx.value()),
+                'spectrum_path': spectrum_path if spectrum_path else None,
             }
         else:
             QtWidgets.QMessageBox.warning(self, "Open Data", "Unknown tab."); return

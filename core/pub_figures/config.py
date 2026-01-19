@@ -46,6 +46,11 @@ class PlotConfig:
     mark_near_field: bool = True
     near_field_style: str = 'faded'  # 'faded', 'crossed', or 'none'
     nacd_threshold: float = 1.0
+    nf_farfield_color: str = 'blue'  # Color for far-field (good) points
+    nf_nearfield_color: str = 'red'  # Color for near-field (contaminated) points
+    nf_show_spectrum: bool = False  # Show spectrum as background in NACD plots
+    nf_grid_display_mode: str = 'curves'  # 'curves', 'spectrum', 'both'
+    nf_grid_offset_indices: Optional[List[int]] = None  # None = all offsets
 
     # Axes
     show_grid: bool = True
@@ -82,3 +87,4 @@ class PlotConfig:
 
     # Grid options (for Comparison Grid)
     grid_offset_indices: Optional[List[int]] = None  # None = all offsets
+    grid_shared_colorbar: str = 'vertical'  # 'none', 'vertical', 'horizontal' for grid plots

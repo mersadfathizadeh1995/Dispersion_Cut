@@ -91,6 +91,14 @@ class MainWindow(QtWidgets.QMainWindow):
             setattr(self.controller, 'on_layers_changed', on_layers_changed)
         except Exception:
             pass
+        
+        # Set up rebuild hook for spectrum dock when spectrum is loaded
+        try:
+            def on_spectrum_loaded():
+                self.spectrum.rebuild()
+            setattr(self.controller, 'on_spectrum_loaded', on_spectrum_loaded)
+        except Exception:
+            pass
 
         self.nf_eval = NFEvalDock(self.controller, self)
         try:
@@ -210,6 +218,12 @@ class MainWindow(QtWidgets.QMainWindow):
         m_layers.addAction(act_add_spectrum)
 
         if reg is not None:
+            try:
+                a_load_spec = reg.get('file.load_spectrum'); act_load_spec = QtGui.QAction(a_load_spec.text, self);
+                if a_load_spec.shortcut: act_load_spec.setShortcut(a_load_spec.shortcut)
+                act_load_spec.triggered.connect(a_load_spec.callback)
+                m_file.addAction(act_load_spec)
+            except Exception: pass
             try:
                 a_save = reg.get('file.save_state'); act_save = QtGui.QAction(a_save.text, self);
                 if a_save.shortcut: act_save.setShortcut(a_save.shortcut)

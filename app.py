@@ -425,6 +425,27 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 try: ctrl._enforce_shell_layout()
                 except Exception: pass
             except Exception: pass
+            
+            # Load spectrum if provided
+            spectrum_path = spec.get('spectrum_path')
+            if spectrum_path:
+                try:
+                    if hasattr(ctrl, 'load_combined_spectrum_for_layers'):
+                        results = ctrl.load_combined_spectrum_for_layers(spectrum_path)
+                        if results:
+                            matched = sum(1 for v in results.values() if v)
+                            try:
+                                from dc_cut.services import log
+                                log.info(f"Loaded spectrum for {matched} layers from state")
+                            except Exception:
+                                pass
+                except Exception as e:
+                    try:
+                        from dc_cut.services import log
+                        log.warning(f"Failed to load spectrum: {e}")
+                    except Exception:
+                        pass
+            
             return True
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "State", f"Load failed:\n{e}")

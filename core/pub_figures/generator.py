@@ -6,13 +6,14 @@ import numpy as np
 from typing import List, Optional, Tuple, Dict
 from pathlib import Path
 
-from ..config import PlotConfig
-from .. import utils
-from ..plots import (
+from .config import PlotConfig
+from . import utils
+from .plots import (
     BasicFrequencyPlotsMixin,
     BasicWavelengthPlotsMixin,
     CanvasExportMixin,
     OffsetAnalysisMixin,
+    NearFieldAnalysisMixin,
 )
 
 
@@ -21,6 +22,7 @@ class PublicationFigureGenerator(
     BasicWavelengthPlotsMixin,
     CanvasExportMixin,
     OffsetAnalysisMixin,
+    NearFieldAnalysisMixin,
 ):
     """Generate publication-quality dispersion curve figures.
     

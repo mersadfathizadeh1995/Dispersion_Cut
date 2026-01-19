@@ -269,6 +269,43 @@ FIGURE_TYPES: Dict[str, List[Tuple[str, str, str, bool]]] = {
             True
         ),
     ],
+    "Near-Field Analysis": [
+        (
+            "NACD Curve - Single Offset",
+            "nacd_curve",
+            "Dispersion curve with NACD-based coloring for selected offset.\n"
+            "Blue = far-field (good), Red = near-field (contaminated).",
+            True
+        ),
+        (
+            "NACD Grid - All Offsets",
+            "nacd_grid",
+            "Multi-panel grid showing NACD-colored curves for each offset.\n"
+            "Blue = far-field, Red = near-field. Shows NF% per offset.",
+            True
+        ),
+        (
+            "NACD Combined Overlay",
+            "nacd_combined",
+            "All curves overlaid on single plot with original colors.\n"
+            "Near-field points from ALL offsets shown in red.",
+            True
+        ),
+        (
+            "NACD Comparison Plot",
+            "nacd_comparison",
+            "Overlaid NACD curves for all offsets on single plot.\n"
+            "Shows how near-field region varies with source offset.",
+            True
+        ),
+        (
+            "Near-Field Summary",
+            "nacd_summary",
+            "Summary statistics of near-field contamination across offsets.\n"
+            "Shows percentage of data in near-field per offset.",
+            True
+        ),
+    ],
 }
 
 

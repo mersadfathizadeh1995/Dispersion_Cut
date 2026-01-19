@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Optional, Dict, Any, List, Tuple
 from pathlib import Path
 from matplotlib.backends import qt_compat
@@ -10,7 +11,7 @@ QtWidgets = qt_compat.QtWidgets
 QtGui = qt_compat.QtGui
 QtCore = qt_compat.QtCore
 
-from ..pub_figures import PublicationFigureGenerator, PlotConfig
+from dc_cut.core.pub_figures import PublicationFigureGenerator, PlotConfig
 from .qt_compat import (
     _get_qt_orientation_horizontal,
     _get_qt_align_top,
@@ -46,6 +47,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         # Create tabs
         self._build_plot_type_tab()
         self._build_styling_tab()
+        self._build_nearfield_tab()  # New Near-Field settings tab
         self._build_axes_tab()
         self._build_output_tab()
 
@@ -276,7 +278,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
                 })
 
                 # For individual offset types, add offset sub-items instead of checkboxes
-                if internal_key in ['offset_curve_only', 'offset_with_spectrum', 'offset_spectrum_only']:
+                if internal_key in ['offset_curve_only', 'offset_with_spectrum', 'offset_spectrum_only', 'nacd_curve']:
                     # These types have offset children - make parent non-checkable
                     fig_item.setFlags(fig_item.flags() & ~_get_qt_item_is_user_checkable())
                     
@@ -287,9 +289,12 @@ class PublicationFigureDialog(QtWidgets.QDialog):
                     elif internal_key == 'offset_with_spectrum':
                         label_suffix = "[curve + spectrum]"
                         filter_with_spectrum = True  # Only offsets with spectrum
-                    else:  # offset_spectrum_only
+                    elif internal_key == 'offset_spectrum_only':
                         label_suffix = "[spectrum]"
                         filter_with_spectrum = True  # Only offsets with spectrum
+                    elif internal_key == 'nacd_curve':
+                        label_suffix = "[NACD]"
+                        filter_with_spectrum = False  # Show all offsets
                     
                     # Add sub-items for each offset
                     offset_added = False
@@ -859,6 +864,168 @@ class PublicationFigureDialog(QtWidgets.QDialog):
                 self.font_family_combo.setCurrentIndex(idx)
             self.font_size_spin.setValue(p['font_size'])
 
+    def _build_nearfield_tab(self):
+        """Build the Near-Field settings tab."""
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(tab)
+
+        # NACD Threshold settings
+        threshold_group = QtWidgets.QGroupBox("NACD Threshold")
+        threshold_layout = QtWidgets.QFormLayout(threshold_group)
+
+        self.nacd_threshold_spin = QtWidgets.QDoubleSpinBox()
+        self.nacd_threshold_spin.setRange(0.1, 10.0)
+        self.nacd_threshold_spin.setValue(1.0)
+        self.nacd_threshold_spin.setSingleStep(0.1)
+        self.nacd_threshold_spin.setDecimals(2)
+        threshold_layout.addRow("NACD threshold:", self.nacd_threshold_spin)
+
+        threshold_note = QtWidgets.QLabel(
+            "NACD = Aperture / Wavelength\n"
+            "Points with NACD < threshold are near-field contaminated."
+        )
+        threshold_note.setStyleSheet("color: gray; font-style: italic;")
+        threshold_note.setWordWrap(True)
+        threshold_layout.addRow("", threshold_note)
+
+        layout.addWidget(threshold_group)
+
+        # Near-Field Colors
+        color_group = QtWidgets.QGroupBox("Near-Field Colors")
+        color_layout = QtWidgets.QFormLayout(color_group)
+
+        self.nf_farfield_color_combo = QtWidgets.QComboBox()
+        self.nf_farfield_color_combo.addItems(['blue', 'green', 'cyan', 'black', 'gray'])
+        color_layout.addRow("Far-field color (good):", self.nf_farfield_color_combo)
+
+        self.nf_nearfield_color_combo = QtWidgets.QComboBox()
+        self.nf_nearfield_color_combo.addItems(['red', 'orange', 'magenta', 'brown', 'gray'])
+        color_layout.addRow("Near-field color (contaminated):", self.nf_nearfield_color_combo)
+
+        layout.addWidget(color_group)
+
+        # Spectrum Background Options
+        spectrum_group = QtWidgets.QGroupBox("Spectrum Background")
+        spectrum_layout = QtWidgets.QVBoxLayout(spectrum_group)
+
+        self.nacd_show_spectrum_check = QtWidgets.QCheckBox("Show spectrum as background")
+        self.nacd_show_spectrum_check.setChecked(False)
+        spectrum_layout.addWidget(self.nacd_show_spectrum_check)
+
+        spectrum_note = QtWidgets.QLabel(
+            "When enabled, the power spectrum will be shown as background\n"
+            "behind the NACD-colored dispersion curves (requires loaded spectrum data)."
+        )
+        spectrum_note.setStyleSheet("color: gray; font-style: italic;")
+        spectrum_note.setWordWrap(True)
+        spectrum_layout.addWidget(spectrum_note)
+
+        layout.addWidget(spectrum_group)
+
+        # NACD Grid Offset Selection
+        offset_group = QtWidgets.QGroupBox("NACD Grid Offset Selection")
+        offset_layout = QtWidgets.QVBoxLayout(offset_group)
+
+        # Selection buttons
+        buttons_layout = QtWidgets.QHBoxLayout()
+        self.nacd_select_all_btn = QtWidgets.QPushButton("Select All")
+        self.nacd_deselect_all_btn = QtWidgets.QPushButton("Deselect All")
+        self.nacd_select_all_btn.clicked.connect(self._select_all_nacd_offsets)
+        self.nacd_deselect_all_btn.clicked.connect(self._deselect_all_nacd_offsets)
+        buttons_layout.addWidget(self.nacd_select_all_btn)
+        buttons_layout.addWidget(self.nacd_deselect_all_btn)
+        buttons_layout.addStretch()
+        offset_layout.addLayout(buttons_layout)
+
+        # List widget with checkboxes for offset selection
+        self.nacd_offset_list = QtWidgets.QListWidget()
+        self.nacd_offset_list.setMinimumHeight(150)
+        self.nacd_offset_list.setMaximumHeight(200)
+        self.nacd_offset_list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
+        offset_layout.addWidget(self.nacd_offset_list)
+
+        # Populate the NACD offset list
+        self._populate_nacd_offset_list()
+
+        layout.addWidget(offset_group)
+
+        # Grid Layout Options
+        grid_layout_group = QtWidgets.QGroupBox("Grid Layout")
+        grid_layout_layout = QtWidgets.QHBoxLayout(grid_layout_group)
+
+        grid_layout_layout.addWidget(QtWidgets.QLabel("Rows:"))
+        self.nacd_grid_rows_spin = QtWidgets.QSpinBox()
+        self.nacd_grid_rows_spin.setRange(0, 10)
+        self.nacd_grid_rows_spin.setValue(0)
+        self.nacd_grid_rows_spin.setSpecialValueText("Auto")
+        grid_layout_layout.addWidget(self.nacd_grid_rows_spin)
+
+        grid_layout_layout.addWidget(QtWidgets.QLabel("Cols:"))
+        self.nacd_grid_cols_spin = QtWidgets.QSpinBox()
+        self.nacd_grid_cols_spin.setRange(0, 10)
+        self.nacd_grid_cols_spin.setValue(0)
+        self.nacd_grid_cols_spin.setSpecialValueText("Auto")
+        grid_layout_layout.addWidget(self.nacd_grid_cols_spin)
+
+        grid_layout_layout.addStretch()
+
+        layout.addWidget(grid_layout_group)
+
+        layout.addStretch()
+        self.tabs.addTab(tab, "Near-Field")
+
+    def _populate_nacd_offset_list(self):
+        """Populate the NACD offset selection list with checkboxes."""
+        self.nacd_offset_list.clear()
+
+        available_offsets = self._get_available_offsets()
+
+        if not available_offsets:
+            item = QtWidgets.QListWidgetItem("No offsets loaded")
+            item.setFlags(item.flags() & ~_get_qt_item_is_user_checkable())
+            self.nacd_offset_list.addItem(item)
+            return
+
+        for offset_info in available_offsets:
+            display_text = offset_info['name']
+            if offset_info.get('has_spectrum'):
+                display_text += " [+spectrum]"
+
+            item = QtWidgets.QListWidgetItem(display_text)
+            item.setFlags(item.flags() | _get_qt_item_is_user_checkable())
+            item.setCheckState(_get_qt_checked())  # Default: all selected
+            item.setData(_get_qt_user_role(), offset_info)
+            self.nacd_offset_list.addItem(item)
+
+    def _select_all_nacd_offsets(self):
+        """Select all offsets in the NACD grid list."""
+        for i in range(self.nacd_offset_list.count()):
+            item = self.nacd_offset_list.item(i)
+            if item.flags() & _get_qt_item_is_user_checkable():
+                item.setCheckState(_get_qt_checked())
+
+    def _deselect_all_nacd_offsets(self):
+        """Deselect all offsets in the NACD grid list."""
+        for i in range(self.nacd_offset_list.count()):
+            item = self.nacd_offset_list.item(i)
+            if item.flags() & _get_qt_item_is_user_checkable():
+                item.setCheckState(_get_qt_unchecked())
+
+    def _get_selected_nacd_offsets(self) -> List[int]:
+        """Get list of selected offset indices for NACD grid export.
+
+        Returns:
+            List of offset indices that are checked
+        """
+        selected_indices = []
+        for i in range(self.nacd_offset_list.count()):
+            item = self.nacd_offset_list.item(i)
+            if item.checkState() == _get_qt_checked():
+                offset_info = item.data(_get_qt_user_role())
+                if offset_info and 'index' in offset_info:
+                    selected_indices.append(offset_info['index'])
+        return selected_indices
+
     def _build_axes_tab(self):
         """Build the Axes configuration tab."""
         tab = QtWidgets.QWidget()
@@ -1126,18 +1293,6 @@ class PublicationFigureDialog(QtWidgets.QDialog):
 
     def _gather_config(self) -> PlotConfig:
         """Gather configuration from UI widgets."""
-        # Determine format
-        if self.format_pdf.isChecked():
-            output_format = 'pdf'
-        elif self.format_png.isChecked():
-            output_format = 'png'
-        elif self.format_svg.isChecked():
-            output_format = 'svg'
-        elif self.format_pptx.isChecked():
-            output_format = 'pptx'
-        else:
-            output_format = 'eps'
-
         # Determine limits
         xlim = None
         if not self.xlim_auto_check.isChecked():
@@ -1153,6 +1308,12 @@ class PublicationFigureDialog(QtWidgets.QDialog):
 
         # Get title (empty string = None)
         title = self.title_edit.text().strip() or None
+
+        # Get NACD display mode from checkbox
+        nf_show_spectrum = False
+        if hasattr(self, 'nacd_show_spectrum_check'):
+            nf_show_spectrum = self.nacd_show_spectrum_check.isChecked()
+        nf_grid_display_mode = 'both' if nf_show_spectrum else 'curves'
 
         config = PlotConfig(
             figsize=(self.figsize_width_spin.value(), self.figsize_height_spin.value()),
@@ -1173,14 +1334,21 @@ class PublicationFigureDialog(QtWidgets.QDialog):
             near_field_alpha=self.nf_alpha_spin.value(),
             mark_near_field=self.mark_near_field_check.isChecked(),
             near_field_style=self.nf_style_combo.currentText(),
-            nacd_threshold=self.nacd_thresh_spin.value(),
+            # Use NACD threshold from Near-Field tab if available, else from Styling tab
+            nacd_threshold=self.nacd_threshold_spin.value() if hasattr(self, 'nacd_threshold_spin') else self.nacd_thresh_spin.value(),
+            # Near-field color options from Near-Field tab
+            nf_farfield_color=self.nf_farfield_color_combo.currentText() if hasattr(self, 'nf_farfield_color_combo') else 'blue',
+            nf_nearfield_color=self.nf_nearfield_color_combo.currentText() if hasattr(self, 'nf_nearfield_color_combo') else 'red',
+            nf_show_spectrum=nf_show_spectrum,
+            nf_grid_display_mode=nf_grid_display_mode,
+            nf_grid_offset_indices=self._get_selected_nacd_offsets() if hasattr(self, 'nacd_offset_list') else None,
             show_grid=self.show_grid_check.isChecked(),
             grid_alpha=self.grid_alpha_spin.value(),
             xlabel=self.xlabel_edit.text(),
             ylabel=self.ylabel_edit.text(),
             xlim=xlim,
             ylim=ylim,
-            output_format=output_format,
+            output_format=self._get_output_format(),
             tight_layout=self.tight_layout_check.isChecked(),
             # Spectrum options
             spectrum_colormap=self.spectrum_colormap_combo.currentText(),
@@ -1193,13 +1361,25 @@ class PublicationFigureDialog(QtWidgets.QDialog):
             peak_color=self.peak_color_combo.currentText(),
             peak_outline=self.peak_outline_check.isChecked(),
             peak_line_width=self.peak_line_width_spin.value(),
-            # Curve overlay style
             curve_overlay_style=self._get_curve_overlay_style(),
             # Grid options
             grid_offset_indices=self._get_selected_grid_offsets() or None,
         )
 
         return config
+
+    def _get_output_format(self) -> str:
+        """Get output format from radio buttons."""
+        if self.format_pdf.isChecked():
+            return 'pdf'
+        elif self.format_png.isChecked():
+            return 'png'
+        elif self.format_svg.isChecked():
+            return 'svg'
+        elif self.format_pptx.isChecked():
+            return 'pptx'
+        else:
+            return 'eps'
 
     def _get_colorbar_orientation(self) -> str:
         """Get colorbar orientation from combo box."""
@@ -1431,7 +1611,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
                 
                 # Temporarily override format to PNG
                 original_format = config.output_format
-                temp_config = PlotConfig(**{**config.__dict__, 'output_format': 'png'})
+                temp_config = PlotConfig(**{**asdict(config), 'output_format': 'png'})
                 
                 self._generate_single_plot(generator, plot_type, str(temp_png), temp_config, offset_info)
                 
@@ -1507,7 +1687,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
             temp_png = Path(temp_dir) / "figure.png"
             
             # Generate figure to temp PNG
-            temp_config = PlotConfig(**{**config.__dict__, 'output_format': 'png'})
+            temp_config = PlotConfig(**{**asdict(config), 'output_format': 'png'})
             self._generate_single_plot(generator, plot_type, str(temp_png), temp_config, offset_info)
             
             # Add slide with image and title
@@ -1638,5 +1818,35 @@ class PublicationFigureDialog(QtWidgets.QDialog):
                 spectrum_data_list=spectrum_data_list,
                 include_curves=include_curves
             )
+        # Near-field analysis types
+        elif plot_type == 'nacd_curve':
+            # Single offset NACD curve - use offset_info if provided
+            if offset_info and offset_info.get('offset_index') is not None:
+                generator.generate_nacd_curve(
+                    output_path=output_path,
+                    config=config,
+                    offset_index=offset_info['offset_index']
+                )
+            else:
+                # Use first active offset
+                generator.generate_nacd_curve(output_path=output_path, config=config)
+        elif plot_type == 'nacd_grid':
+            # Use NACD grid rows/cols from Near-Field tab
+            rows_widget = getattr(self, 'nacd_grid_rows_spin', None)
+            cols_widget = getattr(self, 'nacd_grid_cols_spin', None)
+            rows = rows_widget.value() if rows_widget else None
+            cols = cols_widget.value() if cols_widget else None
+            generator.generate_nacd_grid(
+                output_path=output_path,
+                config=config,
+                rows=rows,
+                cols=cols
+            )
+        elif plot_type == 'nacd_combined':
+            generator.generate_nacd_combined(output_path=output_path, config=config)
+        elif plot_type == 'nacd_comparison':
+            generator.generate_nacd_comparison(output_path=output_path, config=config)
+        elif plot_type == 'nacd_summary':
+            generator.generate_nacd_summary(output_path=output_path, config=config)
         else:
             raise NotImplementedError(f"Plot type '{plot_type}' is not yet implemented.")
