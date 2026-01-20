@@ -201,6 +201,199 @@ class ColumnMapperDialog(QtWidgets.QDialog):
         return mapping
 
 
+class CircularArrayTab(QtWidgets.QWidget):
+    """Tab for Circular Array HRFK workflow input.
+    
+    Allows loading raw .max files for new workflow or existing .pkl to continue.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        # Site name
+        site_layout = QtWidgets.QHBoxLayout()
+        site_layout.addWidget(QtWidgets.QLabel("Site Name:"))
+        self.site_name = QtWidgets.QLineEdit()
+        self.site_name.setPlaceholderText("e.g., Redfield")
+        site_layout.addWidget(self.site_name, 1)
+        layout.addLayout(site_layout)
+
+        # Output directory (REQUIRED)
+        output_group = QtWidgets.QGroupBox("Output Directory (Required)")
+        output_layout = QtWidgets.QHBoxLayout(output_group)
+        self.output_dir = QtWidgets.QLineEdit()
+        self.output_dir.setPlaceholderText("Select output directory for all workflow files...")
+        self.btn_output = QtWidgets.QPushButton("Browse...")
+        self.btn_output.clicked.connect(self._browse_output)
+        output_layout.addWidget(self.output_dir, 1)
+        output_layout.addWidget(self.btn_output)
+        layout.addWidget(output_group)
+
+        # Array files group
+        arrays_group = QtWidgets.QGroupBox("Array Data Files (.max)")
+        arrays_layout = QtWidgets.QFormLayout(arrays_group)
+
+        self.path_500m = QtWidgets.QLineEdit()
+        self.path_500m.setPlaceholderText("(Optional) 500m array .max file")
+        self.btn_500m = QtWidgets.QPushButton("Browse...")
+        self.btn_500m.clicked.connect(lambda: self._browse_file(self.path_500m))
+        row_500m = QtWidgets.QHBoxLayout()
+        row_500m.addWidget(self.path_500m, 1)
+        row_500m.addWidget(self.btn_500m)
+        arrays_layout.addRow("500m Array:", row_500m)
+
+        self.path_200m = QtWidgets.QLineEdit()
+        self.path_200m.setPlaceholderText("(Optional) 200m array .max file")
+        self.btn_200m = QtWidgets.QPushButton("Browse...")
+        self.btn_200m.clicked.connect(lambda: self._browse_file(self.path_200m))
+        row_200m = QtWidgets.QHBoxLayout()
+        row_200m.addWidget(self.path_200m, 1)
+        row_200m.addWidget(self.btn_200m)
+        arrays_layout.addRow("200m Array:", row_200m)
+
+        self.path_50m = QtWidgets.QLineEdit()
+        self.path_50m.setPlaceholderText("(Optional) 50m array .max file")
+        self.btn_50m = QtWidgets.QPushButton("Browse...")
+        self.btn_50m.clicked.connect(lambda: self._browse_file(self.path_50m))
+        row_50m = QtWidgets.QHBoxLayout()
+        row_50m.addWidget(self.path_50m, 1)
+        row_50m.addWidget(self.btn_50m)
+        arrays_layout.addRow("50m Array:", row_50m)
+
+        layout.addWidget(arrays_group)
+
+        # K-limits file
+        klimits_group = QtWidgets.QGroupBox("K-Limits File (3 rows: diameter, kmin, kmax)")
+        klimits_layout = QtWidgets.QHBoxLayout(klimits_group)
+        self.klimits_path = QtWidgets.QLineEdit()
+        self.klimits_path.setPlaceholderText("Select k-limits .mat or .csv file...")
+        self.btn_klimits = QtWidgets.QPushButton("Browse...")
+        self.btn_klimits.clicked.connect(lambda: self._browse_file(self.klimits_path, "K-Limits (*.mat *.csv)"))
+        klimits_layout.addWidget(self.klimits_path, 1)
+        klimits_layout.addWidget(self.btn_klimits)
+        layout.addWidget(klimits_group)
+
+        # Wave type and velocity cutoff
+        params_layout = QtWidgets.QHBoxLayout()
+
+        wave_group = QtWidgets.QGroupBox("Wave Type")
+        wave_layout = QtWidgets.QVBoxLayout(wave_group)
+        self.wave_vertical = QtWidgets.QRadioButton("Rayleigh Vertical")
+        self.wave_radial = QtWidgets.QRadioButton("Rayleigh Radial")
+        self.wave_transverse = QtWidgets.QRadioButton("Love Transverse")
+        self.wave_vertical.setChecked(True)
+        wave_layout.addWidget(self.wave_vertical)
+        wave_layout.addWidget(self.wave_radial)
+        wave_layout.addWidget(self.wave_transverse)
+        params_layout.addWidget(wave_group)
+
+        vel_group = QtWidgets.QGroupBox("Velocity Cutoff")
+        vel_layout = QtWidgets.QFormLayout(vel_group)
+        self.vel_cutoff = QtWidgets.QDoubleSpinBox()
+        self.vel_cutoff.setRange(100, 20000)
+        self.vel_cutoff.setValue(6000)
+        self.vel_cutoff.setSuffix(" m/s")
+        vel_layout.addRow("Max velocity:", self.vel_cutoff)
+        params_layout.addWidget(vel_group)
+
+        layout.addLayout(params_layout)
+
+        # Continue from existing session
+        continue_group = QtWidgets.QGroupBox("Or Continue Existing Session")
+        continue_layout = QtWidgets.QHBoxLayout(continue_group)
+        self.continue_path = QtWidgets.QLineEdit()
+        self.continue_path.setPlaceholderText("Load existing .pkl to continue workflow...")
+        self.btn_continue = QtWidgets.QPushButton("Browse...")
+        self.btn_continue.clicked.connect(lambda: self._browse_file(self.continue_path, "State Files (*.pkl)"))
+        continue_layout.addWidget(self.continue_path, 1)
+        continue_layout.addWidget(self.btn_continue)
+        layout.addWidget(continue_group)
+
+        layout.addStretch()
+
+    def _browse_output(self):
+        path = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Output Directory")
+        if path:
+            self.output_dir.setText(path)
+
+    def _browse_file(self, line_edit, filter_str="Max Files (*.max)"):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select File", "", f"{filter_str};;All Files (*.*)"
+        )
+        if path:
+            line_edit.setText(path)
+
+    def _get_wave_type(self) -> str:
+        if self.wave_radial.isChecked():
+            return "Rayleigh_Radial"
+        elif self.wave_transverse.isChecked():
+            return "Love_Transverse"
+        return "Rayleigh_Vertical"
+
+    def get_config(self) -> dict:
+        """Get configuration dict for loading."""
+        if self.continue_path.text().strip():
+            return {
+                'mode': 'circular_array_continue',
+                'session_path': self.continue_path.text().strip(),
+            }
+
+        return {
+            'mode': 'circular_array_new',
+            'site_name': self.site_name.text().strip(),
+            'output_dir': self.output_dir.text().strip(),
+            'wave_type': self._get_wave_type(),
+            'velocity_cutoff': float(self.vel_cutoff.value()),
+            'arrays': {
+                500: self.path_500m.text().strip() or None,
+                200: self.path_200m.text().strip() or None,
+                50: self.path_50m.text().strip() or None,
+            },
+            'klimits_path': self.klimits_path.text().strip(),
+        }
+
+    def validate(self) -> tuple:
+        """Validate inputs. Returns (is_valid, error_message)."""
+        if self.continue_path.text().strip():
+            import os
+            if not os.path.exists(self.continue_path.text().strip()):
+                return False, "Session file does not exist"
+            return True, ""
+
+        if not self.site_name.text().strip():
+            return False, "Site name is required"
+        if not self.output_dir.text().strip():
+            return False, "Output directory is required"
+
+        import os
+        if not os.path.isdir(self.output_dir.text().strip()):
+            return False, "Output directory does not exist"
+
+        arrays = [
+            self.path_500m.text().strip(),
+            self.path_200m.text().strip(),
+            self.path_50m.text().strip(),
+        ]
+        if not any(arrays):
+            return False, "At least one array .max file is required"
+
+        for path in arrays:
+            if path and not os.path.exists(path):
+                return False, f"File not found: {path}"
+
+        if not self.klimits_path.text().strip():
+            return False, "K-limits file is required"
+        if not os.path.exists(self.klimits_path.text().strip()):
+            return False, f"K-limits file not found: {self.klimits_path.text()}"
+
+        return True, ""
+
+
 class OpenDataDialog(QtWidgets.QDialog):
     """Clean Qt dialog to open data from various sources.
 
@@ -208,6 +401,7 @@ class OpenDataDialog(QtWidgets.QDialog):
       - Active Data: MATLAB (.mat) or CSV (.csv) via nested tabs
       - Passive Data: FK (.max + k-limits) or Passive CSV (freq, slow)
       - State: Session restore (.pkl)
+      - Circular Array: Multi-stage HRFK workflow
 
     Use the `result` property after exec() returns Accepted.
     """
@@ -228,10 +422,12 @@ class OpenDataDialog(QtWidgets.QDialog):
         self.tab_active  = self._make_tab_active()    # Contains nested MATLAB/CSV tabs
         self.tab_passive = self._make_tab_passive()   # Passive FK data
         self.tab_state   = self._make_tab_state()     # Session restore
+        self.tab_circular = CircularArrayTab(self)    # Circular Array workflow
 
         self.tabs.addTab(self.tab_active,  "Active Data")
         self.tabs.addTab(self.tab_passive, "Passive Data")
         self.tabs.addTab(self.tab_state,   "State")
+        self.tabs.addTab(self.tab_circular, "Circular Array")
 
         btns = QtWidgets.QDialogButtonBox(self)
         try:
@@ -510,6 +706,12 @@ class OpenDataDialog(QtWidgets.QDialog):
                 'dx': float(self.state_dx.value()),
                 'spectrum_path': spectrum_path if spectrum_path else None,
             }
+        elif idx == 3:  # Circular Array
+            is_valid, error_msg = self.tab_circular.validate()
+            if not is_valid:
+                QtWidgets.QMessageBox.warning(self, "Circular Array", error_msg)
+                return
+            self.result = self.tab_circular.get_config()
         else:
             QtWidgets.QMessageBox.warning(self, "Open Data", "Unknown tab."); return
         

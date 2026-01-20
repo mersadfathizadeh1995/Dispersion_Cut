@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from typing import Optional
 
+import numpy as np
+
 from matplotlib.backends import qt_compat
 QtWidgets = qt_compat.QtWidgets
 QtGui     = qt_compat.QtGui
@@ -160,6 +162,147 @@ class MainWindow(QtWidgets.QMainWindow):
             pass
         v.addWidget(canvas, 1)
         self.setCentralWidget(container)
+        
+        self._setup_circular_array_dock()
+
+    def _setup_circular_array_dock(self):
+        """Add workflow dock if controller has circular array orchestrator."""
+        orchestrator = getattr(self.controller, '_circular_array_orchestrator', None)
+        if orchestrator is None:
+            return
+        
+        try:
+            from dc_cut.circular_array.workflow_dock import CircularArrayWorkflowDock
+            
+            if hasattr(self, 'workflow_dock') and self.workflow_dock is not None:
+                return
+            
+            self.workflow_dock = CircularArrayWorkflowDock(
+                orchestrator,
+                self,
+                on_save_next=self._on_workflow_save_next,
+                on_back=self._on_workflow_back,
+                on_complete=self._on_workflow_complete,
+            )
+            
+            try:
+                left_area = QtCore.Qt.LeftDockWidgetArea
+            except AttributeError:
+                left_area = QtCore.Qt.DockWidgetArea.LeftDockWidgetArea
+            
+            self.addDockWidget(left_area, self.workflow_dock)
+            self.controller._workflow_dock = self.workflow_dock
+            
+        except Exception as e:
+            try:
+                from dc_cut.services import log
+                log.warning(f"Failed to setup circular array dock: {e}")
+            except Exception:
+                pass
+
+    def _on_workflow_save_next(self):
+        """Handle Save & Next from workflow dock."""
+        orchestrator = getattr(self.controller, '_circular_array_orchestrator', None)
+        if orchestrator is None:
+            return
+        
+        try:
+            if orchestrator.is_last_stage:
+                pkl_path, mat_path = orchestrator.complete_stage()
+                dinver_path = orchestrator.export_final_dinver()
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Workflow Complete!",
+                    f"Final exports saved:\n• {pkl_path.name}\n• {mat_path.name}\n• {dinver_path.name}",
+                )
+            else:
+                pkl_path, mat_path = orchestrator.complete_stage()
+                orchestrator.advance_stage()
+                if hasattr(self, 'workflow_dock'):
+                    self.workflow_dock.refresh()
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Stage Complete",
+                    f"Saved:\n• {pkl_path.name}\n• {mat_path.name}\n\nAdvanced to {orchestrator.current_stage.display_name} stage.",
+                )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Save failed:\n{e}")
+
+    def _on_workflow_back(self):
+        """Handle Back from workflow dock."""
+        orchestrator = getattr(self.controller, '_circular_array_orchestrator', None)
+        if orchestrator is None:
+            return
+        
+        prev_path = orchestrator.get_previous_stage_path()
+        if prev_path is None or not prev_path.exists():
+            QtWidgets.QMessageBox.warning(
+                self, "Go Back", "No previous stage state file found."
+            )
+            return
+        
+        try:
+            yes_btn = QtWidgets.QMessageBox.StandardButton.Yes
+            no_btn = QtWidgets.QMessageBox.StandardButton.No
+        except AttributeError:
+            yes_btn = QtWidgets.QMessageBox.Yes
+            no_btn = QtWidgets.QMessageBox.No
+        
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Go Back",
+            f"Load previous stage from:\n{prev_path.name}?\n\nCurrent unsaved changes will be lost.",
+            yes_btn | no_btn,
+        )
+        if reply == yes_btn:
+            try:
+                from dc_cut.io.state import load_session
+                S = load_session(str(prev_path))
+                
+                if 'velocity_arrays' in S and 'frequency_arrays' in S:
+                    self.controller.velocity_arrays = [np.array(v) for v in S['velocity_arrays']]
+                    self.controller.frequency_arrays = [np.array(f) for f in S['frequency_arrays']]
+                    self.controller.wavelength_arrays = [np.array(w) for w in S['wavelength_arrays']]
+                    self.controller.offset_labels = S.get('set_leg', [f"Layer {i+1}" for i in range(len(S['velocity_arrays']))])
+                    
+                    if hasattr(self.controller, 'layers_model') and self.controller.layers_model is not None:
+                        self.controller.layers_model.clear()
+                        for i, (v, f, w) in enumerate(zip(
+                            self.controller.velocity_arrays,
+                            self.controller.frequency_arrays,
+                            self.controller.wavelength_arrays
+                        )):
+                            label = self.controller.offset_labels[i] if i < len(self.controller.offset_labels) else f"Layer {i+1}"
+                            self.controller.layers_model.add_layer(v, f, w, label)
+                    
+                    self.controller._replot()
+                
+                if 'workflow_config' in S:
+                    orchestrator.config = orchestrator.config.__class__.from_dict(S['workflow_config'])
+                    if hasattr(orchestrator, '_workflow_dock') and orchestrator._workflow_dock:
+                        orchestrator._workflow_dock._update_display()
+                
+                QtWidgets.QMessageBox.information(
+                    self, "Go Back", f"Loaded previous stage from:\n{prev_path.name}"
+                )
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, "Error", f"Failed to load previous stage:\n{e}")
+
+    def _on_workflow_complete(self):
+        """Handle Complete Stage from workflow dock."""
+        orchestrator = getattr(self.controller, '_circular_array_orchestrator', None)
+        if orchestrator is None:
+            return
+        
+        try:
+            pkl_path, mat_path = orchestrator.complete_stage()
+            QtWidgets.QMessageBox.information(
+                self,
+                "Stage Complete",
+                f"Saved:\n• {pkl_path.name}\n• {mat_path.name}",
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Save failed:\n{e}")
 
     def _build_menu(self):
         bar = self.menuBar(); m_file = bar.addMenu("&File"); m_view = bar.addMenu("&View"); m_edit = bar.addMenu("&Edit"); m_layers = bar.addMenu("&Layers"); m_tools= bar.addMenu("&Tools"); m_help = bar.addMenu("&Help")

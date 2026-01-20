@@ -424,19 +424,33 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
         try: self.fig.canvas.draw_idle()
         except Exception: pass
 
+    def _clear_k_guides(self):
+        """Remove all k-guide artists from the plot."""
+        for artist in getattr(self, '_k_guides_artists', []):
+            try:
+                artist.remove()
+            except Exception:
+                pass
+        self._k_guides_artists = []
+        self._k_guides_legend = None
+
     # Override: k-guides via core helper
     def _draw_k_guides(self):  # type: ignore[override]
         if not bool(getattr(self, 'show_k_guides', False)):
-            try: self._clear_k_guides()
-            except Exception: pass
+            self._clear_k_guides()
             return
+        
+        self._clear_k_guides()
+        
+        multi_klimits = getattr(self, '_multi_klimits', [])
+        if multi_klimits:
+            self._draw_multi_k_guides(multi_klimits)
+            return
+        
         kmin = getattr(self, 'kmin', None); kmax = getattr(self, 'kmax', None)
         if kmin is None or kmax is None or kmin <= 0 or kmax <= 0:
-            try: self._clear_k_guides()
-            except Exception: pass
             return
-        try: self._clear_k_guides()
-        except Exception: pass
+        
         try:
             col_ap, col_ap2, col_al, col_al2 = '#7b2cbf', '#ff7f0e', '#d62728', '#2ca02c'
             fmin, fmax = self.ax_freq.get_xlim()
@@ -477,6 +491,60 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
             ]
         except Exception:
             pass
+
+    def _draw_multi_k_guides(self, klimits_list):
+        """Draw k-limits curves for multiple arrays.
+        
+        Each array draws 4 lines: aperture (λ), aperture (λ/2), aliasing (λ), aliasing (λ/2).
+        Same color per array, solid for λ, dashed for λ/2.
+        """
+        import numpy as _np
+        import matplotlib.lines as mlines
+        
+        color_palettes = {
+            500: '#9b59b6',
+            200: '#e67e22',
+            50: '#3498db',
+        }
+        default_color = '#7b2cbf'
+        
+        fmin, fmax = self.ax_freq.get_xlim()
+        fmin = max(1e-3, fmin); fmax = max(fmax, fmin * 1.1)
+        f_curve = _np.logspace(_np.log10(fmin), _np.log10(fmax), 300)
+        y0, y1 = self.ax_wave.get_ylim()
+        
+        legend_items = []
+        
+        for diameter, kmin, kmax in klimits_list:
+            base_color = color_palettes.get(diameter, default_color)
+            
+            v_ap = (2*_np.pi*f_curve)/float(kmin)
+            v_ap2 = (2*_np.pi*f_curve)/(float(kmin)*2)
+            v_al = (2*_np.pi*f_curve)/float(kmax)
+            v_al2 = (2*_np.pi*f_curve)/(float(kmax)*2)
+            
+            w_ap = 2*_np.pi/float(kmin)
+            w_ap2 = 2*_np.pi/(float(kmin)*2)
+            w_al = 2*_np.pi/float(kmax)
+            w_al2 = 2*_np.pi/(float(kmax)*2)
+            
+            ln_ap = self.ax_freq.semilogx(f_curve, v_ap, '-', color=base_color, lw=1.5, label='_kguide')[0]
+            ln_ap2 = self.ax_freq.semilogx(f_curve, v_ap2, '--', color=base_color, lw=1.2, label='_kguide')[0]
+            ln_al = self.ax_freq.semilogx(f_curve, v_al, '-', color=base_color, lw=1.5, alpha=0.6, label='_kguide')[0]
+            ln_al2 = self.ax_freq.semilogx(f_curve, v_al2, '--', color=base_color, lw=1.2, alpha=0.6, label='_kguide')[0]
+            
+            ln_w_ap = self.ax_wave.semilogx([w_ap, w_ap], [y0, y1], '-', color=base_color, lw=1.5, label='_kguide')[0]
+            ln_w_ap2 = self.ax_wave.semilogx([w_ap2, w_ap2], [y0, y1], '--', color=base_color, lw=1.2, label='_kguide')[0]
+            ln_w_al = self.ax_wave.semilogx([w_al, w_al], [y0, y1], '-', color=base_color, lw=1.5, alpha=0.6, label='_kguide')[0]
+            ln_w_al2 = self.ax_wave.semilogx([w_al2, w_al2], [y0, y1], '--', color=base_color, lw=1.2, alpha=0.6, label='_kguide')[0]
+            
+            self._k_guides_artists.extend([ln_ap, ln_ap2, ln_al, ln_al2, ln_w_ap, ln_w_ap2, ln_w_al, ln_w_al2])
+            legend_items.append(mlines.Line2D([], [], color=base_color, linestyle='-', lw=1.5, label=f'{diameter}m Aperture'))
+            legend_items.append(mlines.Line2D([], [], color=base_color, linestyle='--', lw=1.2, label=f'{diameter}m Aperture (λ/2)'))
+            legend_items.append(mlines.Line2D([], [], color=base_color, linestyle='-', lw=1.5, alpha=0.6, label=f'{diameter}m Aliasing'))
+            legend_items.append(mlines.Line2D([], [], color=base_color, linestyle='--', lw=1.2, alpha=0.6, label=f'{diameter}m Aliasing (λ/2)'))
+        
+        self._k_guides_legend = legend_items
 
     # Full commit override: Add-Data/Add-Layer Save
     def _on_save_added_data(self, event):  # type: ignore[override]

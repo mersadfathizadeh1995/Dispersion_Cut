@@ -91,6 +91,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
             ok = self._load_csv(spec)
         elif mode == 'state':
             ok = self._load_state(spec)
+        elif mode in ('circular_array_new', 'circular_array_continue'):
+            ok = self._load_circular_array(spec)
         else:
             QtWidgets.QMessageBox.warning(self, "Open", f"Unsupported mode: {mode}")
         # Close the launcher if we successfully opened a controller in the shell
@@ -451,6 +453,162 @@ class LauncherWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(self, "State", f"Load failed:\n{e}")
             return False
 
+    def _load_circular_array(self, spec: dict) -> bool:
+        """Load circular array data and launch workflow."""
+        try:
+            from pathlib import Path
+            from dc_cut.circular_array.config import WorkflowConfig, ArrayConfig, Stage
+            from dc_cut.circular_array.io import load_multi_array_klimits
+            from dc_cut.circular_array.orchestrator import CircularArrayOrchestrator
+            from dc_cut.io.max import parse_max_file
+            from dc_cut.io.state import load_session
+            from dc_cut.core.controller import InteractiveRemovalWithLayers
+            from dc_cut.gui.main_window import show_shell
+            import numpy as np
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Circular Array", f"Imports failed:\n{e}")
+            return False
+
+        mode = spec.get('mode')
+
+        try:
+            if mode == 'circular_array_continue':
+                session_path = Path(spec['session_path'])
+                S = load_session(str(session_path))
+
+                if 'workflow_config' not in S:
+                    QtWidgets.QMessageBox.critical(
+                        self, "Circular Array",
+                        "Not a valid Circular Array session file.\nMissing workflow_config."
+                    )
+                    return False
+
+                config_data = S['workflow_config']
+                config = WorkflowConfig.from_dict(config_data)
+
+                v = S["velocity_arrays"]
+                f = S["frequency_arrays"]
+                w = S["wavelength_arrays"]
+                set_leg = S.get("set_leg", [f"Array {i+1}" for i in range(len(v))])
+
+            else:
+                klimits_path = Path(spec['klimits_path'])
+                klimits = load_multi_array_klimits(klimits_path)
+
+                arrays_config = []
+                velocity_arrays = []
+                frequency_arrays = []
+                wavelength_arrays = []
+                set_leg = []
+                vcut = float(spec.get('velocity_cutoff', 6000.0))
+
+                klimits_idx_map = {500: 2, 200: 1, 50: 0}
+                for diameter in [500, 200, 50]:
+                    path_str = spec['arrays'].get(diameter)
+                    if not path_str:
+                        continue
+
+                    max_path = Path(path_str)
+                    matlab_idx = klimits_idx_map.get(diameter, 0)
+                    kmin, kmax = klimits.get(diameter, klimits.get(matlab_idx, (0.001, 0.1)))
+
+                    arrays_config.append(ArrayConfig(
+                        diameter=diameter,
+                        max_file_path=max_path,
+                        kmin=kmin,
+                        kmax=kmax,
+                    ))
+
+                    df = parse_max_file(str(max_path))
+                    if df.empty:
+                        QtWidgets.QMessageBox.warning(
+                            self, "Circular Array",
+                            f"Warning: {max_path.name} parsed but empty, skipping."
+                        )
+                        continue
+
+                    freq = df['freq'].to_numpy(float)
+                    slow = df['slow'].to_numpy(float)
+
+                    m0 = np.isfinite(freq) & np.isfinite(slow) & (freq > 0) & (slow > 0)
+                    freq = freq[m0]
+                    slow = slow[m0]
+                    vel = 1000.0 / slow
+                    wave = np.where(freq > 0, vel / freq, np.nan)
+
+                    m1 = np.isfinite(vel) & np.isfinite(wave) & (vel >= 0) & (vel <= vcut)
+                    freq = freq[m1]
+                    vel = vel[m1]
+                    wave = wave[m1]
+
+                    if vel.size == 0:
+                        QtWidgets.QMessageBox.warning(
+                            self, "Circular Array",
+                            f"Warning: {max_path.name} has no points after filtering."
+                        )
+                        continue
+
+                    velocity_arrays.append(vel)
+                    frequency_arrays.append(freq)
+                    wavelength_arrays.append(wave)
+                    set_leg.append(f"Passive {diameter}m")
+
+                if not velocity_arrays:
+                    QtWidgets.QMessageBox.critical(
+                        self, "Circular Array", "No valid data loaded from any array."
+                    )
+                    return False
+
+                config = WorkflowConfig(
+                    site_name=spec['site_name'],
+                    output_dir=Path(spec['output_dir']),
+                    arrays=arrays_config,
+                    wave_type=spec.get('wave_type', 'Rayleigh_Vertical'),
+                    velocity_cutoff=vcut,
+                    current_stage=Stage.INITIAL,
+                )
+
+                v = velocity_arrays
+                f = frequency_arrays
+                w = wavelength_arrays
+
+            ctrl = InteractiveRemovalWithLayers(
+                v, f, w,
+                set_leg=set_leg,
+                legacy_controls=False,
+            )
+
+            if config.arrays:
+                first_arr = config.arrays[0]
+                ctrl.kmin = first_arr.kmin
+                ctrl.kmax = first_arr.kmax
+                ctrl.show_k_guides = True
+                ctrl._draw_k_guides()
+                ctrl._update_legend()
+
+            orchestrator = CircularArrayOrchestrator(config, ctrl)
+            ctrl._circular_array_config = config
+            ctrl._circular_array_orchestrator = orchestrator
+
+            app_qt = show_shell(ctrl)
+            try:
+                app_qt._masw_shell_window.adopt_controller(ctrl)
+                ctrl.suppress_mpl_controls_for_shell()
+                try:
+                    ctrl._enforce_shell_layout()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+            return True
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QtWidgets.QMessageBox.critical(self, "Circular Array", f"Load failed:\n{e}")
+            return False
+
 
 def open_data_directly():
     """Show file dialog directly and load data without launcher window."""
@@ -481,6 +639,8 @@ def open_data_directly():
         ok = launcher._load_csv(spec)
     elif mode == 'state':
         ok = launcher._load_state(spec)
+    elif mode in ('circular_array_new', 'circular_array_continue'):
+        ok = launcher._load_circular_array(spec)
     else:
         QtWidgets.QMessageBox.warning(None, "Error", f"Unsupported mode: {mode}")
 
