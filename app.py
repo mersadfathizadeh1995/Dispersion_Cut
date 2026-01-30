@@ -476,20 +476,93 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 session_path = Path(spec['session_path'])
                 S = load_session(str(session_path))
 
-                if 'workflow_config' not in S:
-                    QtWidgets.QMessageBox.critical(
-                        self, "Circular Array",
-                        "Not a valid Circular Array session file.\nMissing workflow_config."
-                    )
-                    return False
-
-                config_data = S['workflow_config']
-                config = WorkflowConfig.from_dict(config_data)
-
                 v = S["velocity_arrays"]
                 f = S["frequency_arrays"]
                 w = S["wavelength_arrays"]
                 set_leg = S.get("set_leg", [f"Array {i+1}" for i in range(len(v))])
+
+                if 'workflow_config' not in S:
+                    # Legacy session file - reconstruct minimal config from available data
+                    # Filter out average labels to get actual array labels
+                    array_labels = [lbl for lbl in set_leg if 'Average' not in lbl]
+                    
+                    # Ask user if they want to load klimits from file
+                    reply = QtWidgets.QMessageBox.question(
+                        self, "Circular Array - Legacy Session",
+                        "This session file doesn't have array configuration.\n\n"
+                        "Would you like to load k-limits from a file (.mat or .csv)?\n\n"
+                        "Click 'Yes' to select a klimits file, or 'No' to use saved values.",
+                        QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                        QtWidgets.QMessageBox.Yes
+                    )
+                    
+                    klimits = None
+                    if reply == QtWidgets.QMessageBox.Yes:
+                        klimits_file, _ = QtWidgets.QFileDialog.getOpenFileName(
+                            self, "Select K-Limits File",
+                            str(session_path.parent),
+                            "K-Limits Files (*.mat *.csv);;MAT Files (*.mat);;CSV Files (*.csv);;All Files (*)"
+                        )
+                        if klimits_file:
+                            try:
+                                klimits = load_multi_array_klimits(Path(klimits_file))
+                            except Exception as e:
+                                QtWidgets.QMessageBox.warning(
+                                    self, "Circular Array",
+                                    f"Failed to load klimits file:\n{e}\n\nUsing saved values instead."
+                                )
+                    
+                    # Use saved kmin/kmax as fallback
+                    kmin_default = float(S.get('kmin', 0.001))
+                    kmax_default = float(S.get('kmax', 0.1))
+                    
+                    # Mapping from diameter to MATLAB row index (50m=row0, 200m=row1, 500m=row2)
+                    klimits_idx_map = {50: 0, 200: 1, 500: 2}
+                    
+                    arrays_config = []
+                    for i, label in enumerate(array_labels):
+                        # Try to extract diameter from label like "Passive 500m" or "500m"
+                        diameter = 50  # default
+                        for d in [500, 200, 50]:
+                            if str(d) in label:
+                                diameter = d
+                                break
+                        
+                        # Get k-limits from loaded file or use defaults
+                        if klimits is not None:
+                            matlab_idx = klimits_idx_map.get(diameter, i)
+                            kmin, kmax = klimits.get(diameter, klimits.get(matlab_idx, (kmin_default, kmax_default)))
+                        else:
+                            kmin, kmax = kmin_default, kmax_default
+                        
+                        arrays_config.append(ArrayConfig(
+                            diameter=diameter,
+                            max_file_path=Path(f"legacy_array_{i}.max"),
+                            kmin=kmin,
+                            kmax=kmax,
+                        ))
+                    
+                    config = WorkflowConfig(
+                        site_name=session_path.stem,
+                        output_dir=session_path.parent,
+                        arrays=arrays_config,
+                        wave_type='Rayleigh_Vertical',
+                        velocity_cutoff=6000.0,
+                        current_stage=Stage.INITIAL,
+                    )
+                    
+                    # Show summary of loaded config
+                    config_summary = "\n".join([
+                        f"  {arr.diameter}m: kmin={arr.kmin:.6f}, kmax={arr.kmax:.6f}"
+                        for arr in arrays_config
+                    ])
+                    QtWidgets.QMessageBox.information(
+                        self, "Circular Array",
+                        f"Loaded legacy session file.\n\nArray configurations:\n{config_summary}"
+                    )
+                else:
+                    config_data = S['workflow_config']
+                    config = WorkflowConfig.from_dict(config_data)
 
             else:
                 klimits_path = Path(spec['klimits_path'])

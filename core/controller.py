@@ -162,6 +162,28 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
                 self.actions.add(id="view.freq", text="Phase-vel vs Freq", callback=lambda: self._apply_view_mode('freq_only'), shortcut=None)
             if self.actions.try_get('view.wave') is None:
                 self.actions.add(id="view.wave", text="Wave vs Vel", callback=lambda: self._apply_view_mode('wave_only'), shortcut=None)
+            # Line delete tool actions
+            if self.actions.try_get('edit.line_delete') is None:
+                self.actions.add(id="edit.line_delete", text="Line Delete Tool", callback=lambda: self._activate_line_tool(), shortcut=None)
+            if self.actions.try_get('edit.box_select') is None:
+                self.actions.add(id="edit.box_select", text="Box Select Tool", callback=lambda: self._activate_box_tool(), shortcut=None)
+        except Exception:
+            pass
+        
+        # Initialize line selector tools for both axes
+        self._current_tool = 'box'  # 'box' or 'line'
+        self._line_selector_freq = None
+        self._line_selector_wave = None
+        try:
+            from dc_cut.core.line_tool import LineSelector
+            self._line_selector_freq = LineSelector(
+                self.ax_freq,
+                on_select=lambda x1, y1, x2, y2, side: self._on_line_delete_freq(x1, y1, x2, y2, side),
+            )
+            self._line_selector_wave = LineSelector(
+                self.ax_wave,
+                on_select=lambda x1, y1, x2, y2, side: self._on_line_delete_wave(x1, y1, x2, y2, side),
+            )
         except Exception:
             pass
 
@@ -519,14 +541,14 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
             base_color = color_palettes.get(diameter, default_color)
             
             v_ap = (2*_np.pi*f_curve)/float(kmin)
-            v_ap2 = (2*_np.pi*f_curve)/(float(kmin)*2)
+            v_ap2 = (2*_np.pi*f_curve)/(float(kmin)/2.0)
             v_al = (2*_np.pi*f_curve)/float(kmax)
-            v_al2 = (2*_np.pi*f_curve)/(float(kmax)*2)
+            v_al2 = (2*_np.pi*f_curve)/(float(kmax)/2.0)
             
             w_ap = 2*_np.pi/float(kmin)
-            w_ap2 = 2*_np.pi/(float(kmin)*2)
+            w_ap2 = 2*_np.pi/(float(kmin)/2.0)
             w_al = 2*_np.pi/float(kmax)
-            w_al2 = 2*_np.pi/(float(kmax)*2)
+            w_al2 = 2*_np.pi/(float(kmax)/2.0)
             
             ln_ap = self.ax_freq.semilogx(f_curve, v_ap, '-', color=base_color, lw=1.5, label='_kguide')[0]
             ln_ap2 = self.ax_freq.semilogx(f_curve, v_ap2, '--', color=base_color, lw=1.2, label='_kguide')[0]
@@ -1324,6 +1346,188 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):  # type: ignore[misc
                     cb()
             except Exception:
                 pass
+
+    # --- Line Delete Tool Methods ---
+    def _activate_line_tool(self) -> None:
+        """Switch to line delete tool mode."""
+        self._current_tool = 'line'
+        # Disable box selectors
+        try:
+            self.rect_selector_freq.set_active(False)
+            self.rect_selector_wave.set_active(False)
+        except Exception:
+            pass
+        # Activate line selectors
+        try:
+            if self._line_selector_freq is not None:
+                self._line_selector_freq.activate()
+            if self._line_selector_wave is not None:
+                self._line_selector_wave.activate()
+        except Exception:
+            pass
+        try:
+            from dc_cut.services import log
+            log.info("Line delete tool activated")
+        except Exception:
+            pass
+
+    def _activate_box_tool(self) -> None:
+        """Switch back to box select tool mode."""
+        self._current_tool = 'box'
+        # Deactivate line selectors
+        try:
+            if self._line_selector_freq is not None:
+                self._line_selector_freq.deactivate()
+            if self._line_selector_wave is not None:
+                self._line_selector_wave.deactivate()
+        except Exception:
+            pass
+        # Re-enable box selectors
+        try:
+            self.rect_selector_freq.set_active(True)
+            self.rect_selector_wave.set_active(True)
+        except Exception:
+            pass
+        try:
+            from dc_cut.services import log
+            log.info("Box select tool activated")
+        except Exception:
+            pass
+
+    def _on_line_delete_freq(self, x1: float, y1: float, x2: float, y2: float, side: str) -> None:
+        """Handle line delete on frequency plot."""
+        self._perform_line_delete(x1, y1, x2, y2, side, use_freq=True)
+
+    def _on_line_delete_wave(self, x1: float, y1: float, x2: float, y2: float, side: str) -> None:
+        """Handle line delete on wavelength plot."""
+        self._perform_line_delete(x1, y1, x2, y2, side, use_freq=False)
+
+    def _perform_line_delete(
+        self,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        side: str,
+        use_freq: bool = True,
+    ) -> None:
+        """Perform line-based deletion on all visible layers.
+        
+        Parameters
+        ----------
+        x1, y1, x2, y2 : float
+            Two points defining the line.
+        side : str
+            'above' or 'below' - which side to delete.
+        use_freq : bool
+            If True, line is in (frequency, velocity) space.
+            If False, line is in (wavelength, velocity) space.
+        """
+        try:
+            from dc_cut.core.history import push_undo
+            push_undo(self)
+        except Exception:
+            try:
+                self._save_state()
+            except Exception:
+                pass
+        
+        try:
+            import numpy as _np
+            from dc_cut.core.selection import remove_on_side_of_line
+            
+            for i in range(len(self.velocity_arrays)):
+                v = _np.asarray(self.velocity_arrays[i])
+                f = _np.asarray(self.frequency_arrays[i])
+                w = _np.asarray(self.wavelength_arrays[i])
+                
+                # Check visibility on appropriate plot
+                visible = False
+                if use_freq:
+                    try:
+                        visible = self.lines_freq[i].get_visible()
+                    except Exception:
+                        visible = True
+                else:
+                    try:
+                        visible = self.lines_wave[i].get_visible()
+                    except Exception:
+                        visible = True
+                
+                if not visible:
+                    continue
+                
+                # For wavelength plot, we need to convert line coordinates
+                if use_freq:
+                    # Line is in (freq, vel) space
+                    v, f, w = remove_on_side_of_line(v, f, w, x1, y1, x2, y2, side=side)
+                else:
+                    # Line is in (wave, vel) space - use wavelength as x
+                    from dc_cut.core.selection import line_mask
+                    mask = line_mask(w, v, x1, y1, x2, y2, side=side)
+                    keep = ~mask
+                    v, f, w = v[keep], f[keep], w[keep]
+                
+                self.velocity_arrays[i] = v
+                self.frequency_arrays[i] = f
+                self.wavelength_arrays[i] = w
+            
+            # Update plot lines
+            try:
+                from dc_cut.core.plot import set_line_xy
+                for i in range(len(self.velocity_arrays)):
+                    set_line_xy(self.lines_freq[i], self.frequency_arrays[i], self.velocity_arrays[i])
+                    set_line_xy(self.lines_wave[i], self.wavelength_arrays[i], self.velocity_arrays[i])
+            except Exception:
+                pass
+            
+            # Re-average if enabled
+            if self.show_average or self.show_average_wave:
+                self._update_average_line()
+        except Exception as e:
+            try:
+                from dc_cut.services import log
+                log.error(f"Line delete failed: {e}")
+            except Exception:
+                pass
+        finally:
+            # Preserve and restore spectrum state around model rebuild
+            spectrum_state = self._preserve_spectrum_state()
+            try:
+                self._clear_all_spectrum_backgrounds()
+            except Exception:
+                pass
+            
+            try:
+                from dc_cut.core.model import LayersModel
+                labels = list(self.offset_labels[:len(self.velocity_arrays)])
+                self._layers_model = LayersModel.from_arrays(
+                    self.velocity_arrays,
+                    self.frequency_arrays,
+                    self.wavelength_arrays,
+                    labels,
+                )
+            except Exception:
+                pass
+            
+            self._restore_spectrum_state(spectrum_state)
+            
+            try:
+                self._apply_axis_limits()
+                self.fig.canvas.draw_idle()
+            except Exception:
+                pass
+            
+            try:
+                cb = getattr(self, 'on_layers_changed', None)
+                if cb:
+                    cb()
+            except Exception:
+                pass
+
+    def get_current_tool(self) -> str:
+        """Return the currently active tool name ('box' or 'line')."""
+        return getattr(self, '_current_tool', 'box')
 
     def _on_add_data(self, event):  # type: ignore[override]
         """Qt-first Add Data flow using core.add_mode.

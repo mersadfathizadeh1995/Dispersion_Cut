@@ -1,17 +1,33 @@
+"""Edit module - re-exports selection functions for backward compatibility.
+
+All editing functions are now consolidated in core/selection.py.
+This module re-exports them for any code that imports from edit.py.
+"""
 from __future__ import annotations
 
-import numpy as np
-from typing import Tuple
+from dc_cut.core.selection import (
+    remove_in_freq_box,
+    remove_in_wave_box,
+    remove_above_line,
+    remove_below_line,
+    remove_on_side_of_line,
+    line_mask,
+    side_of_line,
+    box_mask_freq,
+    box_mask_wave,
+)
 
-
-def remove_in_freq_box(v: np.ndarray, f: np.ndarray, w: np.ndarray, *, xmin: float, xmax: float, ymin: float, ymax: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    keep = ~(((f >= xmin) & (f <= xmax)) & ((v >= ymin) & (v <= ymax)))
-    return v[keep], f[keep], w[keep]
-
-
-def remove_in_wave_box(v: np.ndarray, f: np.ndarray, w: np.ndarray, *, xmin: float, xmax: float, ymin: float, ymax: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    keep = ~(((w >= xmin) & (w <= xmax)) & ((v >= ymin) & (v <= ymax)))
-    return v[keep], f[keep], w[keep]
+__all__ = [
+    "remove_in_freq_box",
+    "remove_in_wave_box",
+    "remove_above_line",
+    "remove_below_line",
+    "remove_on_side_of_line",
+    "line_mask",
+    "side_of_line",
+    "box_mask_freq",
+    "box_mask_wave",
+]
 
 
 
