@@ -283,10 +283,13 @@ class CircularArrayTab(QtWidgets.QWidget):
 
         wave_group = QtWidgets.QGroupBox("Wave Type")
         wave_layout = QtWidgets.QVBoxLayout(wave_group)
+        self.wave_combined = QtWidgets.QRadioButton("Rayleigh (Combined)")
         self.wave_vertical = QtWidgets.QRadioButton("Rayleigh Vertical")
         self.wave_radial = QtWidgets.QRadioButton("Rayleigh Radial")
         self.wave_transverse = QtWidgets.QRadioButton("Love Transverse")
-        self.wave_vertical.setChecked(True)
+        self.wave_combined.setChecked(True)  # Default to combined for RTBF
+        self.wave_combined.setToolTip("For RTBF files: show all Rayleigh waves (both vertical and radial components)")
+        wave_layout.addWidget(self.wave_combined)
         wave_layout.addWidget(self.wave_vertical)
         wave_layout.addWidget(self.wave_radial)
         wave_layout.addWidget(self.wave_transverse)
@@ -329,7 +332,9 @@ class CircularArrayTab(QtWidgets.QWidget):
             line_edit.setText(path)
 
     def _get_wave_type(self) -> str:
-        if self.wave_radial.isChecked():
+        if self.wave_combined.isChecked():
+            return "Rayleigh_Combined"
+        elif self.wave_radial.isChecked():
             return "Rayleigh_Radial"
         elif self.wave_transverse.isChecked():
             return "Love_Transverse"
@@ -582,6 +587,14 @@ class OpenDataDialog(QtWidgets.QDialog):
         # vcut
         self.pass_vcut = QtWidgets.QDoubleSpinBox(w); self.pass_vcut.setRange(10.0, 10000.0); self.pass_vcut.setValue(2000.0); self.pass_vcut.setDecimals(1)
         form.addRow("VelPlotCutoff (m/s):", self.pass_vcut)
+        # Wave type filter (for RTBF format .max files)
+        self.pass_wave_type = QtWidgets.QComboBox(w)
+        self.pass_wave_type.addItems(["All Waves", "Rayleigh (Combined)", "Rayleigh Vertical", "Rayleigh Radial", "Love (Transverse)"])
+        self.pass_wave_type.setToolTip("For RTBF format .max files: filter by wave polarization type.\n" +
+                                        "Rayleigh (Combined) shows all Rayleigh waves (vertical + radial).\n" +
+                                        "Love (Transverse) filters for Love waves.\n" +
+                                        "Standard FK format files ignore this setting.")
+        form.addRow("Wave Type:", self.pass_wave_type)
         return w
 
     # ---- helpers ----
@@ -617,16 +630,48 @@ class OpenDataDialog(QtWidgets.QDialog):
     def _show_max_column_mapper(self, max_path: str):
         """Parse .max file and show column mapping dialog."""
         try:
+            import re
             import numpy as np
-            # Read .max file (simple space-separated format)
-            data = np.loadtxt(max_path)
             
-            if data.ndim == 1:
-                # Single row - reshape
-                data = data.reshape(1, -1)
+            # Read file and filter valid data lines (same approach as parse_max_file)
+            data_lines = []
+            with open(max_path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    stripped = line.strip()
+                    # Skip empty lines and comments
+                    if not stripped or stripped.startswith('#'):
+                        continue
+                    # Data lines start with a number (timestamp or time value)
+                    if stripped[0].isdigit():
+                        data_lines.append(stripped)
             
-            # Split into columns
-            columns_data = [data[:, i] for i in range(data.shape[1])]
+            if not data_lines:
+                raise ValueError("File contains no data rows")
+            
+            # Parse the data lines
+            rows = []
+            for line in data_lines:
+                parts = re.split(r'[\s\|]+', line)
+                if len(parts) >= 2:  # At least 2 columns
+                    rows.append(parts)
+            
+            if not rows:
+                raise ValueError("No valid data rows found")
+            
+            # Determine number of columns from first row
+            n_cols = len(rows[0])
+            
+            # Convert each column to numpy array for the mapper
+            columns_data = []
+            for col_idx in range(n_cols):
+                col_values = [row[col_idx] if col_idx < len(row) else '' for row in rows]
+                # Try to convert to numeric
+                try:
+                    numeric_vals = [float(v) for v in col_values]
+                    columns_data.append(np.array(numeric_vals))
+                except (ValueError, TypeError):
+                    # Keep as string array (e.g., polarization column)
+                    columns_data.append(np.array(col_values))
             
             # Show mapper dialog
             dlg = ColumnMapperDialog(columns_data, self)
@@ -686,6 +731,16 @@ class OpenDataDialog(QtWidgets.QDialog):
                 except Exception:
                     QtWidgets.QMessageBox.warning(self, "Passive Data", "Time must be a number (seconds). Use blank for auto."); return
             
+            # Get wave_type from combo box
+            # Maps GUI text to parser wave_type ('Rayleigh', 'Love', or 'all')
+            wave_type_text = self.pass_wave_type.currentText()
+            if "Rayleigh" in wave_type_text:
+                wave_type = 'Rayleigh'
+            elif "Love" in wave_type_text:
+                wave_type = 'Love'
+            else:
+                wave_type = 'all'
+            
             self.result = {
                 'mode': 'passive',
                 'max_path': max_path,
@@ -694,6 +749,7 @@ class OpenDataDialog(QtWidgets.QDialog):
                 'vcut': float(self.pass_vcut.value()),
                 'time': time,
                 'column_mapping': self.column_mapping,  # Include column mapping for .max files
+                'wave_type': wave_type,  # Wave type filter for RTBF format
             }
         elif idx == 2:  # State
             path = self.state_path.text().strip()

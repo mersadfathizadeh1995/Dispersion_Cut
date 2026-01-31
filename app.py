@@ -114,6 +114,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         data_path = spec['max_path']; kl_path = spec['kl_path']
         dx = float(spec['dx']); vcut = float(spec['vcut']); time = spec.get('time')
         column_mapping = spec.get('column_mapping')  # Get column mapping if provided
+        wave_type = spec.get('wave_type', 'all')  # Wave type filter for RTBF files
         
         # k-limits
         try:
@@ -132,30 +133,30 @@ class LauncherWindow(QtWidgets.QMainWindow):
             if extd == ".max":
                 # Use column mapping if provided
                 if column_mapping:
-                    # Load raw data using numpy
-                    data = np.loadtxt(data_path)
-                    if data.ndim == 1:
-                        data = data.reshape(1, -1)
+                    # Load raw data using pandas (handles mixed text/numeric)
+                    raw = pd.read_csv(data_path, comment='#', header=None, sep=r"[\s\|]+", engine='python')
+                    if raw.empty:
+                        raise ValueError("File parsed but contains no data rows")
                     
                     # Extract columns based on mapping
                     if "Frequency (Hz)" not in column_mapping:
                         raise ValueError("Frequency column not mapped")
                     freq_col = column_mapping["Frequency (Hz)"]
-                    freq = data[:, freq_col]
+                    freq = pd.to_numeric(raw.iloc[:, freq_col], errors='coerce').to_numpy()
                     
                     # Handle velocity or slowness
                     if "Velocity (m/s)" in column_mapping:
                         vel_col = column_mapping["Velocity (m/s)"]
-                        vel = data[:, vel_col]
+                        vel = pd.to_numeric(raw.iloc[:, vel_col], errors='coerce').to_numpy()
                         slow = 1000.0 / vel  # Convert m/s to s/km: slow(s/km) = 1000 / vel(m/s)
                     elif "Slowness (s/km)" in column_mapping:
                         slow_col = column_mapping["Slowness (s/km)"]
-                        slow = data[:, slow_col]  # Already in s/km (Geopsy standard)
+                        slow = pd.to_numeric(raw.iloc[:, slow_col], errors='coerce').to_numpy()
                     else:
                         raise ValueError("Neither Velocity nor Slowness column mapped")
                 else:
-                    # Fallback to legacy parser
-                    df = parse_max_file(data_path)
+                    # Use auto-detecting parser (handles both standard FK and RTBF formats)
+                    df = parse_max_file(data_path, wave_type=wave_type)
                     if df.empty:
                         QtWidgets.QMessageBox.critical(self, "Passive", ".max parsed but empty.")
                         return False
@@ -574,6 +575,17 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 wavelength_arrays = []
                 set_leg = []
                 vcut = float(spec.get('velocity_cutoff', 6000.0))
+                
+                # Get wave_type from spec (for RTBF format filtering)
+                # Map workflow wave_type to parser wave_type
+                # Rayleigh_Combined, Rayleigh_Vertical, Rayleigh_Radial all filter for 'Rayleigh'
+                workflow_wave_type = spec.get('wave_type', 'Rayleigh_Combined')
+                if 'Rayleigh' in workflow_wave_type:
+                    parser_wave_type = 'Rayleigh'
+                elif 'Love' in workflow_wave_type:
+                    parser_wave_type = 'Love'
+                else:
+                    parser_wave_type = 'all'
 
                 klimits_idx_map = {500: 2, 200: 1, 50: 0}
                 for diameter in [500, 200, 50]:
@@ -592,7 +604,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
                         kmax=kmax,
                     ))
 
-                    df = parse_max_file(str(max_path))
+                    # Use updated parser with wave_type for RTBF format support
+                    df = parse_max_file(str(max_path), wave_type=parser_wave_type)
                     if df.empty:
                         QtWidgets.QMessageBox.warning(
                             self, "Circular Array",
