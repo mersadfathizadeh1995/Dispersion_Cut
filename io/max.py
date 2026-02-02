@@ -38,17 +38,23 @@ def load_klimits(*, mat_path: Optional[str] = None, csv_path: Optional[str] = No
     raise ValueError("Provide mat_path or csv_path for klimits")
 
 
-def parse_max_file(path: str, *, wave_type: WaveType = 'all') -> pd.DataFrame:
+# Max file format types
+MaxFormat = Literal['auto', 'fk', 'rtbf', 'lds']
+
+
+def parse_max_file(
+    path: str,
+    *,
+    wave_type: WaveType = 'all',
+    data_start_line: int = 0,
+    format_hint: MaxFormat = 'auto'
+) -> pd.DataFrame:
     """Parse Geopsy FK .max with robustness to separators and header lines.
     
-    Supports both standard 7-column FK format and 9-column RTBF format.
-    
-    Standard FK format (7 columns):
-        time, freq, slow, az, phi, semblance, beampow
-    
-    RTBF format (9 columns):
-        abs_time, frequency, polarization, slowness, azimuth, ellipticity, noise, power, valid
-        (polarization column contains text: 'Rayleigh' or 'Love')
+    Supports three formats:
+    - Standard FK (7 columns): time, freq, slow, az, phi, semblance, beampow
+    - RTBF (9 columns + text): time, freq, polarization, slow, az, ell, noise, power, valid
+    - LDS/ARDS (9 columns numeric): time, freq, slow, az, ell, Rz/N, Rh/N, power, valid
     
     Parameters
     ----------
@@ -57,7 +63,13 @@ def parse_max_file(path: str, *, wave_type: WaveType = 'all') -> pd.DataFrame:
     wave_type : {'Rayleigh', 'Love', 'all'}, default 'all'
         For RTBF format files only: filter by wave polarization type.
         'all' keeps both Rayleigh and Love waves.
-        For standard FK files, this parameter is ignored.
+        For standard FK and LDS files, this parameter is ignored.
+    data_start_line : int, default 0
+        Number of data lines to skip after finding data section.
+        Use this to manually skip header rows in the data section.
+    format_hint : {'auto', 'fk', 'rtbf', 'lds'}, default 'auto'
+        Force a specific format instead of auto-detection.
+        'auto' detects format based on column count and content.
     
     Returns
     -------
@@ -83,6 +95,13 @@ def parse_max_file(path: str, *, wave_type: WaveType = 'all') -> pd.DataFrame:
     if not data_lines:
         return pd.DataFrame(columns=['time', 'freq', 'slow', 'az'])
     
+    # Apply data_start_line skip
+    if data_start_line > 0:
+        data_lines = data_lines[data_start_line:]
+    
+    if not data_lines:
+        return pd.DataFrame(columns=['time', 'freq', 'slow', 'az'])
+    
     # Parse the data lines
     rows = []
     for line in data_lines:
@@ -97,20 +116,26 @@ def parse_max_file(path: str, *, wave_type: WaveType = 'all') -> pd.DataFrame:
     sample_row = rows[0]
     n_cols = len(sample_row)
     
-    # Detect RTBF format: 9 columns and column 2 contains text (polarization)
-    is_rtbf = False
-    if n_cols >= 9:
-        # Check if column 2 is non-numeric (contains 'Rayleigh' or 'Love')
+    # Detect format
+    detected_format = 'fk'  # default
+    if format_hint != 'auto':
+        detected_format = format_hint
+    elif n_cols >= 9:
+        # Check if column 2 is non-numeric (contains 'Rayleigh' or 'Love') -> RTBF
         try:
             float(sample_row[2])
+            # Column 2 is numeric -> LDS format (9 numeric cols)
+            detected_format = 'lds'
         except ValueError:
             # Column 2 is not numeric -> RTBF format
-            is_rtbf = True
+            detected_format = 'rtbf'
+    elif n_cols >= 7:
+        detected_format = 'fk'
     
     # Create DataFrame
     raw = pd.DataFrame(rows)
     
-    if is_rtbf:
+    if detected_format == 'rtbf':
         # RTBF format: abs_time(0), freq(1), polarization(2), slow(3), az(4), 
         #              ellipticity(5), noise(6), power(7), valid(8)
         # Note: RTBF slowness is in s/m, we convert to s/km for consistency
@@ -193,11 +218,31 @@ def parse_max_file(path: str, *, wave_type: WaveType = 'all') -> pd.DataFrame:
                 )
             )
         
+    elif detected_format == 'lds':
+        # LDS/ARDS format (9 numeric columns):
+        # abs_time(0), freq(1), slow(2), az(3), ell(4), Rz/N(5), Rh/N(6), power(7), valid(8)
+        # Note: LDS slowness is in s/m, we convert to s/km for consistency
+        col_names = ['time', 'freq', 'slow', 'az', 'ellipticity', 
+                     'rz_n', 'rh_n', 'power', 'valid']
+        col_names = col_names[:raw.shape[1]]
+        raw.columns = col_names
+        
+        df = raw.copy()
+        
+        # Convert all to numeric
+        for c in col_names:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+        
+        # Convert LDS slowness from s/m to s/km
+        if 'slow' in df.columns:
+            df['slow'] = df['slow'] * 1000.0
+        
+        df = df.dropna(subset=['freq', 'slow'])
+    
     else:
         # Standard FK format (7 columns)
         # Slowness is already in s/km
         col_names = ['time', 'freq', 'slow', 'az', 'phi', 'semblance', 'beampow']
-        # Only use as many column names as we have columns
         col_names = col_names[:raw.shape[1]]
         raw.columns = col_names
         

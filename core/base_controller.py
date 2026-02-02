@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import matplotlib
@@ -8,6 +8,7 @@ matplotlib.use("QtAgg")  # prefer Qt
 import matplotlib.pyplot as plt
 from matplotlib.widgets import RectangleSelector
 import matplotlib.patches as mpatches
+from matplotlib.patches import Polygon
 
 
 class BaseInteractiveRemoval:
@@ -111,13 +112,19 @@ class BaseInteractiveRemoval:
             self.lines_freq.append(lf)
             self.lines_wave.append(lw)
 
-        # Selection overlays
+        # Selection overlays - axis-aligned rectangles
         self.bounding_boxes_freq: List[Tuple[float, float, float, float]] = []
         self.bounding_boxes_wave: List[Tuple[float, float, float, float]] = []
         self.freq_patches: List[mpatches.Rectangle] = []
         self.wave_patches: List[mpatches.Rectangle] = []
         self.rect_selector_freq = RectangleSelector(self.ax_freq, self._onselect_freq, useblit=False, interactive=False, button=[1], minspanx=0, minspany=0)
         self.rect_selector_wave = RectangleSelector(self.ax_wave, self._onselect_wave, useblit=False, interactive=False, button=[1], minspanx=0, minspany=0)
+
+        # Selection overlays - inclined rectangles (polygons)
+        self.inclined_boxes_freq: List[np.ndarray] = []  # List of (4,2) corner arrays
+        self.inclined_boxes_wave: List[np.ndarray] = []
+        self.inclined_patches_freq: List[Polygon] = []
+        self.inclined_patches_wave: List[Polygon] = []
 
         # Guides artists (k-limits)
         self._k_guides_artists: List = []
@@ -291,7 +298,7 @@ class BaseInteractiveRemoval:
     def _on_cancel(self, event):
         # Cancel selection rectangles and add-mode previews
         try:
-            # Clear selection rectangles
+            # Clear axis-aligned selection rectangles
             for r in list(getattr(self, 'freq_patches', [])):
                 try: r.remove()
                 except Exception: pass
@@ -303,6 +310,21 @@ class BaseInteractiveRemoval:
                 try: r.remove()
                 except Exception: pass
             self.wave_patches.clear(); self.bounding_boxes_wave.clear()
+        except Exception:
+            pass
+        # Clear inclined rectangle patches
+        try:
+            for p in list(getattr(self, 'inclined_patches_freq', [])):
+                try: p.remove()
+                except Exception: pass
+            self.inclined_patches_freq.clear(); self.inclined_boxes_freq.clear()
+        except Exception:
+            pass
+        try:
+            for p in list(getattr(self, 'inclined_patches_wave', [])):
+                try: p.remove()
+                except Exception: pass
+            self.inclined_patches_wave.clear(); self.inclined_boxes_wave.clear()
         except Exception:
             pass
         try:

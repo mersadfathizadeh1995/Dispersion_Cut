@@ -355,6 +355,24 @@ class MainWindow(QtWidgets.QMainWindow):
             redo = QtGui.QAction("Redo", self); redo.setShortcut("Ctrl+Y"); redo.triggered.connect(self.controller._on_redo)
         m_edit.addActions([undo, redo])
 
+        # Tools menu - selection tools
+        act_box_tool = QtGui.QAction("Box Select Tool", self)
+        act_box_tool.setCheckable(True); act_box_tool.setChecked(True)
+        act_box_tool.triggered.connect(lambda: self._switch_tool('box'))
+        
+        act_line_tool = QtGui.QAction("Line Delete Tool", self)
+        act_line_tool.setCheckable(True)
+        act_line_tool.triggered.connect(lambda: self._switch_tool('line'))
+        
+        act_inclined_tool = QtGui.QAction("Inclined Rectangle Tool", self)
+        act_inclined_tool.setCheckable(True)
+        act_inclined_tool.triggered.connect(lambda: self._switch_tool('inclined_rect'))
+        
+        self._tool_actions = {'box': act_box_tool, 'line': act_line_tool, 'inclined_rect': act_inclined_tool}
+        m_tools.addAction(act_box_tool)
+        m_tools.addAction(act_line_tool)
+        m_tools.addAction(act_inclined_tool)
+
         # Layers menu
         act_add_spectrum = QtGui.QAction("Add Spectrum to Layer...", self)
         act_add_spectrum.triggered.connect(self._add_spectrum_to_layer)
@@ -442,6 +460,23 @@ class MainWindow(QtWidgets.QMainWindow):
             dlg.exec()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open publication figure dialog:\n{e}")
+
+    def _switch_tool(self, tool_name: str) -> None:
+        """Switch to the specified selection tool."""
+        try:
+            # Update tool actions checked state
+            for name, action in self._tool_actions.items():
+                action.setChecked(name == tool_name)
+            
+            # Call controller method
+            if tool_name == 'box':
+                self.controller._activate_box_tool()
+            elif tool_name == 'line':
+                self.controller._activate_line_tool()
+            elif tool_name == 'inclined_rect':
+                self.controller._activate_inclined_rect_tool()
+        except Exception:
+            pass
 
     def _add_spectrum_to_layer(self):
         """Show dialog to add spectrum background to a layer."""

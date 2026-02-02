@@ -576,9 +576,11 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 set_leg = []
                 vcut = float(spec.get('velocity_cutoff', 6000.0))
                 
+                # Get column mapping options
+                use_max_mapping = spec.get('use_max_mapping', False)
+                array_mappings = spec.get('array_mappings', {})
+                
                 # Get wave_type from spec (for RTBF format filtering)
-                # Map workflow wave_type to parser wave_type
-                # Rayleigh_Combined, Rayleigh_Vertical, Rayleigh_Radial all filter for 'Rayleigh'
                 workflow_wave_type = spec.get('wave_type', 'Rayleigh_Combined')
                 if 'Rayleigh' in workflow_wave_type:
                     parser_wave_type = 'Rayleigh'
@@ -587,15 +589,15 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 else:
                     parser_wave_type = 'all'
 
-                klimits_idx_map = {500: 2, 200: 1, 50: 0}
-                for diameter in [500, 200, 50]:
-                    path_str = spec['arrays'].get(diameter)
+                # Process all arrays from spec (dynamic diameters)
+                arrays_dict = spec.get('arrays', {})
+                for diameter, path_str in sorted(arrays_dict.items(), key=lambda x: -x[0]):
                     if not path_str:
                         continue
 
                     max_path = Path(path_str)
-                    matlab_idx = klimits_idx_map.get(diameter, 0)
-                    kmin, kmax = klimits.get(diameter, klimits.get(matlab_idx, (0.001, 0.1)))
+                    # Try to get klimits by diameter, then by index
+                    kmin, kmax = klimits.get(diameter, klimits.get(0, (0.001, 0.1)))
 
                     arrays_config.append(ArrayConfig(
                         diameter=diameter,
@@ -604,17 +606,52 @@ class LauncherWindow(QtWidgets.QMainWindow):
                         kmax=kmax,
                     ))
 
-                    # Use updated parser with wave_type for RTBF format support
-                    df = parse_max_file(str(max_path), wave_type=parser_wave_type)
-                    if df.empty:
-                        QtWidgets.QMessageBox.warning(
-                            self, "Circular Array",
-                            f"Warning: {max_path.name} parsed but empty, skipping."
-                        )
-                        continue
+                    # Check if we have manual column mapping for this array
+                    arr_mapping = array_mappings.get(diameter, {})
+                    data_start_line = arr_mapping.get('data_start_line', 0)
+                    column_mapping = arr_mapping.get('column_mapping', None) if use_max_mapping else None
+                    
+                    if column_mapping:
+                        # Use manual column mapping
+                        import pandas as pd
+                        raw = pd.read_csv(str(max_path), comment='#', header=None, sep=r"[\s\|]+", engine='python')
+                        if data_start_line > 0:
+                            raw = raw.iloc[data_start_line:]
+                        if raw.empty:
+                            QtWidgets.QMessageBox.warning(
+                                self, "Circular Array",
+                                f"Warning: {max_path.name} parsed but empty, skipping."
+                            )
+                            continue
+                        
+                        # Extract columns based on mapping
+                        import pandas as pd
+                        if "Frequency (Hz)" in column_mapping:
+                            freq = pd.to_numeric(raw.iloc[:, column_mapping["Frequency (Hz)"]], errors='coerce').to_numpy()
+                        else:
+                            QtWidgets.QMessageBox.warning(self, "Circular Array", f"Frequency column not mapped for {max_path.name}")
+                            continue
+                        
+                        if "Velocity (m/s)" in column_mapping:
+                            vel = pd.to_numeric(raw.iloc[:, column_mapping["Velocity (m/s)"]], errors='coerce').to_numpy()
+                            slow = 1000.0 / vel
+                        elif "Slowness (s/km)" in column_mapping:
+                            slow = pd.to_numeric(raw.iloc[:, column_mapping["Slowness (s/km)"]], errors='coerce').to_numpy()
+                        else:
+                            QtWidgets.QMessageBox.warning(self, "Circular Array", f"Velocity/Slowness column not mapped for {max_path.name}")
+                            continue
+                    else:
+                        # Use auto-detecting parser (handles FK, RTBF, LDS formats)
+                        df = parse_max_file(str(max_path), wave_type=parser_wave_type, data_start_line=data_start_line)
+                        if df.empty:
+                            QtWidgets.QMessageBox.warning(
+                                self, "Circular Array",
+                                f"Warning: {max_path.name} parsed but empty, skipping."
+                            )
+                            continue
 
-                    freq = df['freq'].to_numpy(float)
-                    slow = df['slow'].to_numpy(float)
+                        freq = df['freq'].to_numpy(float)
+                        slow = df['slow'].to_numpy(float)
 
                     m0 = np.isfinite(freq) & np.isfinite(slow) & (freq > 0) & (slow > 0)
                     freq = freq[m0]

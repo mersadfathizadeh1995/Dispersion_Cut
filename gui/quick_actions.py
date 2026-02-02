@@ -104,6 +104,27 @@ class QuickActionsDock(QtWidgets.QDockWidget):
             p.end()
             return QtGui.QIcon(pix)
 
+        def _inclined_rect_icon() -> QtGui.QIcon:
+            """Create icon for inclined rectangle tool - rotated rectangle."""
+            pix = QtGui.QPixmap(20, 20)
+            try: pix.fill(QtCore.Qt.transparent)
+            except AttributeError:
+                try: pix.fill(QtCore.Qt.GlobalColor.transparent)
+                except AttributeError: pix.fill(QtGui.QColor(0, 0, 0, 0))
+            p = QtGui.QPainter(pix)
+            try: p.setRenderHint(QtGui.QPainter.Antialiasing)
+            except AttributeError: p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+            pen = QtGui.QPen(QtGui.QColor(155, 89, 182)); pen.setWidth(2); p.setPen(pen)  # Purple color
+            try: p.setBrush(QtCore.Qt.NoBrush)
+            except AttributeError: p.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            # Draw rotated rectangle (parallelogram-like shape)
+            points = [QtCore.QPoint(4, 14), QtCore.QPoint(8, 6), QtCore.QPoint(16, 6), QtCore.QPoint(12, 14)]
+            try: p.drawPolygon(QtGui.QPolygon(points))
+            except Exception: 
+                for i in range(4): p.drawLine(points[i], points[(i+1)%4])
+            p.end()
+            return QtGui.QIcon(pix)
+
         act_filter = _mk_action('tools.filter', 'Filter', lambda: self.c._on_filter_values(None)); act_filter.setIcon(_funnel_icon()); act_filter.setToolTip('Filter points (Delete Above/Below threshold)')
         act_undo = _mk_action('edit.undo', 'Undo', lambda: self.c._on_undo(None)); act_undo.setIcon(_std_icon('undo'))
         act_redo = _mk_action('edit.redo', 'Redo', lambda: self.c._on_redo(None)); act_redo.setIcon(_std_icon('redo'))
@@ -111,22 +132,24 @@ class QuickActionsDock(QtWidgets.QDockWidget):
         act_delete = _mk_action('edit.delete', 'Delete', lambda: self.c._on_delete(None)); act_delete.setIcon(_std_icon('delete'))
         act_cancel = _mk_action('edit.cancel', 'Can', lambda: self.c._on_cancel(None)); act_cancel.setIcon(_std_icon('cancel'))
         
-        # Tool selection buttons (Box vs Line)
+        # Tool selection buttons (Box vs Line vs Inclined Rect)
         act_box_tool = _mk_action('edit.box_select', 'Box', lambda: self._activate_box_tool()); act_box_tool.setIcon(_box_icon()); act_box_tool.setToolTip('Box Select Tool (draw rectangle to select points)')
         act_box_tool.setCheckable(True); act_box_tool.setChecked(True)
         act_line_tool = _mk_action('edit.line_delete', 'Line', lambda: self._activate_line_tool()); act_line_tool.setIcon(_line_icon()); act_line_tool.setToolTip('Line Delete Tool (draw line, delete points on one side)\nUp/Down arrows to toggle direction')
         act_line_tool.setCheckable(True); act_line_tool.setChecked(False)
-        self._act_box_tool = act_box_tool; self._act_line_tool = act_line_tool
+        act_inclined_rect_tool = _mk_action('edit.inclined_rect', 'Inclined', lambda: self._activate_inclined_rect_tool()); act_inclined_rect_tool.setIcon(_inclined_rect_icon()); act_inclined_rect_tool.setToolTip('Inclined Rectangle Tool (draw line, expand to rotated rectangle)\nUp/Down arrows to adjust width')
+        act_inclined_rect_tool.setCheckable(True); act_inclined_rect_tool.setChecked(False)
+        self._act_box_tool = act_box_tool; self._act_line_tool = act_line_tool; self._act_inclined_rect_tool = act_inclined_rect_tool
         act_avg = _mk_action('tools.avg_resolution', 'Avg', lambda: self.c._on_set_average_resolution(None)); act_avg.setIcon(_std_icon('add'))
         act_add_data = _mk_action('data.add', 'Add Data', lambda: self.c._on_add_data(None)); act_add_data.setIcon(_std_icon('add'))
         act_add_layer = _mk_action('data.add_layer', 'Add Layer', lambda: self.c._on_add_layer(None)); act_add_layer.setIcon(_std_icon('add'))
         act_save_added = _mk_action('data.save_added', 'Save Data', lambda: self.c._on_save_added_data(None)); act_save_added.setIcon(_std_icon('save'))
         act_save_state = _mk_action('file.save_state', 'Save State', lambda: self.c._on_save_session(None)); act_save_state.setIcon(_std_icon('save'))
         act_save_txt = _mk_action('file.save_dc', 'Save Txt', lambda: self.c._on_quit(None)); act_save_txt.setIcon(_std_icon('save'))
-        actions = [act_box_tool, act_line_tool, act_filter, act_undo, act_redo, act_delete, act_cancel, act_avg, act_add_data, act_add_layer, act_save_added, act_save_state, act_save_txt]
+        actions = [act_box_tool, act_line_tool, act_inclined_rect_tool, act_filter, act_undo, act_redo, act_delete, act_cancel, act_avg, act_add_data, act_add_layer, act_save_added, act_save_state, act_save_txt]
         for i, act in enumerate(actions):
             self.tb.addAction(act)
-            if i in (1, 2, 4, 7, 9, 10): self.tb.addSeparator()
+            if i in (2, 3, 5, 8, 10, 11): self.tb.addSeparator()
         try:
             btn_all_on = QtWidgets.QAction("All On", self); btn_all_off = QtWidgets.QAction("All Off", self)
             btn_all_on.triggered.connect(lambda: self.c._set_all_layers(True) if hasattr(self.c, '_set_all_layers') else None)
@@ -156,6 +179,7 @@ class QuickActionsDock(QtWidgets.QDockWidget):
             current_tool = self.c.get_current_tool() if hasattr(self.c, 'get_current_tool') else 'box'
             self._act_box_tool.setChecked(current_tool == 'box')
             self._act_line_tool.setChecked(current_tool == 'line')
+            self._act_inclined_rect_tool.setChecked(current_tool == 'inclined_rect')
         except Exception:
             pass
 
@@ -165,6 +189,7 @@ class QuickActionsDock(QtWidgets.QDockWidget):
             self.c._activate_box_tool()
             self._act_box_tool.setChecked(True)
             self._act_line_tool.setChecked(False)
+            self._act_inclined_rect_tool.setChecked(False)
         except Exception:
             pass
 
@@ -174,6 +199,17 @@ class QuickActionsDock(QtWidgets.QDockWidget):
             self.c._activate_line_tool()
             self._act_box_tool.setChecked(False)
             self._act_line_tool.setChecked(True)
+            self._act_inclined_rect_tool.setChecked(False)
+        except Exception:
+            pass
+
+    def _activate_inclined_rect_tool(self) -> None:
+        """Switch to inclined rectangle tool."""
+        try:
+            self.c._activate_inclined_rect_tool()
+            self._act_box_tool.setChecked(False)
+            self._act_line_tool.setChecked(False)
+            self._act_inclined_rect_tool.setChecked(True)
         except Exception:
             pass
 

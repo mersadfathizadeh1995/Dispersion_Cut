@@ -91,9 +91,30 @@ def _load_klimits_mat(path: Path, mat_key: Optional[str] = None) -> Dict[int, Tu
     return result
 
 
-def _load_klimits_csv(path: Path) -> Dict[int, Tuple[float, float]]:
-    """Load k-limits from CSV file."""
+def _load_klimits_csv(
+    path: Path,
+    default_diameter: int = 0
+) -> Dict[int, Tuple[float, float]]:
+    """Load k-limits from CSV file.
+    
+    Supports two formats:
+    - 3-column: diameter, kmin, kmax
+    - 2-column: kmin, kmax (uses default_diameter or row index as key)
+    
+    Parameters
+    ----------
+    path : Path
+        Path to CSV file
+    default_diameter : int
+        Diameter to use for 2-column format. If 0, uses row index.
+    
+    Returns
+    -------
+    Dict[int, Tuple[float, float]]
+        Mapping of diameter/index to (kmin, kmax)
+    """
     result: Dict[int, Tuple[float, float]] = {}
+    row_idx = 0
 
     with open(path, 'r', encoding='utf-8') as f:
         for line in f:
@@ -102,12 +123,25 @@ def _load_klimits_csv(path: Path) -> Dict[int, Tuple[float, float]]:
                 continue
 
             parts = [p.strip() for p in line.replace(',', ' ').split() if p.strip()]
+            
             if len(parts) >= 3:
+                # 3-column format: diameter, kmin, kmax
                 try:
                     diameter = int(float(parts[0]))
                     kmin = float(parts[1])
                     kmax = float(parts[2])
                     result[diameter] = (kmin, kmax)
+                except ValueError:
+                    continue
+            elif len(parts) >= 2:
+                # 2-column format: kmin, kmax
+                try:
+                    kmin = float(parts[0])
+                    kmax = float(parts[1])
+                    # Use default_diameter if provided, else row index
+                    key = default_diameter if default_diameter != 0 else row_idx
+                    result[key] = (kmin, kmax)
+                    row_idx += 1
                 except ValueError:
                     continue
 

@@ -11,14 +11,29 @@ class ColumnMapperDialog(QtWidgets.QDialog):
     Allows user to map columns to data types (Frequency, Slowness/Velocity, etc.).
     """
     
-    def __init__(self, columns_data, parent=None):
+    def __init__(self, columns_data, parent=None, total_data_lines: int = 0):
         super().__init__(parent)
         self.setWindowTitle("Map .max File Columns")
-        self.resize(800, 500)
+        self.resize(800, 550)
         self.columns_data = columns_data  # List of column arrays
         self.mapping = {}  # {col_idx: type_str}
+        self.total_data_lines = total_data_lines
+        self.data_start_line = 0
         
         v = QtWidgets.QVBoxLayout(self)
+        
+        # Data start line control
+        start_layout = QtWidgets.QHBoxLayout()
+        start_layout.addWidget(QtWidgets.QLabel("Data starts at line:"))
+        self.spin_start_line = QtWidgets.QSpinBox(self)
+        self.spin_start_line.setRange(0, max(0, total_data_lines - 1))
+        self.spin_start_line.setValue(0)
+        self.spin_start_line.setToolTip("Skip this many data lines from the beginning")
+        start_layout.addWidget(self.spin_start_line)
+        start_layout.addWidget(QtWidgets.QLabel(f"(of {total_data_lines} total lines)"))
+        start_layout.addStretch()
+        v.addLayout(start_layout)
+        
         v.addWidget(QtWidgets.QLabel("<b>Map each column to its data type:</b>"))
         
         # Status label
@@ -142,8 +157,13 @@ class ColumnMapperDialog(QtWidgets.QDialog):
             if i >= len(self.combo_boxes):
                 break
             
-            arr = np.array(col_data, dtype=float)
-            arr = arr[np.isfinite(arr)]  # Remove NaN/inf
+            # Try to convert to numeric, skip if fails (text column)
+            try:
+                arr = np.array(col_data, dtype=float)
+                arr = arr[np.isfinite(arr)]  # Remove NaN/inf
+            except (ValueError, TypeError):
+                # Non-numeric column (e.g., station names, polarization text)
+                continue
             
             if arr.size == 0:
                 continue
@@ -199,16 +219,174 @@ class ColumnMapperDialog(QtWidgets.QDialog):
             if type_str != "Skipped":
                 mapping[type_str] = i
         return mapping
+    
+    def get_data_start_line(self) -> int:
+        """Return the user-specified data start line."""
+        return self.spin_start_line.value()
+
+
+class KlimitsMapperDialog(QtWidgets.QDialog):
+    """Column mapping dialog for k-limits CSV files.
+    
+    Allows user to map columns to kmin, kmax, and optionally diameter.
+    """
+    
+    def __init__(self, columns_data, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Map K-Limits CSV Columns")
+        self.resize(500, 400)
+        self.columns_data = columns_data
+        
+        v = QtWidgets.QVBoxLayout(self)
+        v.addWidget(QtWidgets.QLabel("<b>Map columns to k-limits values:</b>"))
+        
+        # Status label
+        self.status_label = QtWidgets.QLabel("")
+        v.addWidget(self.status_label)
+        
+        # Scroll area for columns
+        scroll = QtWidgets.QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        
+        container = QtWidgets.QWidget()
+        self.col_layout = QtWidgets.QHBoxLayout(container)
+        self.col_layout.setSpacing(4)
+        scroll.setWidget(container)
+        v.addWidget(scroll, 1)
+        
+        # Column type options
+        self.type_options = [
+            "Skipped",
+            "K-min (rad/m)",
+            "K-max (rad/m)",
+            "Diameter (m)"
+        ]
+        
+        # Create column widgets
+        self.combo_boxes = []
+        for i, col_data in enumerate(columns_data):
+            col_widget = self._make_column_widget(i, col_data)
+            self.col_layout.addWidget(col_widget)
+        
+        # Default diameter for 2-column files
+        default_layout = QtWidgets.QHBoxLayout()
+        default_layout.addWidget(QtWidgets.QLabel("Default diameter (if not in file):"))
+        self.spin_default_diameter = QtWidgets.QSpinBox(self)
+        self.spin_default_diameter.setRange(1, 10000)
+        self.spin_default_diameter.setValue(0)
+        self.spin_default_diameter.setSpecialValueText("Use row index")
+        default_layout.addWidget(self.spin_default_diameter)
+        default_layout.addStretch()
+        v.addLayout(default_layout)
+        
+        # Buttons
+        btns = QtWidgets.QDialogButtonBox(self)
+        try:
+            ok = QtWidgets.QDialogButtonBox.Ok
+            cancel = QtWidgets.QDialogButtonBox.Cancel
+        except AttributeError:
+            ok = QtWidgets.QDialogButtonBox.StandardButton.Ok
+            cancel = QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        btns.setStandardButtons(ok | cancel)
+        self.btn_ok = btns.button(ok)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        v.addWidget(btns)
+        
+        # Auto-detect and validate
+        self._auto_detect()
+        self._validate()
+    
+    def _make_column_widget(self, col_idx, col_data):
+        """Create widget for one column."""
+        w = QtWidgets.QWidget()
+        w.setMinimumWidth(120)
+        w.setMaximumWidth(180)
+        vbox = QtWidgets.QVBoxLayout(w)
+        vbox.setContentsMargins(2, 2, 2, 2)
+        
+        lbl = QtWidgets.QLabel(f"<b>Column {col_idx + 1}</b>")
+        try:
+            lbl.setAlignment(QtCore.Qt.AlignCenter)
+        except AttributeError:
+            lbl.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        vbox.addWidget(lbl)
+        
+        combo = QtWidgets.QComboBox(w)
+        combo.addItems(self.type_options)
+        combo.currentTextChanged.connect(lambda: self._validate())
+        self.combo_boxes.append(combo)
+        vbox.addWidget(combo)
+        
+        preview = QtWidgets.QTextEdit(w)
+        preview.setReadOnly(True)
+        preview.setMaximumHeight(250)
+        preview_text = "\n".join([f"{val:.6g}" if isinstance(val, (int, float)) else str(val) for val in col_data])
+        preview.setPlainText(preview_text)
+        vbox.addWidget(preview, 1)
+        
+        return w
+    
+    def _auto_detect(self):
+        """Auto-detect column types based on data patterns."""
+        import numpy as np
+        
+        n_cols = len(self.combo_boxes)
+        
+        if n_cols == 2:
+            # 2-column: assume kmin, kmax
+            self.combo_boxes[0].setCurrentText("K-min (rad/m)")
+            self.combo_boxes[1].setCurrentText("K-max (rad/m)")
+        elif n_cols >= 3:
+            # 3-column: assume diameter, kmin, kmax
+            self.combo_boxes[0].setCurrentText("Diameter (m)")
+            self.combo_boxes[1].setCurrentText("K-min (rad/m)")
+            self.combo_boxes[2].setCurrentText("K-max (rad/m)")
+    
+    def _validate(self):
+        """Validate required columns are mapped."""
+        types = [cb.currentText() for cb in self.combo_boxes]
+        has_kmin = "K-min (rad/m)" in types
+        has_kmax = "K-max (rad/m)" in types
+        
+        if has_kmin and has_kmax:
+            self.status_label.setText("✅ <span style='color:green;'>Valid mapping</span>")
+            self.btn_ok.setEnabled(True)
+        else:
+            missing = []
+            if not has_kmin:
+                missing.append("K-min")
+            if not has_kmax:
+                missing.append("K-max")
+            self.status_label.setText(f"❌ <span style='color:red;'>Missing: {', '.join(missing)}</span>")
+            self.btn_ok.setEnabled(False)
+    
+    def get_mapping(self):
+        """Return column mapping dict: {type_str: col_idx}."""
+        mapping = {}
+        for i, cb in enumerate(self.combo_boxes):
+            type_str = cb.currentText()
+            if type_str != "Skipped":
+                mapping[type_str] = i
+        return mapping
+    
+    def get_default_diameter(self) -> int:
+        """Return the default diameter for 2-column files."""
+        return self.spin_default_diameter.value()
 
 
 class CircularArrayTab(QtWidgets.QWidget):
     """Tab for Circular Array HRFK workflow input.
     
     Allows loading raw .max files for new workflow or existing .pkl to continue.
+    Supports preset diameters (500/200/50m) plus custom diameters.
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.array_rows = []  # List of (diameter_spinbox, path_edit, btn_browse, btn_map)
+        self.klimits_mapping = None  # Column mapping for klimits CSV
+        self.array_mappings = {}  # {diameter: {'column_mapping': dict, 'data_start_line': int}}
         self._build_ui()
 
     def _build_ui(self):
@@ -234,48 +412,64 @@ class CircularArrayTab(QtWidgets.QWidget):
         output_layout.addWidget(self.btn_output)
         layout.addWidget(output_group)
 
-        # Array files group
+        # Array files group with dynamic table
         arrays_group = QtWidgets.QGroupBox("Array Data Files (.max)")
-        arrays_layout = QtWidgets.QFormLayout(arrays_group)
-
-        self.path_500m = QtWidgets.QLineEdit()
-        self.path_500m.setPlaceholderText("(Optional) 500m array .max file")
-        self.btn_500m = QtWidgets.QPushButton("Browse...")
-        self.btn_500m.clicked.connect(lambda: self._browse_file(self.path_500m))
-        row_500m = QtWidgets.QHBoxLayout()
-        row_500m.addWidget(self.path_500m, 1)
-        row_500m.addWidget(self.btn_500m)
-        arrays_layout.addRow("500m Array:", row_500m)
-
-        self.path_200m = QtWidgets.QLineEdit()
-        self.path_200m.setPlaceholderText("(Optional) 200m array .max file")
-        self.btn_200m = QtWidgets.QPushButton("Browse...")
-        self.btn_200m.clicked.connect(lambda: self._browse_file(self.path_200m))
-        row_200m = QtWidgets.QHBoxLayout()
-        row_200m.addWidget(self.path_200m, 1)
-        row_200m.addWidget(self.btn_200m)
-        arrays_layout.addRow("200m Array:", row_200m)
-
-        self.path_50m = QtWidgets.QLineEdit()
-        self.path_50m.setPlaceholderText("(Optional) 50m array .max file")
-        self.btn_50m = QtWidgets.QPushButton("Browse...")
-        self.btn_50m.clicked.connect(lambda: self._browse_file(self.path_50m))
-        row_50m = QtWidgets.QHBoxLayout()
-        row_50m.addWidget(self.path_50m, 1)
-        row_50m.addWidget(self.btn_50m)
-        arrays_layout.addRow("50m Array:", row_50m)
-
+        arrays_vbox = QtWidgets.QVBoxLayout(arrays_group)
+        
+        # Use column mapping checkbox
+        self.use_max_mapping = QtWidgets.QCheckBox("Use column mapping for .max files (uncheck for auto-detection)")
+        self.use_max_mapping.setChecked(False)
+        arrays_vbox.addWidget(self.use_max_mapping)
+        
+        # Table for arrays
+        self.arrays_table = QtWidgets.QTableWidget()
+        self.arrays_table.setColumnCount(4)
+        self.arrays_table.setHorizontalHeaderLabels(["Diameter (m)", "Data File", "Browse", "Map Columns"])
+        self.arrays_table.horizontalHeader().setStretchLastSection(False)
+        self.arrays_table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch if hasattr(QtWidgets.QHeaderView, 'ResizeMode') else QtWidgets.QHeaderView.Stretch)
+        self.arrays_table.setMinimumHeight(150)
+        arrays_vbox.addWidget(self.arrays_table)
+        
+        # Add/Remove buttons
+        btn_layout = QtWidgets.QHBoxLayout()
+        self.btn_add_preset = QtWidgets.QPushButton("Add Preset (500/200/50m)")
+        self.btn_add_preset.clicked.connect(self._add_preset_arrays)
+        self.btn_add_custom = QtWidgets.QPushButton("Add Custom Array")
+        self.btn_add_custom.clicked.connect(self._add_custom_array)
+        self.btn_remove_array = QtWidgets.QPushButton("Remove Selected")
+        self.btn_remove_array.clicked.connect(self._remove_selected_array)
+        btn_layout.addWidget(self.btn_add_preset)
+        btn_layout.addWidget(self.btn_add_custom)
+        btn_layout.addWidget(self.btn_remove_array)
+        btn_layout.addStretch()
+        arrays_vbox.addLayout(btn_layout)
+        
         layout.addWidget(arrays_group)
+        
+        # Initialize with preset diameters
+        self._add_preset_arrays()
 
         # K-limits file
-        klimits_group = QtWidgets.QGroupBox("K-Limits File (3 rows: diameter, kmin, kmax)")
-        klimits_layout = QtWidgets.QHBoxLayout(klimits_group)
+        klimits_group = QtWidgets.QGroupBox("K-Limits File")
+        klimits_vbox = QtWidgets.QVBoxLayout(klimits_group)
+        
+        # Use column mapping checkbox for klimits
+        self.use_klimits_mapping = QtWidgets.QCheckBox("Use column mapping for CSV (uncheck for auto-detection)")
+        self.use_klimits_mapping.setChecked(False)
+        klimits_vbox.addWidget(self.use_klimits_mapping)
+        
+        klimits_row = QtWidgets.QHBoxLayout()
         self.klimits_path = QtWidgets.QLineEdit()
         self.klimits_path.setPlaceholderText("Select k-limits .mat or .csv file...")
         self.btn_klimits = QtWidgets.QPushButton("Browse...")
-        self.btn_klimits.clicked.connect(lambda: self._browse_file(self.klimits_path, "K-Limits (*.mat *.csv)"))
-        klimits_layout.addWidget(self.klimits_path, 1)
-        klimits_layout.addWidget(self.btn_klimits)
+        self.btn_klimits.clicked.connect(self._browse_klimits)
+        self.btn_map_klimits = QtWidgets.QPushButton("Map Columns")
+        self.btn_map_klimits.clicked.connect(self._map_klimits_columns)
+        klimits_row.addWidget(self.klimits_path, 1)
+        klimits_row.addWidget(self.btn_klimits)
+        klimits_row.addWidget(self.btn_map_klimits)
+        klimits_vbox.addLayout(klimits_row)
+        
         layout.addWidget(klimits_group)
 
         # Wave type and velocity cutoff
@@ -330,6 +524,196 @@ class CircularArrayTab(QtWidgets.QWidget):
         )
         if path:
             line_edit.setText(path)
+    
+    def _add_array_row(self, diameter: int = 100):
+        """Add a row to the arrays table."""
+        row = self.arrays_table.rowCount()
+        self.arrays_table.insertRow(row)
+        
+        # Diameter spinbox
+        spin_diameter = QtWidgets.QSpinBox()
+        spin_diameter.setRange(1, 10000)
+        spin_diameter.setValue(diameter)
+        spin_diameter.setSuffix(" m")
+        self.arrays_table.setCellWidget(row, 0, spin_diameter)
+        
+        # Path line edit
+        path_edit = QtWidgets.QLineEdit()
+        path_edit.setPlaceholderText(f"(Optional) {diameter}m array .max file")
+        self.arrays_table.setCellWidget(row, 1, path_edit)
+        
+        # Browse button
+        btn_browse = QtWidgets.QPushButton("Browse")
+        btn_browse.clicked.connect(lambda checked, pe=path_edit: self._browse_file(pe))
+        self.arrays_table.setCellWidget(row, 2, btn_browse)
+        
+        # Map columns button
+        btn_map = QtWidgets.QPushButton("Map")
+        btn_map.clicked.connect(lambda checked, r=row: self._map_array_columns(r))
+        self.arrays_table.setCellWidget(row, 3, btn_map)
+        
+        self.array_rows.append((spin_diameter, path_edit, btn_browse, btn_map))
+    
+    def _add_preset_arrays(self):
+        """Add preset diameter arrays (500, 200, 50m)."""
+        for diameter in [500, 200, 50]:
+            # Check if this diameter already exists
+            exists = False
+            for i in range(self.arrays_table.rowCount()):
+                spin = self.arrays_table.cellWidget(i, 0)
+                if spin and spin.value() == diameter:
+                    exists = True
+                    break
+            if not exists:
+                self._add_array_row(diameter)
+    
+    def _add_custom_array(self):
+        """Add a custom array row with default diameter."""
+        self._add_array_row(100)
+    
+    def _remove_selected_array(self):
+        """Remove the selected array row."""
+        rows = set(idx.row() for idx in self.arrays_table.selectedIndexes())
+        for row in sorted(rows, reverse=True):
+            if row < len(self.array_rows):
+                self.array_rows.pop(row)
+            self.arrays_table.removeRow(row)
+    
+    def _map_array_columns(self, row: int):
+        """Open column mapper for a specific array."""
+        if row >= self.arrays_table.rowCount():
+            return
+        
+        path_edit = self.arrays_table.cellWidget(row, 1)
+        path = path_edit.text().strip() if path_edit else ""
+        
+        if not path:
+            QtWidgets.QMessageBox.warning(self, "Map Columns", "Select a file first.")
+            return
+        
+        import os
+        if not os.path.exists(path):
+            QtWidgets.QMessageBox.warning(self, "Map Columns", f"File not found: {path}")
+            return
+        
+        columns_data, total_lines = self._parse_max_preview(path)
+        if not columns_data:
+            return
+        
+        dlg = ColumnMapperDialog(columns_data, self, total_lines)
+        if dlg.exec() == 1:
+            spin = self.arrays_table.cellWidget(row, 0)
+            diameter = spin.value() if spin else row
+            self.array_mappings[diameter] = {
+                'column_mapping': dlg.get_mapping(),
+                'data_start_line': dlg.get_data_start_line()
+            }
+    
+    def _parse_max_preview(self, path: str):
+        """Parse .max file and return columns data for preview."""
+        import re
+        import numpy as np
+        
+        try:
+            data_lines = []
+            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith('#'):
+                        continue
+                    if stripped[0].isdigit():
+                        data_lines.append(stripped)
+            
+            if not data_lines:
+                QtWidgets.QMessageBox.warning(self, "Map Columns", "File contains no data rows")
+                return None, 0
+            
+            rows = []
+            for line in data_lines:
+                parts = re.split(r'[\s\|]+', line)
+                if len(parts) >= 2:
+                    rows.append(parts)
+            
+            if not rows:
+                QtWidgets.QMessageBox.warning(self, "Map Columns", "No valid data rows found")
+                return None, 0
+            
+            n_cols = len(rows[0])
+            columns_data = []
+            for col_idx in range(n_cols):
+                col_values = [row[col_idx] if col_idx < len(row) else '' for row in rows]
+                try:
+                    numeric_vals = [float(v) for v in col_values]
+                    columns_data.append(np.array(numeric_vals))
+                except (ValueError, TypeError):
+                    columns_data.append(np.array(col_values))
+            
+            return columns_data, len(data_lines)
+        
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to read file:\n{e}")
+            return None, 0
+    
+    def _browse_klimits(self):
+        """Browse for klimits file."""
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select K-Limits File", "",
+            "K-Limits (*.mat *.csv);;MAT Files (*.mat);;CSV Files (*.csv);;All Files (*.*)"
+        )
+        if path:
+            self.klimits_path.setText(path)
+    
+    def _map_klimits_columns(self):
+        """Open column mapper for klimits CSV file."""
+        import os
+        import re
+        import numpy as np
+        
+        path = self.klimits_path.text().strip()
+        if not path:
+            QtWidgets.QMessageBox.warning(self, "Map Columns", "Select a klimits file first.")
+            return
+        
+        if not os.path.exists(path):
+            QtWidgets.QMessageBox.warning(self, "Map Columns", f"File not found: {path}")
+            return
+        
+        # Only CSV files can be mapped
+        if not path.lower().endswith('.csv'):
+            QtWidgets.QMessageBox.information(self, "Map Columns", 
+                "Column mapping is only available for CSV files.\nMAT files use auto-detection.")
+            return
+        
+        try:
+            rows = []
+            with open(path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    parts = [p.strip() for p in line.replace(',', ' ').split() if p.strip()]
+                    if parts:
+                        rows.append(parts)
+            
+            if not rows:
+                QtWidgets.QMessageBox.warning(self, "Map Columns", "CSV file contains no data")
+                return
+            
+            n_cols = max(len(row) for row in rows)
+            columns_data = []
+            for col_idx in range(n_cols):
+                col_values = [float(row[col_idx]) if col_idx < len(row) else 0.0 for row in rows]
+                columns_data.append(np.array(col_values))
+            
+            dlg = KlimitsMapperDialog(columns_data, self)
+            if dlg.exec() == 1:
+                self.klimits_mapping = {
+                    'column_mapping': dlg.get_mapping(),
+                    'default_diameter': dlg.get_default_diameter()
+                }
+        
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to read klimits file:\n{e}")
 
     def _get_wave_type(self) -> str:
         if self.wave_combined.isChecked():
@@ -348,18 +732,29 @@ class CircularArrayTab(QtWidgets.QWidget):
                 'session_path': self.continue_path.text().strip(),
             }
 
+        # Build arrays dict from table
+        arrays = {}
+        for row in range(self.arrays_table.rowCount()):
+            spin = self.arrays_table.cellWidget(row, 0)
+            path_edit = self.arrays_table.cellWidget(row, 1)
+            if spin and path_edit:
+                diameter = spin.value()
+                path = path_edit.text().strip()
+                if path:
+                    arrays[diameter] = path
+
         return {
             'mode': 'circular_array_new',
             'site_name': self.site_name.text().strip(),
             'output_dir': self.output_dir.text().strip(),
             'wave_type': self._get_wave_type(),
             'velocity_cutoff': float(self.vel_cutoff.value()),
-            'arrays': {
-                500: self.path_500m.text().strip() or None,
-                200: self.path_200m.text().strip() or None,
-                50: self.path_50m.text().strip() or None,
-            },
+            'arrays': arrays,
             'klimits_path': self.klimits_path.text().strip(),
+            'use_max_mapping': self.use_max_mapping.isChecked(),
+            'use_klimits_mapping': self.use_klimits_mapping.isChecked(),
+            'array_mappings': self.array_mappings,
+            'klimits_mapping': self.klimits_mapping,
         }
 
     def validate(self) -> tuple:
@@ -379,17 +774,19 @@ class CircularArrayTab(QtWidgets.QWidget):
         if not os.path.isdir(self.output_dir.text().strip()):
             return False, "Output directory does not exist"
 
-        arrays = [
-            self.path_500m.text().strip(),
-            self.path_200m.text().strip(),
-            self.path_50m.text().strip(),
-        ]
-        if not any(arrays):
+        # Check arrays from table
+        has_array = False
+        for row in range(self.arrays_table.rowCount()):
+            path_edit = self.arrays_table.cellWidget(row, 1)
+            if path_edit:
+                path = path_edit.text().strip()
+                if path:
+                    has_array = True
+                    if not os.path.exists(path):
+                        return False, f"File not found: {path}"
+        
+        if not has_array:
             return False, "At least one array .max file is required"
-
-        for path in arrays:
-            if path and not os.path.exists(path):
-                return False, f"File not found: {path}"
 
         if not self.klimits_path.text().strip():
             return False, "K-limits file is required"
