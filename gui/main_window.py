@@ -44,6 +44,7 @@ from dc_cut.gui.layers_dock import LayersDock
 from dc_cut.gui.spectrum_dock import SpectrumDock
 from dc_cut.gui.nf_eval_dock import NFEvalDock
 from dc_cut.gui.quick_actions import QuickActionsDock
+from dc_cut.gui.layer_tree_dock import LayerTreeDock
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -60,16 +61,10 @@ class MainWindow(QtWidgets.QMainWindow):
             area = QtCore.Qt.DockWidgetArea.RightDockWidgetArea
         self.addDockWidget(area, self.props)
 
-        # File explorer (use legacy one if available)
         try:
-            self.files = FileExplorerDock(parent=self)
-            try:
-                left_area = QtCore.Qt.LeftDockWidgetArea
-            except AttributeError:
-                left_area = QtCore.Qt.DockWidgetArea.LeftDockWidgetArea
-            self.addDockWidget(left_area, self.files)
-        except Exception:
-            pass
+            left_area = QtCore.Qt.LeftDockWidgetArea
+        except AttributeError:
+            left_area = QtCore.Qt.DockWidgetArea.LeftDockWidgetArea
 
         self.layers = LayersDock(self.controller, self)
         try:
@@ -84,12 +79,21 @@ class MainWindow(QtWidgets.QMainWindow):
             self.tabifyDockWidget(self.layers, self.spectrum)
         except Exception:
             pass
+        
+        # Layer Tree dock (left side, with files)
+        self.layer_tree = LayerTreeDock(self.controller, self)
+        try:
+            self.addDockWidget(left_area, self.layer_tree)
+        except Exception:
+            pass
 
-        # Set up rebuild hooks for both docks when layers change
+        # Set up rebuild hooks for all docks when layers change
         try:
             def on_layers_changed():
                 self.layers.rebuild()
                 self.spectrum.rebuild()
+                if hasattr(self, 'layer_tree'):
+                    self.layer_tree._populate_tree()
             setattr(self.controller, 'on_layers_changed', on_layers_changed)
         except Exception:
             pass
@@ -307,6 +311,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_menu(self):
         bar = self.menuBar(); m_file = bar.addMenu("&File"); m_view = bar.addMenu("&View"); m_edit = bar.addMenu("&Edit"); m_layers = bar.addMenu("&Layers"); m_tools= bar.addMenu("&Tools"); m_help = bar.addMenu("&Help")
 
+        # File menu - Append Data
+        act_append = QtGui.QAction("Append Data...", self)
+        act_append.setShortcut("Ctrl+Shift+O")
+        act_append.triggered.connect(self._append_data)
+        m_file.addAction(act_append)
+        
+        m_file.addSeparator()
+        
         # File menu - Preferences
         act_prefs = QtGui.QAction("Preferences...", self)
         act_prefs.setShortcut("Ctrl+,")
@@ -460,6 +472,144 @@ class MainWindow(QtWidgets.QMainWindow):
             dlg.exec()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open publication figure dialog:\n{e}")
+
+    def _append_data(self):
+        """Append additional data to the current session."""
+        try:
+            from dc_cut.gui.append_data_dialog import AppendDataDialog
+            dlg = AppendDataDialog(self)
+            if dlg.exec() != 1:
+                return
+            
+            result = dlg.result
+            if not result:
+                return
+            
+            # Append data to controller
+            success = self._do_append_data(result)
+            if success:
+                # Refresh UI
+                if hasattr(self.controller, 'on_layers_changed') and self.controller.on_layers_changed:
+                    self.controller.on_layers_changed()
+                QtWidgets.QMessageBox.information(
+                    self, "Success", 
+                    f"Appended {result.get('label', 'data')} with {result.get('layer_count', 0)} layers."
+                )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to append data:\n{e}")
+    
+    def _do_append_data(self, spec: dict) -> bool:
+        """Actually append the data to the controller."""
+        import numpy as np
+        from dc_cut.io.universal import parse_any_file, parse_combined_csv
+        import os
+        
+        path = spec.get('path')
+        label = spec.get('label', os.path.basename(path))
+        mapping = spec.get('mapping')
+        vmin = spec.get('vmin', 0)
+        vmax = spec.get('vmax', 10000)
+        
+        if not path or not os.path.exists(path):
+            QtWidgets.QMessageBox.warning(self, "Error", "Invalid file path")
+            return False
+        
+        ext = os.path.splitext(path)[1].lower()
+        
+        try:
+            if mapping:
+                v, f, w, labels = parse_any_file(path, mapping)
+            elif ext == '.mat':
+                v, f, w, labels = parse_any_file(path)
+            elif ext == '.csv':
+                v, f, w, labels = parse_combined_csv(path)
+            else:
+                QtWidgets.QMessageBox.warning(self, "Error", f"Unsupported file type: {ext}")
+                return False
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Parse Error", f"Failed to parse file:\n{e}")
+            return False
+        
+        # Apply velocity clamp
+        for i in range(len(v)):
+            mask = (v[i] >= vmin) & (v[i] <= vmax)
+            v[i] = v[i][mask]
+            f[i] = f[i][mask]
+            w[i] = w[i][mask]
+        
+        # Prefix labels with source name
+        prefixed_labels = [f"{label}/{lbl}" for lbl in labels]
+        
+        # Append to controller
+        ctrl = self.controller
+        start_idx = len(ctrl.velocity_arrays)
+        
+        # Extend arrays
+        ctrl.velocity_arrays.extend(v)
+        ctrl.frequency_arrays.extend(f)
+        ctrl.wavelength_arrays.extend(w)
+        ctrl.offset_labels.extend(prefixed_labels)
+        
+        end_idx = len(ctrl.velocity_arrays)
+        
+        # Update file boundaries
+        if not hasattr(ctrl, '_file_boundaries') or ctrl._file_boundaries is None:
+            ctrl._file_boundaries = []
+        ctrl._file_boundaries.append((label, start_idx, end_idx))
+        
+        # Create new matplotlib lines for the new data
+        self._create_lines_for_new_data(start_idx, end_idx, v, f, w)
+        
+        # Update layers model
+        self._update_layers_model()
+        
+        # Store layer count in spec for message
+        spec['layer_count'] = len(v)
+        
+        return True
+    
+    def _create_lines_for_new_data(self, start_idx, end_idx, v_arrays, f_arrays, w_arrays):
+        """Create matplotlib lines for newly appended data."""
+        ctrl = self.controller
+        
+        # Get color cycle
+        try:
+            from matplotlib import cm
+            n_existing = start_idx
+            n_new = end_idx - start_idx
+            colors = cm.get_cmap('tab10').colors if n_new <= 10 else cm.get_cmap('tab20').colors
+        except Exception:
+            colors = None
+        
+        for i, (v, f, w) in enumerate(zip(v_arrays, f_arrays, w_arrays)):
+            idx = start_idx + i
+            color = colors[idx % len(colors)] if colors else None
+            
+            # Create frequency plot line
+            line_freq, = ctrl.ax_freq.plot(f, v, 'o', markersize=3, color=color, picker=5)
+            ctrl.lines_freq.append(line_freq)
+            
+            # Create wavelength plot line
+            line_wave, = ctrl.ax_wave.plot(w, v, 'o', markersize=3, color=color, picker=5)
+            ctrl.lines_wave.append(line_wave)
+        
+        # Update legend and redraw
+        ctrl._update_legend()
+        ctrl._apply_axis_limits()
+        ctrl.fig.canvas.draw_idle()
+    
+    def _update_layers_model(self):
+        """Rebuild layers model from controller arrays."""
+        ctrl = self.controller
+        
+        if hasattr(ctrl, '_layers_model') and ctrl._layers_model is not None:
+            from dc_cut.core.model import LayersModel
+            ctrl._layers_model = LayersModel.from_arrays(
+                ctrl.velocity_arrays,
+                ctrl.frequency_arrays,
+                ctrl.wavelength_arrays,
+                ctrl.offset_labels
+            )
 
     def _switch_tool(self, tool_name: str) -> None:
         """Switch to the specified selection tool."""

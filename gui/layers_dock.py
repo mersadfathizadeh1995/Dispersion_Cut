@@ -72,14 +72,28 @@ class LayersDock(QtWidgets.QDockWidget):
             chk_on = QtCore.Qt.Checked; chk_off = QtCore.Qt.Unchecked; role = QtCore.Qt.UserRole
         except AttributeError:
             chk_on = QtCore.Qt.CheckState.Checked; chk_off = QtCore.Qt.CheckState.Unchecked; role = QtCore.Qt.ItemDataRole.UserRole
+        
+        # Get layers model for visibility info
+        layers_model = getattr(c, '_layers_model', None) or getattr(c, 'model', None)
+        
         n = min(len(c.lines_wave), len(c.lines_freq))
         for idx in range(n):
+            # Check visibility from layers model
+            layer_visible = True
+            if layers_model and hasattr(layers_model, 'layers') and idx < len(layers_model.layers):
+                layer_visible = getattr(layers_model.layers[idx], 'visible', True)
+            
+            # Only show visible layers in the Layers dock
+            if not layer_visible:
+                continue
+            
             lbl = c.offset_labels[idx] if idx < len(c.offset_labels) else f"Offset {idx+1}"
             item = QtGui.QStandardItem(self._make_icon(c.lines_wave[idx]), lbl)
             item.setCheckable(True)
             item.setCheckState(chk_on if c.lines_freq[idx].get_visible() else chk_off)
             item.setData(idx, role)
             self.model.appendRow(item)
+        
         item_f = QtGui.QStandardItem(c.average_label); item_f.setCheckable(True); item_f.setCheckState(chk_on if c.show_average else chk_off); item_f.setData("avg_f", role); self.model.appendRow(item_f)
         item_w = QtGui.QStandardItem(c.average_label_wave); item_w.setCheckable(True); item_w.setCheckState(chk_on if c.show_average_wave else chk_off); item_w.setData("avg_w", role); self.model.appendRow(item_w)
 

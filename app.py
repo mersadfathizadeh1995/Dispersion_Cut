@@ -81,20 +81,25 @@ class LauncherWindow(QtWidgets.QMainWindow):
         mode = spec.get('mode')
         dx   = float(spec.get('dx', 2.0))
 
-        # Dispatch
-        ok = False
-        if mode == 'passive':
-            ok = self._load_passive(spec)
-        elif mode == 'matlab':
-            ok = self._load_matlab(spec)
-        elif mode == 'csv':
-            ok = self._load_csv(spec)
-        elif mode == 'state':
-            ok = self._load_state(spec)
-        elif mode in ('circular_array_new', 'circular_array_continue'):
-            ok = self._load_circular_array(spec)
+        # Dispatch based on mode using dictionary for robustness
+        dispatchers = {
+            'passive': self._load_passive,
+            'active': self._load_active,
+            'matlab': self._load_matlab,
+            'csv': self._load_csv,
+            'state': self._load_state,
+            'circular_array_new': self._load_circular_array,
+            'circular_array_continue': self._load_circular_array,
+        }
+        
+        # Normalize mode string (strip whitespace, ensure lowercase comparison)
+        mode_key = str(mode).strip() if mode else ''
+        
+        loader = dispatchers.get(mode_key)
+        if loader:
+            ok = loader(spec)
         else:
-            QtWidgets.QMessageBox.warning(self, "Open", f"Unsupported mode: {mode}")
+            QtWidgets.QMessageBox.warning(self, "Open", f"Unsupported mode: {repr(mode)}")
         # Close the launcher if we successfully opened a controller in the shell
         if ok:
             self.close()
@@ -237,6 +242,164 @@ class LauncherWindow(QtWidgets.QMainWindow):
             return True
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Passive", f"Failed to launch controller:\n{e}")
+            return False
+
+    def _load_active(self, spec: dict) -> bool:
+        """Load active data from multiple files with column mapping."""
+        try:
+            from dc_cut.io.universal import parse_any_file, parse_combined_csv
+            from dc_cut.core.controller import InteractiveRemovalWithLayers
+            from dc_cut.gui.main_window import show_shell
+            from dc_cut.services.prefs import load_prefs
+            import numpy as np
+            import os
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Active", f"Imports failed:\n{e}")
+            return False
+        
+        files = spec.get('files', [])
+        dx = float(spec.get('dx', 2.0))
+        vmin = float(spec.get('vmin', 0.0))
+        vmax = float(spec.get('vmax', 5000.0))
+        group_mode = spec.get('group_mode', 'Separate branches')
+        
+        all_velocity = []
+        all_frequency = []
+        all_wavelength = []
+        all_labels = []
+        file_boundaries = []  # Track which layers belong to which file
+        spectrum_files = {}  # {label: spectrum_path}
+        
+        try:
+            for file_info in files:
+                path = file_info['path']
+                label = file_info.get('label', os.path.basename(path))
+                mapping_info = file_info.get('mapping', {})
+                spectrum_path = file_info.get('spectrum', '')
+                
+                # Get column mapping
+                column_mapping = mapping_info.get('column_mapping', {})
+                data_start_line = mapping_info.get('data_start_line', 0)
+                offset_grouping = mapping_info.get('offset_grouping', 'None (single offset)')
+                
+                # Determine cols_per_offset
+                cols_per_offset = 0
+                if '2 cols' in offset_grouping:
+                    cols_per_offset = 2
+                elif '3 cols' in offset_grouping:
+                    cols_per_offset = 3
+                elif 'Auto' in offset_grouping:
+                    cols_per_offset = 3  # Default for auto
+                
+                ext = os.path.splitext(path)[1].lower()
+                
+                if column_mapping:
+                    # Use universal parser with mapping
+                    v, f, w, labels = parse_any_file(
+                        path, column_mapping,
+                        data_start_line=data_start_line,
+                        cols_per_offset=cols_per_offset
+                    )
+                elif ext == '.mat':
+                    # Try auto-detect for standard MASW MAT files
+                    try:
+                        v, f, w, labels = parse_any_file(path)
+                    except ValueError as e:
+                        QtWidgets.QMessageBox.warning(
+                            self, "Active", 
+                            f"Could not auto-detect MAT format for {os.path.basename(path)}.\n"
+                            f"Please use Map button to specify columns.\n\nError: {e}"
+                        )
+                        continue
+                elif ext == '.csv':
+                    # Use combined CSV parser (auto-detect)
+                    v, f, w, labels = parse_combined_csv(path)
+                else:
+                    QtWidgets.QMessageBox.warning(
+                        self, "Active", 
+                        f"No mapping for {os.path.basename(path)}. Please use Map button."
+                    )
+                    continue
+                
+                # Apply velocity clamp
+                for i in range(len(v)):
+                    mask = (v[i] >= vmin) & (v[i] <= vmax)
+                    v[i] = v[i][mask]
+                    f[i] = f[i][mask]
+                    w[i] = w[i][mask]
+                
+                # Prefix labels with file label
+                start_idx = len(all_velocity)
+                for i, layer_label in enumerate(labels):
+                    full_label = f"{label}/{layer_label}" if group_mode == 'Separate branches' else layer_label
+                    all_labels.append(full_label)
+                    if spectrum_path:
+                        spectrum_files[full_label] = spectrum_path
+                
+                all_velocity.extend(v)
+                all_frequency.extend(f)
+                all_wavelength.extend(w)
+                file_boundaries.append((label, start_idx, len(all_velocity)))
+            
+            if not all_velocity:
+                QtWidgets.QMessageBox.critical(self, "Active", "No data loaded from files.")
+                return False
+            
+            # Get array configuration
+            try:
+                P = load_prefs()
+                n_phones = int(P.get('default_n_phones', 24))
+            except Exception:
+                n_phones = 24
+            
+            array_positions = np.arange(0, dx * n_phones, dx)
+            
+            ctrl = InteractiveRemovalWithLayers(
+                all_velocity, all_frequency, all_wavelength,
+                array_positions=array_positions,
+                source_offsets=[],
+                set_leg=all_labels,
+                receiver_dx=dx,
+                legacy_controls=False
+            )
+            
+            ctrl.min_vel = vmin
+            ctrl.max_vel = vmax
+            
+            # Store file boundaries for layer tree
+            ctrl._file_boundaries = file_boundaries
+            ctrl._spectrum_files = spectrum_files
+            
+            try:
+                P = load_prefs()
+                ctrl.freq_tick_style = P.get('freq_tick_style', 'decades')
+                ctrl.freq_custom_ticks = P.get('freq_custom_ticks', [])
+            except Exception:
+                pass
+            
+            # Load spectrum files
+            for label, spectrum_path in spectrum_files.items():
+                if spectrum_path and hasattr(ctrl, 'load_combined_spectrum_for_layers'):
+                    try:
+                        ctrl.load_combined_spectrum_for_layers(spectrum_path)
+                    except Exception:
+                        pass
+            
+            app_qt = show_shell(ctrl)
+            try:
+                app_qt._masw_shell_window.adopt_controller(ctrl)
+                ctrl.suppress_mpl_controls_for_shell()
+                try:
+                    ctrl._enforce_shell_layout()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            
+            return True
+            
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Active", f"Failed to load data:\n{e}")
             return False
 
     def _load_matlab(self, spec: dict) -> bool:
@@ -756,6 +919,8 @@ def open_data_directly():
     ok = False
     if mode == 'passive':
         ok = launcher._load_passive(spec)
+    elif mode == 'active':
+        ok = launcher._load_active(spec)
     elif mode == 'matlab':
         ok = launcher._load_matlab(spec)
     elif mode == 'csv':

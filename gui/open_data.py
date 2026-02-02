@@ -375,6 +375,386 @@ class KlimitsMapperDialog(QtWidgets.QDialog):
         return self.spin_default_diameter.value()
 
 
+class UniversalColumnMapperDialog(QtWidgets.QDialog):
+    """Universal column mapping dialog for any file type (MAT/CSV/TXT).
+    
+    Features:
+    - Auto-detects delimiter (comma, tab, space, pipe)
+    - Horizontal + vertical scrolling for wide files
+    - Data start line selector
+    - Offset grouping for multi-offset data
+    """
+    
+    def __init__(self, file_path: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Universal Column Mapper")
+        self.resize(900, 600)
+        self.file_path = file_path
+        self.columns_data = []
+        self.delimiter = 'auto'
+        self.data_start_line = 0
+        self.total_lines = 0
+        
+        self._build_ui()
+        self._load_file()
+    
+    def _build_ui(self):
+        import numpy as np
+        v = QtWidgets.QVBoxLayout(self)
+        
+        # File info and controls
+        info_layout = QtWidgets.QHBoxLayout()
+        import os
+        self.lbl_file = QtWidgets.QLabel(f"<b>File:</b> {os.path.basename(self.file_path)}")
+        info_layout.addWidget(self.lbl_file)
+        info_layout.addStretch()
+        
+        # Delimiter selector
+        info_layout.addWidget(QtWidgets.QLabel("Delimiter:"))
+        self.cmb_delimiter = QtWidgets.QComboBox()
+        self.cmb_delimiter.addItems(["Auto", "Comma", "Tab", "Space", "Pipe"])
+        self.cmb_delimiter.currentTextChanged.connect(self._on_delimiter_changed)
+        info_layout.addWidget(self.cmb_delimiter)
+        
+        # Data start line
+        info_layout.addWidget(QtWidgets.QLabel("Start line:"))
+        self.spin_start = QtWidgets.QSpinBox()
+        self.spin_start.setRange(0, 10000)
+        self.spin_start.setValue(0)
+        self.spin_start.valueChanged.connect(self._on_start_changed)
+        info_layout.addWidget(self.spin_start)
+        self.lbl_total = QtWidgets.QLabel("(of 0 lines)")
+        info_layout.addWidget(self.lbl_total)
+        v.addLayout(info_layout)
+        
+        v.addWidget(QtWidgets.QLabel("<b>Map each column to its data type:</b>"))
+        
+        # Status label
+        self.status_label = QtWidgets.QLabel("")
+        v.addWidget(self.status_label)
+        
+        # Scroll area for columns (both H and V)
+        self.scroll = QtWidgets.QScrollArea(self)
+        self.scroll.setWidgetResizable(True)
+        try:
+            self.scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        except AttributeError:
+            self.scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+            self.scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        
+        self.container = QtWidgets.QWidget()
+        self.col_layout = QtWidgets.QHBoxLayout(self.container)
+        self.col_layout.setSpacing(4)
+        self.scroll.setWidget(self.container)
+        v.addWidget(self.scroll, 1)
+        
+        # Column type options
+        self.type_options = [
+            "Skipped",
+            "Frequency (Hz)",
+            "Slowness (s/km)",
+            "Velocity (m/s)",
+            "Wavelength (m)",
+            "Power/Amplitude",
+            "Azimuth",
+            "Time (s)",
+            "Label/ID"
+        ]
+        
+        # Offset grouping
+        group_layout = QtWidgets.QHBoxLayout()
+        group_layout.addWidget(QtWidgets.QLabel("Offset grouping:"))
+        self.cmb_grouping = QtWidgets.QComboBox()
+        self.cmb_grouping.addItems(["None (single offset)", "Auto-detect", "2 cols/offset", "3 cols/offset"])
+        group_layout.addWidget(self.cmb_grouping)
+        group_layout.addStretch()
+        v.addLayout(group_layout)
+        
+        # Buttons
+        btns = QtWidgets.QDialogButtonBox(self)
+        try:
+            ok = QtWidgets.QDialogButtonBox.Ok
+            cancel = QtWidgets.QDialogButtonBox.Cancel
+        except AttributeError:
+            ok = QtWidgets.QDialogButtonBox.StandardButton.Ok
+            cancel = QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        btns.setStandardButtons(ok | cancel)
+        self.btn_ok = btns.button(ok)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        v.addWidget(btns)
+        
+        self.combo_boxes = []
+    
+    def _load_file(self):
+        """Load and parse file based on extension."""
+        import os
+        import re
+        import numpy as np
+        
+        ext = os.path.splitext(self.file_path)[1].lower()
+        
+        try:
+            if ext == '.mat':
+                self._load_mat_file()
+            else:
+                self._load_text_file()
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to load file:\n{e}")
+    
+    def _load_mat_file(self):
+        """Load MATLAB .mat file and show available variables."""
+        import numpy as np
+        try:
+            from scipy.io import loadmat
+        except ImportError:
+            QtWidgets.QMessageBox.critical(self, "Error", "scipy required for .mat files")
+            return
+        
+        mat = loadmat(self.file_path, squeeze_me=True)
+        # Filter out metadata keys
+        var_names = [k for k in mat.keys() if not k.startswith('__')]
+        
+        # Show each variable as a "column"
+        for var_name in var_names:
+            arr = mat[var_name]
+            if isinstance(arr, np.ndarray):
+                if arr.ndim == 2:
+                    # Multi-column variable - show each column
+                    for col_idx in range(arr.shape[1]):
+                        col_data = arr[:, col_idx]
+                        self.columns_data.append(col_data)
+                        self._add_column_widget(f"{var_name}[:,{col_idx}]", col_data)
+                elif arr.ndim == 1:
+                    self.columns_data.append(arr)
+                    self._add_column_widget(var_name, arr)
+        
+        self.total_lines = len(self.columns_data[0]) if self.columns_data else 0
+        self.lbl_total.setText(f"(of {self.total_lines} rows)")
+        self._auto_detect()
+        self._validate()
+    
+    def _load_text_file(self):
+        """Load CSV/TXT file with delimiter detection."""
+        import re
+        import numpy as np
+        
+        # Pattern to strip ANSI escape codes
+        ansi_escape = re.compile(r'\x1b\[[0-9;]*m|\[\d*m')
+        
+        # Read and clean lines
+        raw_lines = []
+        with open(self.file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                clean = ansi_escape.sub('', line).strip()
+                if clean and not clean.startswith('#'):
+                    raw_lines.append(clean)
+        
+        if not raw_lines:
+            QtWidgets.QMessageBox.warning(self, "Warning", "File contains no data")
+            return
+        
+        # Detect delimiter
+        delimiters = {
+            'Comma': ',',
+            'Tab': '\t',
+            'Space': r'\s+',
+            'Pipe': r'\|',
+            'Auto': None
+        }
+        
+        delimiter_choice = self.cmb_delimiter.currentText()
+        if delimiter_choice == 'Auto':
+            # Auto-detect by counting separators in first data line
+            first_line = raw_lines[0]
+            counts = {
+                'Comma': first_line.count(','),
+                'Tab': first_line.count('\t'),
+                'Pipe': first_line.count('|'),
+                'Space': len(re.split(r'\s+', first_line)) - 1
+            }
+            best = max(counts, key=counts.get)
+            delimiter = delimiters[best]
+        else:
+            delimiter = delimiters[delimiter_choice]
+        
+        # Parse rows
+        rows = []
+        for line in raw_lines:
+            if delimiter and delimiter not in [r'\s+', r'\|']:
+                parts = [p.strip() for p in line.split(delimiter)]
+            else:
+                parts = re.split(delimiter or r'[\s\|,]+', line)
+            parts = [p for p in parts if p]
+            if parts:
+                rows.append(parts)
+        
+        if not rows:
+            return
+        
+        self.total_lines = len(rows)
+        self.lbl_total.setText(f"(of {self.total_lines} lines)")
+        self.spin_start.setMaximum(max(0, self.total_lines - 1))
+        
+        # Build column data
+        n_cols = max(len(row) for row in rows)
+        self._rebuild_columns(rows, n_cols)
+    
+    def _rebuild_columns(self, rows, n_cols):
+        """Rebuild column widgets from parsed rows."""
+        import numpy as np
+        
+        # Clear existing
+        self.columns_data.clear()
+        self.combo_boxes.clear()
+        while self.col_layout.count():
+            item = self.col_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        # Apply start line offset
+        start = self.spin_start.value()
+        rows = rows[start:] if start < len(rows) else []
+        
+        for col_idx in range(n_cols):
+            col_values = [row[col_idx] if col_idx < len(row) else '' for row in rows]
+            
+            # Try to convert to numeric
+            try:
+                numeric = [float(v) for v in col_values]
+                col_data = np.array(numeric)
+            except (ValueError, TypeError):
+                col_data = np.array(col_values)
+            
+            self.columns_data.append(col_data)
+            self._add_column_widget(f"Col {col_idx + 1}", col_data)
+        
+        self._auto_detect()
+        self._validate()
+    
+    def _add_column_widget(self, label: str, col_data):
+        """Add a column widget to the layout."""
+        import numpy as np
+        
+        w = QtWidgets.QWidget()
+        w.setMinimumWidth(130)
+        w.setMaximumWidth(200)
+        vbox = QtWidgets.QVBoxLayout(w)
+        vbox.setContentsMargins(2, 2, 2, 2)
+        
+        # Column header
+        lbl = QtWidgets.QLabel(f"<b>{label}</b>")
+        try:
+            lbl.setAlignment(QtCore.Qt.AlignCenter)
+        except AttributeError:
+            lbl.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        vbox.addWidget(lbl)
+        
+        # Type selector
+        combo = QtWidgets.QComboBox(w)
+        combo.addItems(self.type_options)
+        combo.currentTextChanged.connect(lambda: self._validate())
+        self.combo_boxes.append(combo)
+        vbox.addWidget(combo)
+        
+        # Data preview with scroll
+        preview = QtWidgets.QTextEdit(w)
+        preview.setReadOnly(True)
+        preview.setMaximumHeight(350)
+        
+        # Format preview text
+        if col_data.dtype.kind in 'iuf':  # numeric
+            preview_text = "\n".join([f"{v:.6g}" for v in col_data[:500]])
+        else:
+            preview_text = "\n".join([str(v) for v in col_data[:500]])
+        if len(col_data) > 500:
+            preview_text += f"\n... ({len(col_data)} total)"
+        preview.setPlainText(preview_text)
+        vbox.addWidget(preview, 1)
+        
+        self.col_layout.addWidget(w)
+    
+    def _on_delimiter_changed(self, text):
+        """Reload file with new delimiter."""
+        import os
+        if os.path.splitext(self.file_path)[1].lower() != '.mat':
+            self._load_text_file()
+    
+    def _on_start_changed(self, value):
+        """Reload preview with new start line."""
+        import os
+        if os.path.splitext(self.file_path)[1].lower() != '.mat':
+            self._load_text_file()
+    
+    def _auto_detect(self):
+        """Auto-detect column types based on data patterns."""
+        import numpy as np
+        
+        for i, col_data in enumerate(self.columns_data):
+            if i >= len(self.combo_boxes):
+                break
+            
+            # Skip non-numeric columns
+            if col_data.dtype.kind not in 'iuf':
+                continue
+            
+            try:
+                arr = col_data[np.isfinite(col_data)]
+                if arr.size == 0:
+                    continue
+                
+                min_val = float(np.min(arr))
+                max_val = float(np.max(arr))
+                
+                # Detect frequency: 0.5-200 Hz range
+                if 0.01 <= min_val <= 100 and 0.1 <= max_val <= 300:
+                    self.combo_boxes[i].setCurrentText("Frequency (Hz)")
+                # Detect slowness: s/km values 0.1-15
+                elif 0.1 <= min_val <= 10.0 and 0.15 <= max_val <= 20.0:
+                    self.combo_boxes[i].setCurrentText("Slowness (s/km)")
+                # Detect velocity: 50-10000 m/s
+                elif 50 <= min_val and max_val <= 10000:
+                    self.combo_boxes[i].setCurrentText("Velocity (m/s)")
+            except Exception:
+                pass
+    
+    def _validate(self):
+        """Validate that required columns are mapped."""
+        types = [cb.currentText() for cb in self.combo_boxes]
+        has_freq = "Frequency (Hz)" in types
+        has_vel = "Velocity (m/s)" in types or "Slowness (s/km)" in types
+        
+        if has_freq and has_vel:
+            self.status_label.setText('<span style="color:green">✓ Required columns mapped</span>')
+            self.btn_ok.setEnabled(True)
+        else:
+            missing = []
+            if not has_freq:
+                missing.append("Frequency")
+            if not has_vel:
+                missing.append("Velocity or Slowness")
+            self.status_label.setText(f'<span style="color:red">Missing: {", ".join(missing)}</span>')
+            self.btn_ok.setEnabled(False)
+    
+    def get_mapping(self) -> dict:
+        """Return column mapping as dict {type_str: col_idx}."""
+        mapping = {}
+        for i, combo in enumerate(self.combo_boxes):
+            type_str = combo.currentText()
+            if type_str != "Skipped":
+                mapping[type_str] = i
+        return mapping
+    
+    def get_data_start_line(self) -> int:
+        """Return user-specified data start line."""
+        return self.spin_start.value()
+    
+    def get_offset_grouping(self) -> str:
+        """Return offset grouping mode."""
+        return self.cmb_grouping.currentText()
+
+
 class CircularArrayTab(QtWidgets.QWidget):
     """Tab for Circular Array HRFK workflow input.
     
@@ -614,15 +994,20 @@ class CircularArrayTab(QtWidgets.QWidget):
         import re
         import numpy as np
         
+        # Pattern to strip ANSI escape codes
+        ansi_escape = re.compile(r'\x1b\[[0-9;]*m|\[\d*m')
+        
         try:
             data_lines = []
             with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                 for line in f:
-                    stripped = line.strip()
-                    if not stripped or stripped.startswith('#'):
+                    # Strip ANSI escape codes first
+                    clean_line = ansi_escape.sub('', line).strip()
+                    if not clean_line or clean_line.startswith('#'):
                         continue
-                    if stripped[0].isdigit():
-                        data_lines.append(stripped)
+                    # Check if line starts with digit or minus sign (negative number)
+                    if clean_line[0].isdigit() or (clean_line[0] == '-' and len(clean_line) > 1 and clean_line[1].isdigit()):
+                        data_lines.append(clean_line)
             
             if not data_lines:
                 QtWidgets.QMessageBox.warning(self, "Map Columns", "File contains no data rows")
@@ -844,70 +1229,203 @@ class OpenDataDialog(QtWidgets.QDialog):
 
     # ---- Tabs ----
     def _make_tab_active(self):
-        """Active Data tab with nested MATLAB and CSV sub-tabs."""
+        """Active Data tab with multi-file support."""
         w = QtWidgets.QWidget(self)
         v = QtWidgets.QVBoxLayout(w)
         v.setContentsMargins(6, 6, 6, 6)
         
-        # Nested tab widget for MATLAB and CSV
-        self.active_tabs = QtWidgets.QTabWidget(w)
-        v.addWidget(self.active_tabs, 1)
+        # File table storage
+        self.active_files = []  # List of {label, path, mapping, spectrum, ...}
+        self.active_file_mappings = {}  # {row_idx: mapping_dict}
         
-        # Create sub-tabs
-        self.tab_matlab = self._make_subtab_matlab()
-        self.tab_csv    = self._make_subtab_csv()
+        # Info label
+        info = QtWidgets.QLabel("<i>Add data files (MAT, CSV, TXT). Each file becomes a branch in the layer tree.</i>")
+        info.setWordWrap(True)
+        v.addWidget(info)
         
-        self.active_tabs.addTab(self.tab_matlab, "MATLAB")
-        self.active_tabs.addTab(self.tab_csv,    "CSV")
+        # Files table
+        files_group = QtWidgets.QGroupBox("Data Files")
+        files_layout = QtWidgets.QVBoxLayout(files_group)
+        
+        self.active_table = QtWidgets.QTableWidget(0, 5)
+        self.active_table.setHorizontalHeaderLabels(["Label", "File Path", "Map", "NPZ Spectrum", ""])
+        self.active_table.horizontalHeader().setStretchLastSection(False)
+        self.active_table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Interactive if hasattr(QtWidgets.QHeaderView, 'ResizeMode') else QtWidgets.QHeaderView.Interactive)
+        self.active_table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch if hasattr(QtWidgets.QHeaderView, 'ResizeMode') else QtWidgets.QHeaderView.Stretch)
+        self.active_table.setColumnWidth(0, 100)
+        self.active_table.setColumnWidth(2, 50)
+        self.active_table.setColumnWidth(3, 180)
+        self.active_table.setColumnWidth(4, 30)
+        files_layout.addWidget(self.active_table)
+        
+        # Add/Remove buttons
+        btn_layout = QtWidgets.QHBoxLayout()
+        btn_add = QtWidgets.QPushButton("+ Add File")
+        btn_add.clicked.connect(self._add_active_file_row)
+        btn_remove = QtWidgets.QPushButton("- Remove Selected")
+        btn_remove.clicked.connect(self._remove_active_file_row)
+        btn_layout.addWidget(btn_add)
+        btn_layout.addWidget(btn_remove)
+        btn_layout.addStretch()
+        files_layout.addLayout(btn_layout)
+        
+        v.addWidget(files_group)
+        
+        # Group mode
+        group_layout = QtWidgets.QHBoxLayout()
+        group_layout.addWidget(QtWidgets.QLabel("Group files as:"))
+        self.active_group_mode = QtWidgets.QComboBox()
+        self.active_group_mode.addItems(["Separate branches", "Same branch (merged)"])
+        group_layout.addWidget(self.active_group_mode)
+        group_layout.addStretch()
+        v.addLayout(group_layout)
+        
+        # Settings
+        settings_layout = QtWidgets.QHBoxLayout()
+        settings_layout.addWidget(QtWidgets.QLabel("Δx (m):"))
+        self.active_dx = QtWidgets.QDoubleSpinBox()
+        self.active_dx.setRange(0.1, 100.0)
+        self.active_dx.setValue(2.0)
+        self.active_dx.setDecimals(2)
+        settings_layout.addWidget(self.active_dx)
+        
+        settings_layout.addSpacing(20)
+        settings_layout.addWidget(QtWidgets.QLabel("Vel min:"))
+        self.active_vmin = QtWidgets.QDoubleSpinBox()
+        self.active_vmin.setRange(0.0, 1e6)
+        self.active_vmin.setValue(0.0)
+        settings_layout.addWidget(self.active_vmin)
+        
+        settings_layout.addWidget(QtWidgets.QLabel("max:"))
+        self.active_vmax = QtWidgets.QDoubleSpinBox()
+        self.active_vmax.setRange(10.0, 1e6)
+        self.active_vmax.setValue(5000.0)
+        settings_layout.addWidget(self.active_vmax)
+        settings_layout.addStretch()
+        v.addLayout(settings_layout)
         
         return w
     
-    def _make_subtab_matlab(self):
-        w = QtWidgets.QWidget(self)
-        form = QtWidgets.QFormLayout(w)
-        # file
-        row = QtWidgets.QHBoxLayout()
-        self.mat_path = QtWidgets.QLineEdit(w); self.mat_path.setPlaceholderText("Select .mat file...")
-        btn = QtWidgets.QPushButton("Browse", w); btn.clicked.connect(lambda: self._pick_file(self.mat_path, "MAT-file", "*.mat"))
-        row.addWidget(self.mat_path, 1); row.addWidget(btn)
-        form.addRow("MATLAB:", row)
-        # dx
-        self.mat_dx = QtWidgets.QDoubleSpinBox(w); self.mat_dx.setRange(0.1, 100.0); self.mat_dx.setValue(2.0); self.mat_dx.setDecimals(2)
-        form.addRow("Δx (m):", self.mat_dx)
-        return w
-
-    def _make_subtab_csv(self):
-        w = QtWidgets.QWidget(self)
-        form = QtWidgets.QFormLayout(w)
-        row = QtWidgets.QHBoxLayout()
-        self.csv_path = QtWidgets.QLineEdit(w); self.csv_path.setPlaceholderText("Select .csv file...")
-        btn = QtWidgets.QPushButton("Browse", w); btn.clicked.connect(lambda: self._pick_file(self.csv_path, "CSV", "*.csv"))
-        row.addWidget(self.csv_path, 1); row.addWidget(btn)
-        form.addRow("CSV:", row)
-
-        # NEW: Spectrum .npz file (optional)
-        row_spectrum = QtWidgets.QHBoxLayout()
-        self.csv_spectrum_path = QtWidgets.QLineEdit(w); self.csv_spectrum_path.setPlaceholderText("(Optional) Select spectrum .npz file...")
-        btn_spectrum = QtWidgets.QPushButton("Browse", w); btn_spectrum.clicked.connect(lambda: self._pick_file(self.csv_spectrum_path, "Spectrum NPZ", "*.npz"))
-        row_spectrum.addWidget(self.csv_spectrum_path, 1); row_spectrum.addWidget(btn_spectrum)
-        form.addRow("Spectrum:", row_spectrum)
-
-        # Info label for spectrum
-        spectrum_info = QtWidgets.QLabel("<i>Power spectrum background (optional, for visualization)</i>", w)
-        spectrum_info.setWordWrap(True)
-        spectrum_info.setStyleSheet("color: gray; font-size: 9pt;")
-        form.addRow("", spectrum_info)
-
-        self.csv_dx = QtWidgets.QDoubleSpinBox(w); self.csv_dx.setRange(0.1, 100.0); self.csv_dx.setValue(2.0); self.csv_dx.setDecimals(2)
-        form.addRow("Δx (m):", self.csv_dx)
-        # Optional velocity clamp before opening
-        rowy = QtWidgets.QHBoxLayout();
-        self.csv_vmin = QtWidgets.QDoubleSpinBox(w); self.csv_vmin.setRange(0.0, 1e6); self.csv_vmin.setDecimals(1); self.csv_vmin.setValue(0.0)
-        self.csv_vmax = QtWidgets.QDoubleSpinBox(w); self.csv_vmax.setRange(10.0, 1e6); self.csv_vmax.setDecimals(1); self.csv_vmax.setValue(5000.0)
-        rowy.addWidget(QtWidgets.QLabel("Ymin:")); rowy.addWidget(self.csv_vmin); rowy.addSpacing(6)
-        rowy.addWidget(QtWidgets.QLabel("Ymax:")); rowy.addWidget(self.csv_vmax)
-        form.addRow("Velocity clamp:", rowy)
-        return w
+    def _add_active_file_row(self):
+        """Add a new row to the active files table."""
+        row = self.active_table.rowCount()
+        self.active_table.insertRow(row)
+        
+        # Label (editable)
+        label_edit = QtWidgets.QLineEdit()
+        label_edit.setPlaceholderText(f"File {row + 1}")
+        label_edit.setText(f"File {row + 1}")
+        self.active_table.setCellWidget(row, 0, label_edit)
+        
+        # File path
+        path_edit = QtWidgets.QLineEdit()
+        path_edit.setPlaceholderText("Select file...")
+        self.active_table.setCellWidget(row, 1, path_edit)
+        
+        # Map button
+        btn_map = QtWidgets.QPushButton("Map")
+        btn_map.setMaximumWidth(50)
+        btn_map.clicked.connect(lambda checked, r=row: self._map_active_file(r))
+        self.active_table.setCellWidget(row, 2, btn_map)
+        
+        # NPZ spectrum path
+        spectrum_layout = QtWidgets.QWidget()
+        spectrum_h = QtWidgets.QHBoxLayout(spectrum_layout)
+        spectrum_h.setContentsMargins(0, 0, 0, 0)
+        spectrum_edit = QtWidgets.QLineEdit()
+        spectrum_edit.setPlaceholderText("(Optional)")
+        btn_spectrum = QtWidgets.QPushButton("...")
+        btn_spectrum.setMaximumWidth(30)
+        btn_spectrum.clicked.connect(lambda checked, e=spectrum_edit: self._browse_spectrum(e))
+        spectrum_h.addWidget(spectrum_edit, 1)
+        spectrum_h.addWidget(btn_spectrum)
+        self.active_table.setCellWidget(row, 3, spectrum_layout)
+        
+        # Browse button for main file
+        btn_browse = QtWidgets.QPushButton("...")
+        btn_browse.setMaximumWidth(30)
+        btn_browse.clicked.connect(lambda checked, e=path_edit: self._browse_active_file(e))
+        self.active_table.setCellWidget(row, 4, btn_browse)
+    
+    def _remove_active_file_row(self):
+        """Remove selected row from active files table."""
+        row = self.active_table.currentRow()
+        if row >= 0:
+            self.active_table.removeRow(row)
+            # Clean up mapping
+            if row in self.active_file_mappings:
+                del self.active_file_mappings[row]
+    
+    def _browse_active_file(self, path_edit):
+        """Browse for data file (MAT/CSV/TXT)."""
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select Data File", "",
+            "All Supported (*.mat *.csv *.txt);;MATLAB (*.mat);;CSV (*.csv);;Text (*.txt);;All Files (*.*)"
+        )
+        if path:
+            path_edit.setText(path)
+    
+    def _browse_spectrum(self, path_edit):
+        """Browse for NPZ spectrum file."""
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select Spectrum File", "",
+            "NPZ Files (*.npz);;All Files (*.*)"
+        )
+        if path:
+            path_edit.setText(path)
+    
+    def _map_active_file(self, row: int):
+        """Open column mapper for a specific file."""
+        if row >= self.active_table.rowCount():
+            return
+        
+        path_widget = self.active_table.cellWidget(row, 1)
+        path = path_widget.text().strip() if path_widget else ""
+        
+        if not path:
+            QtWidgets.QMessageBox.warning(self, "Map Columns", "Select a file first.")
+            return
+        
+        import os
+        if not os.path.exists(path):
+            QtWidgets.QMessageBox.warning(self, "Map Columns", f"File not found: {path}")
+            return
+        
+        dlg = UniversalColumnMapperDialog(path, self)
+        if dlg.exec() == 1:
+            self.active_file_mappings[row] = {
+                'column_mapping': dlg.get_mapping(),
+                'data_start_line': dlg.get_data_start_line(),
+                'offset_grouping': dlg.get_offset_grouping()
+            }
+    
+    def _get_active_files_config(self) -> list:
+        """Get configuration for all active data files."""
+        files = []
+        for row in range(self.active_table.rowCount()):
+            label_widget = self.active_table.cellWidget(row, 0)
+            path_widget = self.active_table.cellWidget(row, 1)
+            spectrum_widget = self.active_table.cellWidget(row, 3)
+            
+            label = label_widget.text().strip() if label_widget else f"File {row + 1}"
+            path = path_widget.text().strip() if path_widget else ""
+            
+            # Get spectrum path from nested layout
+            spectrum_path = ""
+            if spectrum_widget:
+                spectrum_edit = spectrum_widget.findChild(QtWidgets.QLineEdit)
+                if spectrum_edit:
+                    spectrum_path = spectrum_edit.text().strip()
+            
+            if path:
+                files.append({
+                    'label': label,
+                    'path': path,
+                    'spectrum': spectrum_path,
+                    'mapping': self.active_file_mappings.get(row, {})
+                })
+        
+        return files
 
     def _make_tab_state(self):
         w = QtWidgets.QWidget(self)
@@ -1087,32 +1605,20 @@ class OpenDataDialog(QtWidgets.QDialog):
     # ---- accept ----
     def _on_accept(self):
         idx = self.tabs.currentIndex()
-        if idx == 0:  # Active Data (nested tabs)
-            active_idx = self.active_tabs.currentIndex()
-            if active_idx == 0:  # MATLAB sub-tab
-                path = self.mat_path.text().strip()
-                if not path:
-                    QtWidgets.QMessageBox.warning(self, "MATLAB", "Please select a .mat file."); return
-                self.result = {
-                    'mode': 'matlab',
-                    'path': path,
-                    'dx': float(self.mat_dx.value()),
-                }
-            elif active_idx == 1:  # CSV sub-tab
-                path = self.csv_path.text().strip()
-                if not path:
-                    QtWidgets.QMessageBox.warning(self, "CSV", "Please select a .csv file."); return
-                spectrum_path = self.csv_spectrum_path.text().strip() or None  # None if empty
-                self.result = {
-                    'mode': 'csv',
-                    'path': path,
-                    'dx': float(self.csv_dx.value()),
-                    'vmin': float(self.csv_vmin.value()),
-                    'vmax': float(self.csv_vmax.value()),
-                    'spectrum_path': spectrum_path,  # NEW: Optional spectrum file
-                }
-            else:
-                QtWidgets.QMessageBox.warning(self, "Active Data", "Unknown sub-tab."); return
+        if idx == 0:  # Active Data (multi-file)
+            files = self._get_active_files_config()
+            if not files:
+                QtWidgets.QMessageBox.warning(self, "Active Data", "Please add at least one data file.")
+                return
+            
+            self.result = {
+                'mode': 'active',
+                'files': files,
+                'group_mode': self.active_group_mode.currentText(),
+                'dx': float(self.active_dx.value()),
+                'vmin': float(self.active_vmin.value()),
+                'vmax': float(self.active_vmax.value()),
+            }
         elif idx == 1:  # Passive Data
             max_path = self.max_path.text().strip()
             kl_path  = self.kl_path.text().strip()

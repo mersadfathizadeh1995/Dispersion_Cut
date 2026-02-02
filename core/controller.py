@@ -178,6 +178,11 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):
         except Exception:
             self._layers_model = None
 
+    @property
+    def model(self):
+        """Property alias for _layers_model for external access."""
+        return getattr(self, '_layers_model', None)
+
     def _init_nf_evaluator(self) -> None:
         """Initialize NearFieldInspector facade."""
         try:
