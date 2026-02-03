@@ -311,11 +311,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_menu(self):
         bar = self.menuBar(); m_file = bar.addMenu("&File"); m_view = bar.addMenu("&View"); m_edit = bar.addMenu("&Edit"); m_layers = bar.addMenu("&Layers"); m_tools= bar.addMenu("&Tools"); m_help = bar.addMenu("&Help")
 
-        # File menu - Append Data
-        act_append = QtGui.QAction("Append Data...", self)
-        act_append.setShortcut("Ctrl+Shift+O")
-        act_append.triggered.connect(self._append_data)
-        m_file.addAction(act_append)
+        # File menu - Open Data (append to current session)
+        act_open_data = QtGui.QAction("Open Data...", self)
+        act_open_data.setShortcut("Ctrl+Shift+O")
+        act_open_data.triggered.connect(self._open_data_append)
+        m_file.addAction(act_open_data)
         
         m_file.addSeparator()
         
@@ -386,6 +386,11 @@ class MainWindow(QtWidgets.QMainWindow):
         m_tools.addAction(act_inclined_tool)
 
         # Layers menu
+        act_add_point = QtGui.QAction("Add Point to Layer...", self)
+        act_add_point.setShortcut("Ctrl+P")
+        act_add_point.triggered.connect(self._add_point_to_layer)
+        m_layers.addAction(act_add_point)
+        
         act_add_spectrum = QtGui.QAction("Add Spectrum to Layer...", self)
         act_add_spectrum.triggered.connect(self._add_spectrum_to_layer)
         m_layers.addAction(act_add_spectrum)
@@ -416,6 +421,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 m_file.addAction(act_psv)
             except Exception: pass
 
+        # Tools menu - Export Wizard
+        m_tools.addSeparator()
+        act_export_wizard = QtGui.QAction("Export Wizard...", self)
+        act_export_wizard.setShortcut("Ctrl+E")
+        act_export_wizard.triggered.connect(self._open_export_wizard)
+        m_tools.addAction(act_export_wizard)
+
         # Help menu
         act_shortcuts = QtGui.QAction("Keyboard Shortcuts...", self)
         act_shortcuts.setShortcut("F1")
@@ -429,6 +441,7 @@ class MainWindow(QtWidgets.QMainWindow):
         <tr><th align="left">Action</th><th align="left">Shortcut</th></tr>
         <tr><td><b>File</b></td><td></td></tr>
         <tr><td>Preferences</td><td>Ctrl+,</td></tr>
+        <tr><td>Append Data</td><td>Ctrl+Shift+O</td></tr>
         <tr><td>Save State</td><td>Ctrl+S</td></tr>
         <tr><td>Exit</td><td>Ctrl+Q</td></tr>
         <tr><td><b>Edit</b></td><td></td></tr>
@@ -436,6 +449,10 @@ class MainWindow(QtWidgets.QMainWindow):
         <tr><td>Redo</td><td>Ctrl+Y</td></tr>
         <tr><td>Delete Selected Area</td><td>Delete</td></tr>
         <tr><td>Cancel Selection</td><td>Esc</td></tr>
+        <tr><td><b>Layers</b></td><td></td></tr>
+        <tr><td>Add Point to Layer</td><td>Ctrl+P</td></tr>
+        <tr><td><b>Tools</b></td><td></td></tr>
+        <tr><td>Export Wizard</td><td>Ctrl+E</td></tr>
         <tr><td><b>View</b></td><td></td></tr>
         <tr><td>Both Plots</td><td>Ctrl+1</td></tr>
         <tr><td>Frequency Plot Only</td><td>Ctrl+2</td></tr>
@@ -473,30 +490,320 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open publication figure dialog:\n{e}")
 
-    def _append_data(self):
-        """Append additional data to the current session."""
+    def _add_point_to_layer(self):
+        """Show dialog to add a point to a specific layer."""
         try:
-            from dc_cut.gui.append_data_dialog import AppendDataDialog
-            dlg = AppendDataDialog(self)
-            if dlg.exec() != 1:
+            from dc_cut.gui.add_point_dialog import AddPointDialog
+            import numpy as np
+            
+            ctrl = self.controller
+            if not hasattr(ctrl, 'model') or not ctrl.model or not ctrl.model.layers:
+                QtWidgets.QMessageBox.warning(self, "Add Point", "No layers available.")
                 return
             
-            result = dlg.result
-            if not result:
-                return
+            layer_names = [layer.label for layer in ctrl.model.layers]
             
-            # Append data to controller
-            success = self._do_append_data(result)
-            if success:
-                # Refresh UI
-                if hasattr(self.controller, 'on_layers_changed') and self.controller.on_layers_changed:
-                    self.controller.on_layers_changed()
-                QtWidgets.QMessageBox.information(
-                    self, "Success", 
-                    f"Appended {result.get('label', 'data')} with {result.get('layer_count', 0)} layers."
-                )
+            dlg = AddPointDialog(layer_names, self)
+            
+            # Populate layer data for interpolation mode
+            def update_layer_data(idx):
+                if idx < len(ctrl.model.layers):
+                    layer = ctrl.model.layers[idx]
+                    dlg.set_layer_data(layer.frequency, layer.velocity)
+            
+            dlg.layer_combo.currentIndexChanged.connect(update_layer_data)
+            update_layer_data(0)  # Initialize with first layer
+            
+            if dlg.exec():
+                result = dlg.get_result()
+                if result:
+                    layer_idx, f, v = result
+                    self._do_add_point(layer_idx, f, v)
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to append data:\n{e}")
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to add point:\n{e}")
+    
+    def _do_add_point(self, layer_idx: int, frequency: float, velocity: float):
+        """Add a point to the specified layer."""
+        import numpy as np
+        
+        ctrl = self.controller
+        if not hasattr(ctrl, 'model') or not ctrl.model:
+            return
+        
+        model = ctrl.model
+        if layer_idx >= len(model.layers):
+            return
+        
+        layer = model.layers[layer_idx]
+        wavelength = velocity / max(frequency, 1e-10)
+        
+        # Add to layer data
+        layer.frequency = np.append(layer.frequency, frequency)
+        layer.velocity = np.append(layer.velocity, velocity)
+        layer.wavelength = np.append(layer.wavelength, wavelength)
+        
+        # Sort by frequency
+        order = np.argsort(layer.frequency)
+        layer.frequency = layer.frequency[order]
+        layer.velocity = layer.velocity[order]
+        layer.wavelength = layer.wavelength[order]
+        
+        # Also update controller arrays
+        if layer_idx < len(ctrl.velocity_arrays):
+            ctrl.velocity_arrays[layer_idx] = layer.velocity
+            ctrl.frequency_arrays[layer_idx] = layer.frequency
+            ctrl.wavelength_arrays[layer_idx] = layer.wavelength
+        
+        # Update matplotlib line data
+        if layer_idx < len(getattr(ctrl, 'lines_freq', [])):
+            ctrl.lines_freq[layer_idx].set_data(layer.frequency, layer.velocity)
+        if layer_idx < len(getattr(ctrl, 'lines_wave', [])):
+            ctrl.lines_wave[layer_idx].set_data(layer.wavelength, layer.velocity)
+        
+        # Recalculate average
+        if hasattr(ctrl, '_update_average_line'):
+            ctrl._update_average_line()
+        
+        # Redraw
+        if hasattr(ctrl, 'fig') and ctrl.fig:
+            ctrl.fig.canvas.draw_idle()
+        
+        # Notify layers changed
+        if hasattr(ctrl, 'on_layers_changed') and ctrl.on_layers_changed:
+            ctrl.on_layers_changed()
+    
+    def _open_export_wizard(self):
+        """Open the Export Wizard - prompts user to select a file to load."""
+        try:
+            from dc_cut.export_wizard import ExportWizardWindow
+            
+            # Get suggested file path (last saved file if available)
+            suggested_file = None
+            ctrl = self.controller
+            if hasattr(ctrl, '_last_saved_file'):
+                suggested_file = ctrl._last_saved_file
+            
+            # Create wizard with suggested file path (does not auto-load)
+            self._export_wizard = ExportWizardWindow(self, suggested_file=suggested_file)
+            self._export_wizard.show()
+            
+            # Prompt user to select a file to load
+            self._export_wizard.prompt_for_file()
+            
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open Export Wizard:\n{e}")
+
+    def _open_data_append(self):
+        """Open data dialog to append data to the current session."""
+        try:
+            from dc_cut.gui.open_data import OpenDataDialog
+            dlg = OpenDataDialog(self)
+            if dlg.exec() != 1 or not dlg.result:
+                return
+            
+            spec = dlg.result
+            mode = spec.get('mode', '')
+            
+            # Handle different modes
+            if mode == 'active':
+                self._append_active_data(spec)
+            elif mode == 'passive':
+                self._append_passive_data(spec)
+            elif mode in ('circular_array_new', 'circular_array_continue'):
+                QtWidgets.QMessageBox.warning(
+                    self, "Circular Array",
+                    "Circular Array mode starts a new workflow.\n"
+                    "Please use File → Open Data from the launcher to start a new session."
+                )
+            elif mode == 'state':
+                QtWidgets.QMessageBox.warning(
+                    self, "State File",
+                    "State files replace the current session.\n"
+                    "Please use File → Open Data from the launcher to load a state file."
+                )
+            else:
+                QtWidgets.QMessageBox.warning(self, "Error", f"Unknown mode: {mode}")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open data:\n{e}")
+    
+    def _append_active_data(self, spec: dict):
+        """Append active data to the current session."""
+        import numpy as np
+        from dc_cut.io.universal import parse_any_file, parse_combined_csv
+        import os
+        
+        files = spec.get('files', [])
+        vcut = spec.get('vmax', spec.get('velocity_cutoff', 5000))
+        
+        if not files:
+            QtWidgets.QMessageBox.warning(self, "Error", "No files specified")
+            return
+        
+        total_layers = 0
+        for file_info in files:
+            path = file_info.get('path')
+            label = file_info.get('label', os.path.basename(path))
+            mapping_info = file_info.get('mapping', {})
+            
+            if not path or not os.path.exists(path):
+                continue
+            
+            # Extract mapping components (matching app.py _load_active logic)
+            column_mapping = mapping_info.get('column_mapping', {}) if mapping_info else {}
+            data_start_line = mapping_info.get('data_start_line', 0) if mapping_info else 0
+            offset_grouping = mapping_info.get('offset_grouping', 'None (single offset)') if mapping_info else 'None (single offset)'
+            
+            # Determine cols_per_offset
+            cols_per_offset = 0
+            if '2 cols' in offset_grouping:
+                cols_per_offset = 2
+            elif '3 cols' in offset_grouping:
+                cols_per_offset = 3
+            elif 'Auto' in offset_grouping:
+                cols_per_offset = 3
+            
+            ext = os.path.splitext(path)[1].lower()
+            
+            try:
+                if column_mapping:
+                    v, f, w, labels = parse_any_file(
+                        path, column_mapping,
+                        data_start_line=data_start_line,
+                        cols_per_offset=cols_per_offset
+                    )
+                elif ext == '.mat':
+                    v, f, w, labels = parse_any_file(path)
+                elif ext == '.csv':
+                    v, f, w, labels = parse_combined_csv(path)
+                else:
+                    continue
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(self, "Parse Error", f"Failed to parse {path}:\n{e}")
+                continue
+            
+            # Apply velocity clamp
+            for i in range(len(v)):
+                mask = (v[i] >= 0) & (v[i] <= vcut)
+                v[i] = v[i][mask]
+                f[i] = f[i][mask]
+                w[i] = w[i][mask]
+            
+            # Prefix labels with source name
+            prefixed_labels = [f"{label}/{lbl}" for lbl in labels]
+            
+            # Append to controller
+            ctrl = self.controller
+            start_idx = len(ctrl.velocity_arrays)
+            
+            ctrl.velocity_arrays.extend(v)
+            ctrl.frequency_arrays.extend(f)
+            ctrl.wavelength_arrays.extend(w)
+            
+            # Insert new labels BEFORE the average labels (which are at the end)
+            # The base controller appends "Average (Freq)" and "Average (Wave)" to offset_labels
+            avg_labels = [ctrl.average_label, ctrl.average_label_wave]
+            # Remove average labels if present at the end
+            while ctrl.offset_labels and ctrl.offset_labels[-1] in avg_labels:
+                ctrl.offset_labels.pop()
+            # Add new layer labels
+            ctrl.offset_labels.extend(prefixed_labels)
+            # Re-add average labels at the end
+            ctrl.offset_labels.append(ctrl.average_label)
+            ctrl.offset_labels.append(ctrl.average_label_wave)
+            
+            end_idx = len(ctrl.velocity_arrays)
+            
+            # Update file boundaries
+            if not hasattr(ctrl, '_file_boundaries') or ctrl._file_boundaries is None:
+                ctrl._file_boundaries = []
+            ctrl._file_boundaries.append((label, start_idx, end_idx))
+            
+            # Create lines for new data
+            self._create_lines_for_new_data(start_idx, end_idx, v, f, w)
+            total_layers += len(v)
+        
+        # Update layers model and refresh UI
+        self._update_layers_model()
+        if hasattr(self.controller, 'on_layers_changed') and self.controller.on_layers_changed:
+            self.controller.on_layers_changed()
+        
+        if total_layers > 0:
+            QtWidgets.QMessageBox.information(self, "Success", f"Appended {total_layers} layers.")
+    
+    def _append_passive_data(self, spec: dict):
+        """Append passive data to the current session."""
+        import numpy as np
+        from dc_cut.io.max import parse_max_file
+        import os
+        
+        max_path = spec.get('max_path')
+        vcut = spec.get('velocity_cutoff', 2000)
+        wave_type = spec.get('wave_type', 'all')
+        
+        if not max_path or not os.path.exists(max_path):
+            QtWidgets.QMessageBox.warning(self, "Error", "Invalid .max file path")
+            return
+        
+        try:
+            df = parse_max_file(max_path, wave_type=wave_type)
+            
+            # Convert to velocity/frequency/wavelength
+            if 'slow' in df.columns:
+                slow = df['slow'].values
+                velocity = 1000.0 / np.maximum(slow, 1e-10)
+            elif 'velocity' in df.columns:
+                velocity = df['velocity'].values
+            else:
+                raise ValueError("No velocity or slowness column found")
+            
+            frequency = df['freq'].values
+            wavelength = velocity / np.maximum(frequency, 1e-10)
+            
+            # Apply velocity filter
+            mask = (velocity >= 0) & (velocity <= vcut)
+            velocity = velocity[mask]
+            frequency = frequency[mask]
+            wavelength = wavelength[mask]
+            
+            label = os.path.splitext(os.path.basename(max_path))[0]
+            
+            # Add as single layer
+            ctrl = self.controller
+            start_idx = len(ctrl.velocity_arrays)
+            
+            ctrl.velocity_arrays.append(velocity)
+            ctrl.frequency_arrays.append(frequency)
+            ctrl.wavelength_arrays.append(wavelength)
+            ctrl.offset_labels.append(label)
+            
+            end_idx = len(ctrl.velocity_arrays)
+            
+            # Update file boundaries
+            if not hasattr(ctrl, '_file_boundaries') or ctrl._file_boundaries is None:
+                ctrl._file_boundaries = []
+            ctrl._file_boundaries.append((label, start_idx, end_idx))
+            
+            # Create lines for new data
+            self._create_lines_for_new_data(start_idx, end_idx, [velocity], [frequency], [wavelength])
+            
+            # Update layers model
+            self._update_layers_model()
+            
+            # Recalculate averages to include new data
+            if hasattr(ctrl, '_update_average_line'):
+                ctrl._update_average_line()
+            
+            if hasattr(ctrl, 'on_layers_changed') and ctrl.on_layers_changed:
+                ctrl.on_layers_changed()
+            
+            QtWidgets.QMessageBox.information(self, "Success", f"Appended {len(velocity)} points from {label}")
+            
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to parse passive data:\n{e}")
+    
+    def _append_data(self):
+        """Append additional data to the current session (legacy method)."""
+        self._open_data_append()
     
     def _do_append_data(self, spec: dict) -> bool:
         """Actually append the data to the controller."""
@@ -563,34 +870,45 @@ class MainWindow(QtWidgets.QMainWindow):
         # Update layers model
         self._update_layers_model()
         
+        # Recalculate averages to include new data
+        if hasattr(ctrl, '_update_average_line'):
+            ctrl._update_average_line()
+        
         # Store layer count in spec for message
         spec['layer_count'] = len(v)
         
         return True
     
     def _create_lines_for_new_data(self, start_idx, end_idx, v_arrays, f_arrays, w_arrays):
-        """Create matplotlib lines for newly appended data."""
+        """Create matplotlib lines for newly appended data matching original style."""
         ctrl = self.controller
         
-        # Get color cycle
-        try:
-            from matplotlib import cm
-            n_existing = start_idx
-            n_new = end_idx - start_idx
-            colors = cm.get_cmap('tab10').colors if n_new <= 10 else cm.get_cmap('tab20').colors
-        except Exception:
-            colors = None
+        # Use same markers and colors as base_controller.py for consistency
+        markers = ['o', 's', '^', 'v', '<', '>', 'D', 'd', 'p', 'h', 'H', '8', 'P', 'X', '*', '+', 'x', '1', '2', '4']
+        palette = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
         
         for i, (v, f, w) in enumerate(zip(v_arrays, f_arrays, w_arrays)):
             idx = start_idx + i
-            color = colors[idx % len(colors)] if colors else None
+            marker = markers[idx % len(markers)]
+            color = palette[idx % len(palette)]
+            label = ctrl.offset_labels[idx] if idx < len(ctrl.offset_labels) else f"Offset {idx + 1}"
             
-            # Create frequency plot line
-            line_freq, = ctrl.ax_freq.plot(f, v, 'o', markersize=3, color=color, picker=5)
+            # Create frequency plot line - match original style (hollow markers)
+            line_freq, = ctrl.ax_freq.semilogx(
+                f, v,
+                marker=marker, linestyle='', markerfacecolor='none',
+                markeredgecolor=color, markeredgewidth=1.5, markersize=6,
+                picker=5
+            )
             ctrl.lines_freq.append(line_freq)
             
-            # Create wavelength plot line
-            line_wave, = ctrl.ax_wave.plot(w, v, 'o', markersize=3, color=color, picker=5)
+            # Create wavelength plot line - match original style (hollow markers)
+            line_wave, = ctrl.ax_wave.semilogx(
+                w, v,
+                marker=marker, linestyle='', markerfacecolor='none',
+                markeredgecolor=color, markeredgewidth=1.5, markersize=6,
+                label=label, picker=5
+            )
             ctrl.lines_wave.append(line_wave)
         
         # Update legend and redraw
@@ -601,15 +919,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def _update_layers_model(self):
         """Rebuild layers model from controller arrays."""
         ctrl = self.controller
+        from dc_cut.core.model import LayersModel
         
-        if hasattr(ctrl, '_layers_model') and ctrl._layers_model is not None:
-            from dc_cut.core.model import LayersModel
-            ctrl._layers_model = LayersModel.from_arrays(
-                ctrl.velocity_arrays,
-                ctrl.frequency_arrays,
-                ctrl.wavelength_arrays,
-                ctrl.offset_labels
-            )
+        # Always rebuild the model from current arrays
+        ctrl._layers_model = LayersModel.from_arrays(
+            ctrl.velocity_arrays,
+            ctrl.frequency_arrays,
+            ctrl.wavelength_arrays,
+            ctrl.offset_labels
+        )
 
     def _switch_tool(self, tool_name: str) -> None:
         """Switch to the specified selection tool."""

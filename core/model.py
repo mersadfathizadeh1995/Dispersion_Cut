@@ -6,12 +6,27 @@ import numpy as np
 
 
 @dataclass
+class LayerStyle:
+    """Visual style settings for a layer."""
+    line_color: str = "#0000FF"
+    marker_color: str = "#0000FF"
+    line_style: str = "-"  # solid, dashed, etc.
+    marker: str = "o"  # circle, square, etc.
+    line_width: float = 1.0
+    marker_size: int = 6
+    alpha: float = 1.0
+
+
+@dataclass
 class LayerData:
     label: str
     frequency: np.ndarray
     velocity: np.ndarray
     wavelength: np.ndarray
     visible: bool = True
+
+    # Visual style settings
+    style: Optional[LayerStyle] = None
 
     # Spectrum background fields
     spectrum_data: Optional[Dict[str, Any]] = None  # Loaded spectrum from .npz

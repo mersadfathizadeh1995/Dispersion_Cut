@@ -242,15 +242,19 @@ class LayerTreeDock(QtWidgets.QDockWidget):
         if data and data[0] == 'layer':
             layer_idx = data[1]
             
+            action_settings = menu.addAction("Layer Settings...")
+            menu.addSeparator()
             action_show = menu.addAction("Show Only This")
             action_hide = menu.addAction("Hide This")
             menu.addSeparator()
             action_show_all = menu.addAction("Show All")
             action_hide_all = menu.addAction("Hide All")
             
-            action = menu.exec_(self.tree.mapToGlobal(pos))
+            action = menu.exec(self.tree.mapToGlobal(pos))
             
-            if action == action_show:
+            if action == action_settings:
+                self._show_layer_settings(layer_idx)
+            elif action == action_show:
                 self._set_layer_visibility(layer_idx, True, exclusive=True)
             elif action == action_hide:
                 self._set_layer_visibility(layer_idx, False)
@@ -263,7 +267,7 @@ class LayerTreeDock(QtWidgets.QDockWidget):
             action_show_group = menu.addAction("Show All in Group")
             action_hide_group = menu.addAction("Hide All in Group")
             
-            action = menu.exec_(self.tree.mapToGlobal(pos))
+            action = menu.exec(self.tree.mapToGlobal(pos))
             
             if action == action_show_group:
                 self._set_group_visibility(item, True)
@@ -352,3 +356,97 @@ class LayerTreeDock(QtWidgets.QDockWidget):
         # Call on_layers_changed to sync Layers dock on right
         if hasattr(self.controller, 'on_layers_changed') and self.controller.on_layers_changed:
             self.controller.on_layers_changed()
+    
+    def _show_layer_settings(self, layer_idx: int):
+        """Show layer settings dialog for the given layer."""
+        if not hasattr(self.controller, 'model') or not self.controller.model:
+            return
+        
+        model = self.controller.model
+        if layer_idx >= len(model.layers):
+            return
+        
+        layer = model.layers[layer_idx]
+        
+        # Import here to avoid circular imports
+        from dc_cut.gui.layer_settings_dialog import LayerSettingsDialog
+        from dc_cut.core.model import LayerStyle
+        
+        # Get current settings from layer style or from matplotlib lines
+        current_settings = {}
+        if layer.style:
+            current_settings = {
+                'line_color': layer.style.line_color,
+                'marker_color': layer.style.marker_color,
+                'line_style': layer.style.line_style,
+                'marker': layer.style.marker,
+                'line_width': layer.style.line_width,
+                'marker_size': layer.style.marker_size,
+                'alpha': layer.style.alpha,
+            }
+        elif layer_idx < len(getattr(self.controller, 'lines_freq', [])):
+            # Get from matplotlib line
+            line = self.controller.lines_freq[layer_idx]
+            current_settings = {
+                'line_color': line.get_color(),
+                'marker_color': line.get_markeredgecolor() or line.get_color(),
+                'line_style': line.get_linestyle(),
+                'marker': line.get_marker(),
+                'line_width': line.get_linewidth(),
+                'marker_size': int(line.get_markersize()),
+                'alpha': line.get_alpha() or 1.0,
+            }
+        
+        dialog = LayerSettingsDialog(layer.label, current_settings, self)
+        if dialog.exec():
+            settings = dialog.get_settings()
+            self._apply_layer_settings(layer_idx, settings)
+    
+    def _apply_layer_settings(self, layer_idx: int, settings: dict):
+        """Apply visual settings to a layer."""
+        from dc_cut.core.model import LayerStyle
+        
+        if not hasattr(self.controller, 'model') or not self.controller.model:
+            return
+        
+        model = self.controller.model
+        if layer_idx >= len(model.layers):
+            return
+        
+        # Save settings to layer model for persistence
+        model.layers[layer_idx].style = LayerStyle(
+            line_color=settings['line_color'],
+            marker_color=settings['marker_color'],
+            line_style=settings['line_style'],
+            marker=settings['marker'],
+            line_width=settings['line_width'],
+            marker_size=settings['marker_size'],
+            alpha=settings['alpha'],
+        )
+        
+        # Apply to matplotlib lines
+        if layer_idx < len(getattr(self.controller, 'lines_freq', [])):
+            line = self.controller.lines_freq[layer_idx]
+            line.set_color(settings['line_color'])
+            line.set_linestyle(settings['line_style'])
+            line.set_linewidth(settings['line_width'])
+            line.set_marker(settings['marker'])
+            line.set_markeredgecolor(settings['marker_color'])
+            line.set_markerfacecolor(settings['marker_color'])
+            line.set_markersize(settings['marker_size'])
+            line.set_alpha(settings['alpha'])
+        
+        if layer_idx < len(getattr(self.controller, 'lines_wave', [])):
+            line = self.controller.lines_wave[layer_idx]
+            line.set_color(settings['line_color'])
+            line.set_linestyle(settings['line_style'])
+            line.set_linewidth(settings['line_width'])
+            line.set_marker(settings['marker'])
+            line.set_markeredgecolor(settings['marker_color'])
+            line.set_markerfacecolor(settings['marker_color'])
+            line.set_markersize(settings['marker_size'])
+            line.set_alpha(settings['alpha'])
+        
+        # Redraw
+        if hasattr(self.controller, 'fig') and self.controller.fig:
+            self.controller.fig.canvas.draw_idle()

@@ -114,6 +114,10 @@ class FileIOHandler:
             stats = self._build_export_curve(freq_arr, vel_arr)
 
             write_geopsy_txt(stats, path)
+            
+            # Store last saved file path for export wizard
+            self._ctrl._last_saved_file = path
+            
             QtWidgets.QMessageBox.information(
                 self._ctrl.fig.canvas.manager.window,
                 "Save Dispersion Curve",

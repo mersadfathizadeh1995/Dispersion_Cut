@@ -169,6 +169,11 @@ class VisualizationHandler:
         self._remove_avg_freq_line()
 
         if fvals.size > 0:
+            # Store arrays for export wizard access
+            self._ctrl.avg_freq = fvals.copy()
+            self._ctrl.avg_vel = mvals.copy()
+            self._ctrl.avg_std = svals.copy()
+            
             out = self._ctrl.ax_freq.errorbar(
                 fvals,
                 mvals,
