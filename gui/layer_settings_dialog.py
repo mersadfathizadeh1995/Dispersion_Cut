@@ -22,6 +22,7 @@ QPushButton = QtWidgets.QPushButton
 QLabel = QtWidgets.QLabel
 QColorDialog = QtWidgets.QColorDialog
 QFrame = QtWidgets.QFrame
+QLineEdit = QtWidgets.QLineEdit
 Qt = QtCore.Qt
 QColor = QtGui.QColor
 QPalette = QtGui.QPalette
@@ -122,11 +123,15 @@ class LayerSettingsDialog(QDialog):
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         
-        # Layer name header
-        header = QLabel(f"<b>{self._layer_name}</b>")
-        align_center = Qt.AlignmentFlag.AlignCenter if hasattr(Qt, 'AlignmentFlag') else Qt.AlignCenter
-        header.setAlignment(align_center)
-        layout.addWidget(header)
+        # Layer name section (editable)
+        name_group = QGroupBox("Layer Name")
+        name_layout = QFormLayout(name_group)
+        
+        self.name_edit = QLineEdit(self._layer_name)
+        self.name_edit.setPlaceholderText("Enter layer name...")
+        name_layout.addRow("Name:", self.name_edit)
+        
+        layout.addWidget(name_group)
         
         # Line settings
         line_group = QGroupBox("Line")
@@ -239,6 +244,7 @@ class LayerSettingsDialog(QDialog):
     def get_settings(self) -> Dict[str, Any]:
         """Get the configured settings."""
         return {
+            'name': self.name_edit.text().strip() or self._layer_name,
             'line_color': self.line_color_btn.get_color(),
             'marker_color': self.marker_color_btn.get_color(),
             'line_style': self.line_style_combo.currentData(),

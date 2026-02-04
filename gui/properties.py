@@ -33,6 +33,22 @@ class PropertiesDock(QtWidgets.QDockWidget):
         self.nacd_spin = QtWidgets.QDoubleSpinBox(w); self.nacd_spin.setDecimals(2); self.nacd_spin.setRange(0.10, 3.00); self.nacd_spin.setSingleStep(0.02); form.addRow("NACD ≤", self.nacd_spin)
         self.chk_avg_f = QtWidgets.QCheckBox("Average (Freq)", w); self.chk_avg_w = QtWidgets.QCheckBox("Average (Wave)", w); form.addRow(self.chk_avg_f); form.addRow(self.chk_avg_w)
         self.chk_k_guides = QtWidgets.QCheckBox("Show k-limit guides", w); form.addRow(self.chk_k_guides)
+        
+        # K-Limits manager section (for multiple k-limits)
+        self.klimits_group = QtWidgets.QGroupBox("K-Limits", w)
+        self.klimits_group.setCheckable(False)
+        klimits_layout = QtWidgets.QVBoxLayout(self.klimits_group)
+        klimits_layout.setContentsMargins(4, 4, 4, 4)
+        klimits_layout.setSpacing(2)
+        self.klimits_list = QtWidgets.QWidget()
+        self.klimits_list_layout = QtWidgets.QVBoxLayout(self.klimits_list)
+        self.klimits_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.klimits_list_layout.setSpacing(2)
+        klimits_layout.addWidget(self.klimits_list)
+        self.klimits_checkboxes = {}  # {label: checkbox}
+        form.addRow(self.klimits_group)
+        self.klimits_group.setVisible(False)  # Hidden by default until multi k-limits loaded
+        
         self.chk_grid = QtWidgets.QCheckBox("Show grid", w); form.addRow(self.chk_grid)
         # Y clamps
         row_y = QtWidgets.QHBoxLayout();
@@ -64,6 +80,7 @@ class PropertiesDock(QtWidgets.QDockWidget):
         # No need to duplicate them here
 
         self.sync_from_controller()
+        self._rebuild_klimits_list()
         # Load NACD from prefs if controller lacks it
         try:
             P = load_prefs();
@@ -73,6 +90,41 @@ class PropertiesDock(QtWidgets.QDockWidget):
             self.chk_grid.setChecked(bool(P.get('show_grid', True)))
             self.ymin_spin.setValue(float(getattr(self.controller, 'min_vel', 0.0)))
             self.ymax_spin.setValue(float(getattr(self.controller, 'max_vel', 5000.0)))
+        except Exception:
+            pass
+    
+    def _rebuild_klimits_list(self) -> None:
+        """Rebuild the k-limits checkboxes from controller._multi_klimits."""
+        # Clear existing checkboxes
+        for cb in list(self.klimits_checkboxes.values()):
+            cb.setParent(None)
+            cb.deleteLater()
+        self.klimits_checkboxes.clear()
+        
+        multi_klimits = getattr(self.controller, '_multi_klimits', [])
+        visibility = getattr(self.controller, '_klimits_visibility', {})
+        
+        if not multi_klimits or len(multi_klimits) <= 1:
+            self.klimits_group.setVisible(False)
+            return
+        
+        self.klimits_group.setVisible(True)
+        
+        for label, kmin, kmax in multi_klimits:
+            cb = QtWidgets.QCheckBox(f"{label} ({kmin:.3f} - {kmax:.3f})")
+            cb.setChecked(visibility.get(label, True))
+            cb.toggled.connect(lambda checked, lbl=label: self._on_klimit_toggled(lbl, checked))
+            self.klimits_list_layout.addWidget(cb)
+            self.klimits_checkboxes[label] = cb
+    
+    def _on_klimit_toggled(self, label: str, checked: bool) -> None:
+        """Handle visibility toggle for a specific k-limit."""
+        if not hasattr(self.controller, '_klimits_visibility'):
+            self.controller._klimits_visibility = {}
+        self.controller._klimits_visibility[label] = checked
+        try:
+            self.controller._draw_k_guides()
+            self.controller.fig.canvas.draw_idle()
         except Exception:
             pass
 

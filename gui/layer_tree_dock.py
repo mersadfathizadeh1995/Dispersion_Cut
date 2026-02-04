@@ -413,8 +413,18 @@ class LayerTreeDock(QtWidgets.QDockWidget):
         if layer_idx >= len(model.layers):
             return
         
+        layer = model.layers[layer_idx]
+        
+        # Update layer name if changed
+        new_name = settings.get('name')
+        if new_name and new_name != layer.label:
+            layer.label = new_name
+            # Update offset_labels if present
+            if hasattr(self.controller, 'offset_labels') and layer_idx < len(self.controller.offset_labels):
+                self.controller.offset_labels[layer_idx] = new_name
+        
         # Save settings to layer model for persistence
-        model.layers[layer_idx].style = LayerStyle(
+        layer.style = LayerStyle(
             line_color=settings['line_color'],
             marker_color=settings['marker_color'],
             line_style=settings['line_style'],
@@ -447,6 +457,13 @@ class LayerTreeDock(QtWidgets.QDockWidget):
             line.set_markersize(settings['marker_size'])
             line.set_alpha(settings['alpha'])
         
-        # Redraw
+        # Redraw canvas
         if hasattr(self.controller, 'fig') and self.controller.fig:
             self.controller.fig.canvas.draw_idle()
+        
+        # Rebuild tree to show updated name
+        self._populate_tree()
+        
+        # Sync with Layers dock on the right panel
+        if hasattr(self.controller, 'on_layers_changed') and self.controller.on_layers_changed:
+            self.controller.on_layers_changed()

@@ -38,6 +38,134 @@ def load_klimits(*, mat_path: Optional[str] = None, csv_path: Optional[str] = No
     raise ValueError("Provide mat_path or csv_path for klimits")
 
 
+from typing import List, Dict, Any
+
+
+def load_klimits_multi(
+    path: str,
+    *,
+    column_mapping: Optional[Dict[str, int]] = None,
+    default_label: str = "K-Limit"
+) -> List[Tuple[str, float, float]]:
+    """Load multiple k-limits from a CSV file with multiple lines.
+    
+    Parameters
+    ----------
+    path : str
+        Path to CSV file containing k-limits data
+    column_mapping : dict, optional
+        Column mapping from KlimitsMapperDialog:
+        - 'K-min (rad/m)': column index for kmin
+        - 'K-max (rad/m)': column index for kmax
+        - 'Diameter (m)': column index for label/diameter (optional)
+    default_label : str
+        Base label to use if no diameter column is mapped
+        
+    Returns
+    -------
+    list of (label, kmin, kmax)
+        Each tuple contains label string and kmin/kmax float values
+    """
+    import os
+    import re
+    
+    ext = os.path.splitext(path)[1].lower()
+    klimits = []
+    
+    if ext == ".mat":
+        if scipy is None:
+            raise ImportError("SciPy is required to read MAT files.")
+        mat = scipy.io.loadmat(path)
+        if 'klimits' not in mat:
+            raise ValueError(f"MAT-file {path!r} does not contain 'klimits'")
+        arr = np.array(mat['klimits']).squeeze()
+        if arr.ndim == 1 and arr.size == 2:
+            klimits.append((default_label, float(arr[0]), float(arr[1])))
+        elif arr.ndim == 2:
+            for i, row in enumerate(arr):
+                if len(row) >= 2:
+                    label = f"{default_label} {i+1}"
+                    klimits.append((label, float(row[0]), float(row[1])))
+        return klimits
+    
+    # Parse CSV/TXT
+    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        lines = f.readlines()
+    
+    row_idx = 0
+    for line in lines:
+        s = line.strip()
+        if not s or s.startswith('#'):
+            continue
+        
+        parts = re.split(r'[,\s\t]+', s)
+        parts = [p.strip() for p in parts if p.strip()]
+        
+        if len(parts) < 2:
+            continue
+        
+        row_idx += 1
+        
+        if column_mapping:
+            kmin_col = column_mapping.get('K-min (rad/m)')
+            kmax_col = column_mapping.get('K-max (rad/m)')
+            label_col = column_mapping.get('Diameter (m)')
+            
+            if kmin_col is None or kmax_col is None:
+                continue
+            if kmin_col >= len(parts) or kmax_col >= len(parts):
+                continue
+            
+            try:
+                kmin = float(parts[kmin_col])
+                kmax = float(parts[kmax_col])
+            except (ValueError, TypeError):
+                continue
+            
+            if label_col is not None and label_col < len(parts):
+                try:
+                    label = f"{float(parts[label_col]):.0f}m"
+                except ValueError:
+                    label = str(parts[label_col])
+            else:
+                label = f"{default_label} {row_idx}"
+            
+            klimits.append((label, kmin, kmax))
+        else:
+            # Auto-detect format: (label, kmin, kmax) or (kmin, kmax)
+            try:
+                if len(parts) >= 3:
+                    # Try label, kmin, kmax
+                    try:
+                        label = parts[0]
+                        kmin = float(parts[1])
+                        kmax = float(parts[2])
+                        # If label is numeric, treat as diameter
+                        try:
+                            label = f"{float(label):.0f}m"
+                        except ValueError:
+                            pass
+                    except ValueError:
+                        # Maybe kmin, kmax, something_else
+                        kmin = float(parts[0])
+                        kmax = float(parts[1])
+                        label = f"{default_label} {row_idx}"
+                else:
+                    # Just kmin, kmax
+                    kmin = float(parts[0])
+                    kmax = float(parts[1])
+                    label = f"{default_label} {row_idx}"
+                
+                klimits.append((label, kmin, kmax))
+            except (ValueError, TypeError):
+                continue
+    
+    if not klimits:
+        raise ValueError(f"No valid k-limits found in {path}")
+    
+    return klimits
+
+
 # Max file format types
 MaxFormat = Literal['auto', 'fk', 'rtbf', 'lds']
 

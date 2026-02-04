@@ -540,7 +540,7 @@ class VisualizationHandler:
         ]
 
     def _draw_multi_k_guides(self, klimits_list: list) -> None:
-        """Draw k-guides for multiple arrays."""
+        """Draw k-guides for multiple arrays with visibility filtering."""
         fmin, fmax = self._ctrl.ax_freq.get_xlim()
         fmin = max(1e-3, fmin)
         fmax = max(fmax, fmin * 1.1)
@@ -548,8 +548,20 @@ class VisualizationHandler:
         y0, y1 = self._ctrl.ax_wave.get_ylim()
 
         legend_items = []
+        
+        # Get visibility settings
+        visibility = getattr(self._ctrl, '_klimits_visibility', {})
 
-        for diameter, kmin, kmax in klimits_list:
+        for label, kmin, kmax in klimits_list:
+            # Skip if not visible
+            if not visibility.get(label, True):
+                continue
+            
+            # Use label for color lookup (try to extract diameter if numeric)
+            try:
+                diameter = int(float(label.replace('m', '').strip()))
+            except (ValueError, AttributeError):
+                diameter = label
             base_color = self.MULTI_K_COLORS.get(diameter, self.DEFAULT_K_COLOR)
 
             v_ap = (2 * np.pi * f_curve) / float(kmin)
@@ -597,19 +609,19 @@ class VisualizationHandler:
             legend_items.extend([
                 mlines.Line2D(
                     [], [], color=base_color, linestyle='-', lw=1.5,
-                    label=f'{diameter}m Aperture'
+                    label=f'{label} Aperture'
                 ),
                 mlines.Line2D(
                     [], [], color=base_color, linestyle='--', lw=1.2,
-                    label=f'{diameter}m Aperture (λ/2)'
+                    label=f'{label} Aperture (λ/2)'
                 ),
                 mlines.Line2D(
                     [], [], color=base_color, linestyle='-', lw=1.5, alpha=0.6,
-                    label=f'{diameter}m Aliasing'
+                    label=f'{label} Aliasing'
                 ),
                 mlines.Line2D(
                     [], [], color=base_color, linestyle='--', lw=1.2, alpha=0.6,
-                    label=f'{diameter}m Aliasing (λ/2)'
+                    label=f'{label} Aliasing (λ/2)'
                 ),
             ])
 

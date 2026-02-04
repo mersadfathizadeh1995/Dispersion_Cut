@@ -1468,49 +1468,393 @@ class OpenDataDialog(QtWidgets.QDialog):
         return w
 
     def _make_tab_passive(self):
+        """Passive Data tab with multi-file support."""
         w = QtWidgets.QWidget(self)
-        form = QtWidgets.QFormLayout(w)
-        form.setContentsMargins(12, 12, 12, 12)
+        v = QtWidgets.QVBoxLayout(w)
+        v.setContentsMargins(6, 6, 6, 6)
+        
+        # File table storage
+        self.passive_files = []  # List of {label, path, klimit_path, wave_type, mapping}
+        self.passive_file_mappings = {}  # {row_idx: mapping_dict}
+        self.passive_klimit_mappings = {}  # {row_idx: klimit_mapping_dict}
         
         # Checkbox: Use column mapping for .max files
         self.use_column_mapping = QtWidgets.QCheckBox("Use column mapping for .max files", w)
-        self.use_column_mapping.setChecked(False)  # Unchecked by default (legacy mode)
-        self.use_column_mapping.setToolTip("When checked, shows column mapper dialog for .max files.\nWhen unchecked, uses automatic detection (legacy behavior).")
-        form.addRow("", self.use_column_mapping)
+        self.use_column_mapping.setChecked(False)
+        self.use_column_mapping.setToolTip("When checked, shows column mapper dialog for .max files.")
+        v.addWidget(self.use_column_mapping)
         
-        # data file (.max or .csv)
-        rowm = QtWidgets.QHBoxLayout()
-        self.max_path = QtWidgets.QLineEdit(w)
-        self.max_path.setPlaceholderText("Select .max or passive .csv file...")
-        btnm = QtWidgets.QPushButton("Browse", w)
-        btnm.clicked.connect(lambda: self._pick_passive_data())
-        rowm.addWidget(self.max_path, 1)
-        rowm.addWidget(btnm)
-        form.addRow("Data:", rowm)
-        # k-limits
-        rowk = QtWidgets.QHBoxLayout()
-        self.kl_path = QtWidgets.QLineEdit(w); self.kl_path.setPlaceholderText("Select k-limits (.mat or .csv)...")
-        btnk = QtWidgets.QPushButton("Browse", w); btnk.clicked.connect(lambda: self._pick_file_any(self.kl_path, (("MAT", "*.mat"),("CSV","*.csv"))))
-        rowk.addWidget(self.kl_path, 1); rowk.addWidget(btnk)
-        form.addRow("k-limits:", rowk)
-        # dx
-        self.pass_dx = QtWidgets.QDoubleSpinBox(w); self.pass_dx.setRange(0.1, 100.0); self.pass_dx.setValue(2.0); self.pass_dx.setDecimals(2)
-        form.addRow("Δx (m):", self.pass_dx)
-        # optional time
-        self.pass_time = QtWidgets.QLineEdit(w); self.pass_time.setPlaceholderText("(Optional) time slice in seconds")
-        form.addRow("Time (s):", self.pass_time)
-        # vcut
-        self.pass_vcut = QtWidgets.QDoubleSpinBox(w); self.pass_vcut.setRange(10.0, 10000.0); self.pass_vcut.setValue(2000.0); self.pass_vcut.setDecimals(1)
-        form.addRow("VelPlotCutoff (m/s):", self.pass_vcut)
-        # Wave type filter (for RTBF format .max files)
-        self.pass_wave_type = QtWidgets.QComboBox(w)
-        self.pass_wave_type.addItems(["All Waves", "Rayleigh (Combined)", "Rayleigh Vertical", "Rayleigh Radial", "Love (Transverse)"])
-        self.pass_wave_type.setToolTip("For RTBF format .max files: filter by wave polarization type.\n" +
-                                        "Rayleigh (Combined) shows all Rayleigh waves (vertical + radial).\n" +
-                                        "Love (Transverse) filters for Love waves.\n" +
-                                        "Standard FK format files ignore this setting.")
-        form.addRow("Wave Type:", self.pass_wave_type)
+        # Info label
+        info = QtWidgets.QLabel("<i>Add passive data files (.max, .csv). Each file becomes a branch in the layer tree.</i>")
+        info.setWordWrap(True)
+        v.addWidget(info)
+        
+        # Files table
+        files_group = QtWidgets.QGroupBox("Data Files")
+        files_layout = QtWidgets.QVBoxLayout(files_group)
+        
+        self.passive_table = QtWidgets.QTableWidget(0, 6)
+        self.passive_table.setHorizontalHeaderLabels(["Label", "Data File", "K-Limits (opt)", "Map K", "Wave Type", ""])
+        self.passive_table.horizontalHeader().setStretchLastSection(False)
+        try:
+            resize_mode = QtWidgets.QHeaderView.ResizeMode
+        except AttributeError:
+            resize_mode = QtWidgets.QHeaderView
+        self.passive_table.horizontalHeader().setSectionResizeMode(0, resize_mode.Interactive if hasattr(resize_mode, 'Interactive') else QtWidgets.QHeaderView.Interactive)
+        self.passive_table.horizontalHeader().setSectionResizeMode(1, resize_mode.Stretch if hasattr(resize_mode, 'Stretch') else QtWidgets.QHeaderView.Stretch)
+        self.passive_table.setColumnWidth(0, 80)
+        self.passive_table.setColumnWidth(2, 140)
+        self.passive_table.setColumnWidth(3, 50)
+        self.passive_table.setColumnWidth(4, 120)
+        self.passive_table.setColumnWidth(5, 30)
+        files_layout.addWidget(self.passive_table)
+        
+        # Add/Remove buttons
+        btn_layout = QtWidgets.QHBoxLayout()
+        btn_add = QtWidgets.QPushButton("+ Add File")
+        btn_add.clicked.connect(self._add_passive_file_row)
+        btn_remove = QtWidgets.QPushButton("- Remove Selected")
+        btn_remove.clicked.connect(self._remove_passive_file_row)
+        btn_layout.addWidget(btn_add)
+        btn_layout.addWidget(btn_remove)
+        btn_layout.addStretch()
+        files_layout.addLayout(btn_layout)
+        
+        v.addWidget(files_group)
+        
+        # Shared K-Limits section
+        klimit_group = QtWidgets.QGroupBox("Shared K-Limits (optional)")
+        klimit_layout = QtWidgets.QVBoxLayout(klimit_group)
+        
+        klimit_info = QtWidgets.QLabel("<i>Multi-line file: each line = 'label, kmin, kmax' or 'kmin, kmax'</i>")
+        klimit_info.setWordWrap(True)
+        klimit_layout.addWidget(klimit_info)
+        
+        klimit_row = QtWidgets.QHBoxLayout()
+        self.shared_klimit_path = QtWidgets.QLineEdit()
+        self.shared_klimit_path.setPlaceholderText("Select shared k-limits file (.mat or .csv)...")
+        btn_klimit = QtWidgets.QPushButton("...")
+        btn_klimit.setMaximumWidth(30)
+        btn_klimit.clicked.connect(self._browse_shared_klimit)
+        btn_klimit_map = QtWidgets.QPushButton("Map")
+        btn_klimit_map.setMaximumWidth(50)
+        btn_klimit_map.clicked.connect(self._map_shared_klimit)
+        klimit_row.addWidget(self.shared_klimit_path, 1)
+        klimit_row.addWidget(btn_klimit)
+        klimit_row.addWidget(btn_klimit_map)
+        klimit_layout.addLayout(klimit_row)
+        
+        v.addWidget(klimit_group)
+        
+        # Settings row
+        settings_layout = QtWidgets.QHBoxLayout()
+        settings_layout.addWidget(QtWidgets.QLabel("Δx (m):"))
+        self.pass_dx = QtWidgets.QDoubleSpinBox()
+        self.pass_dx.setRange(0.1, 100.0)
+        self.pass_dx.setValue(2.0)
+        self.pass_dx.setDecimals(2)
+        settings_layout.addWidget(self.pass_dx)
+        
+        settings_layout.addSpacing(20)
+        settings_layout.addWidget(QtWidgets.QLabel("VelCutoff (m/s):"))
+        self.pass_vcut = QtWidgets.QDoubleSpinBox()
+        self.pass_vcut.setRange(10.0, 10000.0)
+        self.pass_vcut.setValue(2000.0)
+        self.pass_vcut.setDecimals(1)
+        settings_layout.addWidget(self.pass_vcut)
+        settings_layout.addStretch()
+        v.addLayout(settings_layout)
+        
+        # Shared klimit mapping storage
+        self.shared_klimit_mapping = None
+        
         return w
+    
+    def _add_passive_file_row(self):
+        """Add a new row to the passive files table."""
+        row = self.passive_table.rowCount()
+        self.passive_table.insertRow(row)
+        
+        # Label (editable)
+        label_edit = QtWidgets.QLineEdit()
+        label_edit.setPlaceholderText(f"Array {row + 1}")
+        label_edit.setText(f"Array {row + 1}")
+        self.passive_table.setCellWidget(row, 0, label_edit)
+        
+        # Data file path with browse button
+        data_widget = QtWidgets.QWidget()
+        data_layout = QtWidgets.QHBoxLayout(data_widget)
+        data_layout.setContentsMargins(0, 0, 0, 0)
+        data_edit = QtWidgets.QLineEdit()
+        data_edit.setPlaceholderText("Select .max or .csv...")
+        btn_data = QtWidgets.QPushButton("...")
+        btn_data.setMaximumWidth(30)
+        btn_data.clicked.connect(lambda checked, e=data_edit, r=row: self._browse_passive_data(e, r))
+        data_layout.addWidget(data_edit, 1)
+        data_layout.addWidget(btn_data)
+        self.passive_table.setCellWidget(row, 1, data_widget)
+        
+        # K-limits path with browse button
+        klimit_widget = QtWidgets.QWidget()
+        klimit_layout = QtWidgets.QHBoxLayout(klimit_widget)
+        klimit_layout.setContentsMargins(0, 0, 0, 0)
+        klimit_edit = QtWidgets.QLineEdit()
+        klimit_edit.setPlaceholderText("(optional)")
+        btn_klimit = QtWidgets.QPushButton("...")
+        btn_klimit.setMaximumWidth(30)
+        btn_klimit.clicked.connect(lambda checked, e=klimit_edit: self._browse_klimit_file(e))
+        klimit_layout.addWidget(klimit_edit, 1)
+        klimit_layout.addWidget(btn_klimit)
+        self.passive_table.setCellWidget(row, 2, klimit_widget)
+        
+        # Map K button
+        btn_map_k = QtWidgets.QPushButton("Map")
+        btn_map_k.setMaximumWidth(50)
+        btn_map_k.clicked.connect(lambda checked, r=row: self._map_passive_klimit(r))
+        self.passive_table.setCellWidget(row, 3, btn_map_k)
+        
+        # Wave type combo
+        wave_combo = QtWidgets.QComboBox()
+        wave_combo.addItems(["All", "Rayleigh", "Ray Vert", "Ray Rad", "Love"])
+        self.passive_table.setCellWidget(row, 4, wave_combo)
+        
+        # Remove button
+        btn_remove = QtWidgets.QPushButton("×")
+        btn_remove.setMaximumWidth(30)
+        btn_remove.clicked.connect(lambda checked, r=row: self._remove_passive_row_at(r))
+        self.passive_table.setCellWidget(row, 5, btn_remove)
+    
+    def _remove_passive_file_row(self):
+        """Remove selected row from passive files table."""
+        row = self.passive_table.currentRow()
+        if row >= 0:
+            self.passive_table.removeRow(row)
+            if row in self.passive_file_mappings:
+                del self.passive_file_mappings[row]
+            if row in self.passive_klimit_mappings:
+                del self.passive_klimit_mappings[row]
+    
+    def _remove_passive_row_at(self, row: int):
+        """Remove specific row from passive files table."""
+        if row < self.passive_table.rowCount():
+            self.passive_table.removeRow(row)
+            if row in self.passive_file_mappings:
+                del self.passive_file_mappings[row]
+            if row in self.passive_klimit_mappings:
+                del self.passive_klimit_mappings[row]
+    
+    def _browse_passive_data(self, path_edit, row: int):
+        """Browse for passive data file."""
+        filters = "Geopsy FK .max (*.max);;Passive CSV (*.csv);;All Files (*.*)"
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Select Passive Data", "", filters)
+        if path:
+            path_edit.setText(path)
+            # If .max and column mapping enabled, show mapper
+            import os
+            if os.path.splitext(path)[1].lower() == ".max" and self.use_column_mapping.isChecked():
+                self._show_passive_column_mapper(path, row)
+    
+    def _browse_klimit_file(self, path_edit):
+        """Browse for k-limits file."""
+        filters = "K-Limits (*.mat *.csv);;MAT Files (*.mat);;CSV Files (*.csv);;All Files (*.*)"
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Select K-Limits", "", filters)
+        if path:
+            path_edit.setText(path)
+    
+    def _browse_shared_klimit(self):
+        """Browse for shared k-limits file."""
+        filters = "K-Limits (*.mat *.csv);;MAT Files (*.mat);;CSV Files (*.csv);;All Files (*.*)"
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Select Shared K-Limits", "", filters)
+        if path:
+            self.shared_klimit_path.setText(path)
+    
+    def _map_shared_klimit(self):
+        """Open mapper for shared k-limits file."""
+        path = self.shared_klimit_path.text().strip()
+        if not path:
+            QtWidgets.QMessageBox.warning(self, "Map K-Limits", "Select a k-limits file first.")
+            return
+        self._show_klimit_mapper(path, is_shared=True)
+    
+    def _map_passive_klimit(self, row: int):
+        """Open mapper for per-file k-limits."""
+        if row >= self.passive_table.rowCount():
+            return
+        klimit_widget = self.passive_table.cellWidget(row, 2)
+        if not klimit_widget:
+            return
+        klimit_edit = klimit_widget.findChild(QtWidgets.QLineEdit)
+        if not klimit_edit:
+            return
+        path = klimit_edit.text().strip()
+        if not path:
+            QtWidgets.QMessageBox.warning(self, "Map K-Limits", "Select a k-limits file first.")
+            return
+        self._show_klimit_mapper(path, is_shared=False, row=row)
+    
+    def _show_klimit_mapper(self, path: str, is_shared: bool = False, row: int = -1):
+        """Show k-limits column mapper dialog."""
+        import os
+        import re
+        import numpy as np
+        
+        if not os.path.exists(path):
+            QtWidgets.QMessageBox.warning(self, "Map K-Limits", f"File not found: {path}")
+            return
+        
+        try:
+            # Load file and parse columns
+            ext = os.path.splitext(path)[1].lower()
+            
+            if ext == ".mat":
+                QtWidgets.QMessageBox.information(
+                    self, "MAT File",
+                    "MAT files use standard 'klimits' variable format.\n"
+                    "No column mapping needed."
+                )
+                return
+            
+            # Parse CSV/TXT file
+            data_lines = []
+            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith('#'):
+                        continue
+                    data_lines.append(stripped)
+            
+            if not data_lines:
+                raise ValueError("File contains no data rows")
+            
+            # Parse rows
+            rows = []
+            for line in data_lines:
+                parts = re.split(r'[,\s\t]+', line)
+                parts = [p.strip() for p in parts if p.strip()]
+                if len(parts) >= 2:
+                    rows.append(parts)
+            
+            if not rows:
+                raise ValueError("No valid data rows found")
+            
+            # Build columns data
+            n_cols = max(len(r) for r in rows)
+            columns_data = []
+            for col_idx in range(n_cols):
+                col_values = []
+                for r in rows:
+                    if col_idx < len(r):
+                        try:
+                            col_values.append(float(r[col_idx]))
+                        except ValueError:
+                            col_values.append(r[col_idx])
+                    else:
+                        col_values.append('')
+                columns_data.append(col_values)
+            
+            # Show mapper dialog
+            dlg = KlimitsMapperDialog(columns_data, self)
+            if dlg.exec() == 1:
+                mapping = {
+                    'column_mapping': dlg.get_mapping(),
+                    'default_diameter': dlg.get_default_diameter(),
+                    'file_path': path,
+                }
+                if is_shared:
+                    self.shared_klimit_mapping = mapping
+                else:
+                    self.passive_klimit_mappings[row] = mapping
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open k-limits mapper:\n{e}")
+    
+    def _show_passive_column_mapper(self, path: str, row: int):
+        """Show column mapper for passive .max file."""
+        try:
+            import re
+            import numpy as np
+            
+            data_lines = []
+            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith('#'):
+                        continue
+                    if stripped[0].isdigit():
+                        data_lines.append(stripped)
+            
+            if not data_lines:
+                raise ValueError("File contains no data rows")
+            
+            rows = []
+            for line in data_lines:
+                parts = re.split(r'[\s\|]+', line)
+                if len(parts) >= 2:
+                    rows.append(parts)
+            
+            if not rows:
+                raise ValueError("No valid data rows found")
+            
+            n_cols = len(rows[0])
+            columns_data = []
+            for col_idx in range(n_cols):
+                col_values = [row[col_idx] if col_idx < len(row) else '' for row in rows]
+                try:
+                    numeric_vals = [float(v) for v in col_values]
+                    columns_data.append(np.array(numeric_vals))
+                except (ValueError, TypeError):
+                    columns_data.append(np.array(col_values))
+            
+            dlg = ColumnMapperDialog(columns_data, self)
+            if dlg.exec() == 1:
+                self.passive_file_mappings[row] = dlg.get_mapping()
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to read .max file:\n{e}")
+    
+    def _get_passive_files_config(self) -> list:
+        """Get configuration for all passive data files."""
+        files = []
+        for row in range(self.passive_table.rowCount()):
+            label_widget = self.passive_table.cellWidget(row, 0)
+            data_widget = self.passive_table.cellWidget(row, 1)
+            klimit_widget = self.passive_table.cellWidget(row, 2)
+            wave_widget = self.passive_table.cellWidget(row, 4)
+            
+            label = label_widget.text().strip() if label_widget else f"Array {row + 1}"
+            
+            # Get data path
+            data_path = ""
+            if data_widget:
+                data_edit = data_widget.findChild(QtWidgets.QLineEdit)
+                if data_edit:
+                    data_path = data_edit.text().strip()
+            
+            # Get klimit path
+            klimit_path = ""
+            if klimit_widget:
+                klimit_edit = klimit_widget.findChild(QtWidgets.QLineEdit)
+                if klimit_edit:
+                    klimit_path = klimit_edit.text().strip()
+            
+            # Get wave type
+            wave_type = "all"
+            if wave_widget and isinstance(wave_widget, QtWidgets.QComboBox):
+                wave_text = wave_widget.currentText()
+                if "Rayleigh" in wave_text or wave_text == "Ray Vert" or wave_text == "Ray Rad":
+                    wave_type = "Rayleigh"
+                elif "Love" in wave_text:
+                    wave_type = "Love"
+            
+            if data_path:
+                files.append({
+                    'label': label,
+                    'path': data_path,
+                    'klimit_path': klimit_path if klimit_path else None,
+                    'klimit_mapping': self.passive_klimit_mappings.get(row),
+                    'wave_type': wave_type,
+                    'column_mapping': self.passive_file_mappings.get(row),
+                })
+        
+        return files
 
     # ---- helpers ----
     def _pick_file(self, line: QtWidgets.QLineEdit, desc: str, pattern: str):
@@ -1619,40 +1963,29 @@ class OpenDataDialog(QtWidgets.QDialog):
                 'vmin': float(self.active_vmin.value()),
                 'vmax': float(self.active_vmax.value()),
             }
-        elif idx == 1:  # Passive Data
-            max_path = self.max_path.text().strip()
-            kl_path  = self.kl_path.text().strip()
-            if not max_path or not kl_path:
-                QtWidgets.QMessageBox.warning(self, "Passive Data", "Please select both data and k-limits files."); return
+        elif idx == 1:  # Passive Data (multi-file)
+            files = self._get_passive_files_config()
+            if not files:
+                QtWidgets.QMessageBox.warning(self, "Passive Data", "Please add at least one data file.")
+                return
             
-            # Parse time
-            tval = self.pass_time.text().strip()
-            time = None
-            if tval:
-                try:
-                    time = float(tval)
-                except Exception:
-                    QtWidgets.QMessageBox.warning(self, "Passive Data", "Time must be a number (seconds). Use blank for auto."); return
-            
-            # Get wave_type from combo box
-            # Maps GUI text to parser wave_type ('Rayleigh', 'Love', or 'all')
-            wave_type_text = self.pass_wave_type.currentText()
-            if "Rayleigh" in wave_type_text:
-                wave_type = 'Rayleigh'
-            elif "Love" in wave_type_text:
-                wave_type = 'Love'
-            else:
-                wave_type = 'all'
+            # Check if at least one file has k-limits (either per-file or shared)
+            shared_klimit_path = self.shared_klimit_path.text().strip()
+            has_klimits = bool(shared_klimit_path) or any(f.get('klimit_path') for f in files)
+            if not has_klimits:
+                QtWidgets.QMessageBox.warning(
+                    self, "Passive Data", 
+                    "Please provide k-limits (per-file or shared)."
+                )
+                return
             
             self.result = {
                 'mode': 'passive',
-                'max_path': max_path,
-                'kl_path':  kl_path,
+                'files': files,
+                'shared_klimit_path': shared_klimit_path if shared_klimit_path else None,
+                'shared_klimit_mapping': self.shared_klimit_mapping,
                 'dx': float(self.pass_dx.value()),
                 'vcut': float(self.pass_vcut.value()),
-                'time': time,
-                'column_mapping': self.column_mapping,  # Include column mapping for .max files
-                'wave_type': wave_type,  # Wave type filter for RTBF format
             }
         elif idx == 2:  # State
             path = self.state_path.text().strip()

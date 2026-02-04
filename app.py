@@ -106,8 +106,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
     # --- loaders ---
     def _load_passive(self, spec: dict) -> bool:
+        """Load passive data with multi-file support."""
         try:
-            from dc_cut.io.max import load_klimits, parse_max_file
+            from dc_cut.io.max import load_klimits, load_klimits_multi, parse_max_file
             from dc_cut.core.controller import InteractiveRemovalWithLayers
             from dc_cut.gui.main_window import show_shell
             from dc_cut.services.prefs import load_prefs
@@ -116,94 +117,120 @@ class LauncherWindow(QtWidgets.QMainWindow):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Passive", f"Imports failed:\n{e}")
             return False
-        data_path = spec['max_path']; kl_path = spec['kl_path']
-        dx = float(spec['dx']); vcut = float(spec['vcut']); time = spec.get('time')
-        column_mapping = spec.get('column_mapping')  # Get column mapping if provided
-        wave_type = spec.get('wave_type', 'all')  # Wave type filter for RTBF files
         
-        # k-limits
-        try:
-            ext = os.path.splitext(kl_path)[1].lower()
-            if ext == ".mat": kmin, kmax = load_klimits(mat_path=kl_path)
-            elif ext == ".csv": kmin, kmax = load_klimits(csv_path=kl_path)
-            else:
-                try: kmin, kmax = load_klimits(mat_path=kl_path)
-                except Exception: kmin, kmax = load_klimits(csv_path=kl_path)
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Passive", f"k-limits error:\n{e}")
-            return False
-        # parse data: .max or passive .csv (freq, slow)
-        try:
-            extd = os.path.splitext(data_path)[1].lower()
-            if extd == ".max":
-                # Use column mapping if provided
-                if column_mapping:
-                    # Load raw data using pandas (handles mixed text/numeric)
-                    raw = pd.read_csv(data_path, comment='#', header=None, sep=r"[\s\|]+", engine='python')
-                    if raw.empty:
-                        raise ValueError("File parsed but contains no data rows")
-                    
-                    # Extract columns based on mapping
-                    if "Frequency (Hz)" not in column_mapping:
-                        raise ValueError("Frequency column not mapped")
-                    freq_col = column_mapping["Frequency (Hz)"]
-                    freq = pd.to_numeric(raw.iloc[:, freq_col], errors='coerce').to_numpy()
-                    
-                    # Handle velocity or slowness
-                    if "Velocity (m/s)" in column_mapping:
-                        vel_col = column_mapping["Velocity (m/s)"]
-                        vel = pd.to_numeric(raw.iloc[:, vel_col], errors='coerce').to_numpy()
-                        slow = 1000.0 / vel  # Convert m/s to s/km: slow(s/km) = 1000 / vel(m/s)
-                    elif "Slowness (s/km)" in column_mapping:
-                        slow_col = column_mapping["Slowness (s/km)"]
-                        slow = pd.to_numeric(raw.iloc[:, slow_col], errors='coerce').to_numpy()
-                    else:
-                        raise ValueError("Neither Velocity nor Slowness column mapped")
-                else:
-                    # Use auto-detecting parser (handles both standard FK and RTBF formats)
-                    df = parse_max_file(data_path, wave_type=wave_type)
-                    if df.empty:
-                        QtWidgets.QMessageBox.critical(self, "Passive", ".max parsed but empty.")
-                        return False
-                    freq = df['freq'].to_numpy(float)
-                    slow = df['slow'].to_numpy(float)
-            elif extd == ".csv":
-                df = pd.read_csv(data_path)
-                cols_lower = [c.lower() for c in df.columns]
-                if 'freq' in cols_lower and 'slow' in cols_lower:
-                    freq = df[df.columns[cols_lower.index('freq')]].to_numpy(float)
-                    slow = df[df.columns[cols_lower.index('slow')]].to_numpy(float)
-                else:
-                    # Ask user to map columns
-                    mapping = ColumnMapDialog(list(df.columns), self).get_mapping()
-                    if not mapping:
-                        return False
-                    c_freq, c_slow = mapping
-                    try:
-                        freq = df[c_freq].to_numpy(float); slow = df[c_slow].to_numpy(float)
-                    except Exception as e:
-                        raise ValueError(f"Failed to read selected columns: {e}")
-            else:
-                raise ValueError("Unsupported passive data file; use .max or .csv")
-            # Convert slowness (s/km) to m/s: v = 1000 / slow
-            # Wavelength: λ = v / f
-            m0 = np.isfinite(freq) & np.isfinite(slow) & (freq > 0) & (slow > 0)
-            freq = freq[m0]; slow = slow[m0]
-            vel  = 1000.0 / slow
-            wave = np.where(freq > 0, vel / freq, np.nan)
-            m1 = np.isfinite(vel) & np.isfinite(wave) & (vel >= 0) & (vel <= vcut) & (wave > 0)
-            freq = freq[m1]; vel = vel[m1]; wave = wave[m1]
-            if vel.size == 0:
-                QtWidgets.QMessageBox.critical(self, "Passive", "No picks after filtering.")
+        dx = float(spec['dx'])
+        vcut = float(spec['vcut'])
+        files = spec.get('files', [])
+        shared_klimit_path = spec.get('shared_klimit_path')
+        shared_klimit_mapping = spec.get('shared_klimit_mapping')
+        
+        # Collect all k-limits
+        all_klimits = []  # List of (label, kmin, kmax)
+        
+        # Load shared k-limits (if any)
+        if shared_klimit_path:
+            try:
+                col_map = shared_klimit_mapping.get('column_mapping') if shared_klimit_mapping else None
+                shared_klimits = load_klimits_multi(shared_klimit_path, column_mapping=col_map)
+                all_klimits.extend(shared_klimits)
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, "Passive", f"Shared k-limits error:\n{e}")
                 return False
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Passive", f"Failed to read data:\n{e}")
+        
+        # Process each file
+        all_velocity = []
+        all_frequency = []
+        all_wavelength = []
+        all_labels = []
+        
+        for file_info in files:
+            data_path = file_info['path']
+            label = file_info.get('label', os.path.basename(data_path))
+            klimit_path = file_info.get('klimit_path')
+            klimit_mapping = file_info.get('klimit_mapping')
+            column_mapping = file_info.get('column_mapping')
+            wave_type = file_info.get('wave_type', 'all')
+            
+            # Load per-file k-limits (if any)
+            if klimit_path:
+                try:
+                    col_map = klimit_mapping.get('column_mapping') if klimit_mapping else None
+                    file_klimits = load_klimits_multi(klimit_path, column_mapping=col_map, default_label=label)
+                    all_klimits.extend(file_klimits)
+                except Exception as e:
+                    QtWidgets.QMessageBox.warning(self, "K-Limits", f"Failed to load k-limits for {label}:\n{e}")
+            
+            # Parse data file
+            try:
+                extd = os.path.splitext(data_path)[1].lower()
+                if extd == ".max":
+                    if column_mapping:
+                        raw = pd.read_csv(data_path, comment='#', header=None, sep=r"[\s\|]+", engine='python')
+                        if raw.empty:
+                            raise ValueError("File parsed but contains no data rows")
+                        
+                        if "Frequency (Hz)" not in column_mapping:
+                            raise ValueError("Frequency column not mapped")
+                        freq_col = column_mapping["Frequency (Hz)"]
+                        freq = pd.to_numeric(raw.iloc[:, freq_col], errors='coerce').to_numpy()
+                        
+                        if "Velocity (m/s)" in column_mapping:
+                            vel_col = column_mapping["Velocity (m/s)"]
+                            vel = pd.to_numeric(raw.iloc[:, vel_col], errors='coerce').to_numpy()
+                            slow = 1000.0 / vel
+                        elif "Slowness (s/km)" in column_mapping:
+                            slow_col = column_mapping["Slowness (s/km)"]
+                            slow = pd.to_numeric(raw.iloc[:, slow_col], errors='coerce').to_numpy()
+                        else:
+                            raise ValueError("Neither Velocity nor Slowness column mapped")
+                    else:
+                        df = parse_max_file(data_path, wave_type=wave_type)
+                        if df.empty:
+                            QtWidgets.QMessageBox.warning(self, "Passive", f"{label}: .max parsed but empty.")
+                            continue
+                        freq = df['freq'].to_numpy(float)
+                        slow = df['slow'].to_numpy(float)
+                elif extd == ".csv":
+                    df = pd.read_csv(data_path)
+                    cols_lower = [c.lower() for c in df.columns]
+                    if 'freq' in cols_lower and 'slow' in cols_lower:
+                        freq = df[df.columns[cols_lower.index('freq')]].to_numpy(float)
+                        slow = df[df.columns[cols_lower.index('slow')]].to_numpy(float)
+                    else:
+                        QtWidgets.QMessageBox.warning(self, "Passive", f"{label}: CSV missing freq/slow columns.")
+                        continue
+                else:
+                    QtWidgets.QMessageBox.warning(self, "Passive", f"{label}: Unsupported file type.")
+                    continue
+                
+                # Convert and filter
+                m0 = np.isfinite(freq) & np.isfinite(slow) & (freq > 0) & (slow > 0)
+                freq = freq[m0]
+                slow = slow[m0]
+                vel = 1000.0 / slow
+                wave = np.where(freq > 0, vel / freq, np.nan)
+                m1 = np.isfinite(vel) & np.isfinite(wave) & (vel >= 0) & (vel <= vcut) & (wave > 0)
+                freq = freq[m1]
+                vel = vel[m1]
+                wave = wave[m1]
+                
+                if vel.size == 0:
+                    QtWidgets.QMessageBox.warning(self, "Passive", f"{label}: No picks after filtering.")
+                    continue
+                
+                all_velocity.append(vel)
+                all_frequency.append(freq)
+                all_wavelength.append(wave)
+                all_labels.append(label)
+                
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(self, "Passive", f"Failed to read {label}:\n{e}")
+                continue
+        
+        if not all_velocity:
+            QtWidgets.QMessageBox.critical(self, "Passive", "No valid data loaded from any file.")
             return False
-        # build controller
-        velocity_arrays   = [vel]
-        frequency_arrays  = [freq]
-        wavelength_arrays = [wave]
-        set_leg = ["Passive Array Data"]
+        
         # Get array configuration from preferences
         try:
             P = load_prefs()
@@ -211,34 +238,48 @@ class LauncherWindow(QtWidgets.QMainWindow):
         except Exception:
             n_phones = 24
         array_positions = np.arange(0, dx * n_phones, dx)
-        source_offsets = []
+        
         try:
             ctrl = InteractiveRemovalWithLayers(
-                velocity_arrays, frequency_arrays, wavelength_arrays,
-                array_positions=array_positions, source_offsets=source_offsets,
-                set_leg=set_leg, receiver_dx=dx, legacy_controls=False,
+                all_velocity, all_frequency, all_wavelength,
+                array_positions=array_positions, source_offsets=[],
+                set_leg=all_labels, receiver_dx=dx, legacy_controls=False,
             )
-            # Set clamps to match chosen vcut
-            ctrl.min_vel = 0.0; ctrl.max_vel = vcut
-            # Apply k-guides and user prefs
-            ctrl.kmin = float(kmin); ctrl.kmax = float(kmax); ctrl.show_k_guides = True
+            ctrl.min_vel = 0.0
+            ctrl.max_vel = vcut
+            
+            # Set up k-limits
+            if all_klimits:
+                # Use first k-limit as primary (for backward compatibility)
+                ctrl.kmin = float(all_klimits[0][1])
+                ctrl.kmax = float(all_klimits[0][2])
+                
+                # Store all k-limits for multi k-guides display
+                ctrl._multi_klimits = all_klimits
+                ctrl._klimits_visibility = {k[0]: True for k in all_klimits}
+                ctrl.show_k_guides = True
+            
             try:
                 P = load_prefs()
                 ctrl.freq_tick_style = P.get('freq_tick_style', getattr(ctrl, 'freq_tick_style', 'decades'))
                 ctrl.freq_custom_ticks = P.get('freq_custom_ticks', getattr(ctrl, 'freq_custom_ticks', []))
-                # apply k-guides default if present
                 if 'show_k_guides_default' in P:
                     ctrl.show_k_guides = bool(P['show_k_guides_default'])
             except Exception:
                 pass
-            ctrl._draw_k_guides(); ctrl._update_legend()
+            
+            ctrl._draw_k_guides()
+            ctrl._update_legend()
             app_qt = show_shell(ctrl)
             try:
                 app_qt._masw_shell_window.adopt_controller(ctrl)
                 ctrl.suppress_mpl_controls_for_shell()
-                try: ctrl._enforce_shell_layout()
-                except Exception: pass
-            except Exception: pass
+                try:
+                    ctrl._enforce_shell_layout()
+                except Exception:
+                    pass
+            except Exception:
+                pass
             return True
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Passive", f"Failed to launch controller:\n{e}")

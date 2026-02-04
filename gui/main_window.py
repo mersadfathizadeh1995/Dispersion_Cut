@@ -45,6 +45,7 @@ from dc_cut.gui.spectrum_dock import SpectrumDock
 from dc_cut.gui.nf_eval_dock import NFEvalDock
 from dc_cut.gui.quick_actions import QuickActionsDock
 from dc_cut.gui.layer_tree_dock import LayerTreeDock
+from dc_cut.theoretical_curves import TheoreticalCurveRenderer, TheoreticalCurvesDock
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -77,6 +78,15 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             self.addDockWidget(area, self.spectrum)
             self.tabifyDockWidget(self.layers, self.spectrum)
+        except Exception:
+            pass
+        
+        # Theoretical curves dock (right side, tabbed with spectrum)
+        try:
+            self.theoretical_renderer = TheoreticalCurveRenderer(self.controller)
+            self.theoretical = TheoreticalCurvesDock(self.theoretical_renderer, self)
+            self.addDockWidget(area, self.theoretical)
+            self.tabifyDockWidget(self.spectrum, self.theoretical)
         except Exception:
             pass
         
