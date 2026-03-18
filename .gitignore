@@ -1,12 +1,14 @@
-# Byte-compiled / optimized / DLL files
+# =============================================================================
+# DC Cut .gitignore
+# =============================================================================
+
+# ---- Python bytecode / optimized / DLL files ----
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
 
-# Distribution / packaging
+# ---- Distribution / packaging ----
 .Python
 build/
 develop-eggs/
@@ -26,17 +28,15 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+# ---- PyInstaller ----
 *.manifest
 *.spec
 
-# Installer logs
+# ---- Installer logs ----
 pip-log.txt
 pip-delete-this-directory.txt
 
-# Unit test / coverage reports
+# ---- Unit test / coverage reports ----
 htmlcov/
 .tox/
 .nox/
@@ -51,83 +51,28 @@ coverage.xml
 .pytest_cache/
 cover/
 
-# Translations
+# ---- Translations ----
 *.mo
 *.pot
 
-# Django stuff:
+# ---- Logs ----
 *.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
 
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
+# ---- Sphinx documentation ----
 docs/_build/
 
-# PyBuilder
+# ---- PyBuilder ----
 .pybuilder/
 target/
 
-# Jupyter Notebook
+# ---- Jupyter Notebook ----
 .ipynb_checkpoints
 
-# IPython
+# ---- IPython ----
 profile_default/
 ipython_config.py
 
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
-
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
-
-# UV
-#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#uv.lock
-
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-#poetry.lock
-
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#pdm.lock
-#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
-#   in version control.
-#   https://pdm.fming.dev/latest/usage/project/#working-with-version-control
-.pdm.toml
-.pdm-python
-.pdm-build/
-
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
+# ---- Environments ----
 .env
 .venv
 env/
@@ -136,51 +81,72 @@ ENV/
 env.bak/
 venv.bak/
 
-# Spyder project settings
-.spyderproject
-.spyproject
+# ---- Package managers lock files (uncomment if needed) ----
+#Pipfile.lock
+#uv.lock
+#poetry.lock
+#pdm.lock
+.pdm.toml
+.pdm-python
+.pdm-build/
+__pypackages__/
 
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
+# ---- mypy / Pyre / pytype ----
 .mypy_cache/
 .dmypy.json
 dmypy.json
-
-# Pyre type checker
 .pyre/
-
-# pytype static type analyzer
 .pytype/
 
-# Cython debug symbols
+# ---- Cython debug symbols ----
 cython_debug/
 
-# PyCharm
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
-
-# Ruff stuff:
+# ---- Ruff ----
 .ruff_cache/
 
-# PyPI configuration file
+# ---- PyPI configuration ----
 .pypirc
 
-# Cursor
-#  Cursor is an AI-powered code editor.`.cursorignore` specifies files/directories to
-#  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
-#  refer to https://docs.cursor.com/context/ignore-files
+# =============================================================================
+# IDE / Editor settings
+# =============================================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# ---- Windsurf / Cascade ----
+.windsurf/
+
+# ---- Cursor ----
 .cursorignore
 .cursorindexingignore
+.cursor/
 
-# Test files and outputs (not to be committed)
-examples/test_*.py
-examples/test_output/
-examples/*.csv
+# =============================================================================
+# Project-specific ignores
+# =============================================================================
+
+# ---- Internal context / skill files (not for public) ----
+.context.md
+SKILL.md
+
+# ---- Temporary debug/test scripts at repo root ----
+test_*.py
+!tests_smoke.py
+
+# ---- Saved sessions / user output ----
+*.dc_state
+output/
+results/
+
+# ---- OS-generated files ----
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+/example/
