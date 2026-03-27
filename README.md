@@ -1,45 +1,147 @@
-# DC Cut — Interactive Dispersion Curve Editor
+<div align="center">
+
+# DC Cut
+
+### Interactive Dispersion Curve Editor
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![PyQt6](https://img.shields.io/badge/GUI-PyQt6-41CD52.svg)](https://www.riverbankcomputing.com/software/pyqt/)
 
-A **Qt-based desktop application** for interactive editing, visualization, and analysis of **surface wave dispersion curves** from **MASW (Multichannel Analysis of Surface Waves)** and **passive seismic array** data.
+A modern, interactive **Qt-based desktop application** for editing, visualization, and analysis of **surface wave dispersion curves** from **MASW (Multichannel Analysis of Surface Waves)**, **passive FK/FDBF**, and **circular seismic array** data.
 
-**Repository:** <https://github.com/mersadfathizadeh1995/Dispersion_Cut>
+**Author:** Mersad Fathizadeh — Ph.D. Candidate, University of Arkansas  
+📧 mersadf@uark.edu · GitHub: [@mersadfathizadeh1995](https://github.com/mersadfathizadeh1995)
 
-**Author:** Mersad Fathizadeh — Ph.D. Candidate, University of Arkansas
-(email: mersadf@uark.edu · GitHub: [@mersadfathizadeh1995](https://github.com/mersadfathizadeh1995))
+</div>
 
 ---
 
 ## Overview
 
-DC Cut streamlines the workflow of cleaning, editing, and exporting dispersion curve picks commonly produced by MASW / passive FK / FDBF processing software (e.g., Geopsy, SurfSeis, MATLAB toolboxes). It replaces tedious manual editing in spreadsheets or MATLAB with a purpose-built interactive GUI.
+DC Cut streamlines the workflow of cleaning, editing, and exporting dispersion curve picks commonly produced by MASW / passive FK / FDBF processing software (e.g., Geopsy, SurfSeis, MATLAB toolboxes). It replaces tedious manual editing in spreadsheets or MATLAB with a purpose-built interactive GUI — supporting active, passive, and circular array geometries in a single application.
 
-### Key Features
+### Key Capabilities
 
-- **Multi-format import** — MATLAB `.mat` (MASW), CSV, Geopsy `.max` (passive FK), and saved session files
-- **Interactive box-select & delete** — Remove outlier picks with rubber-band selection on frequency or wavelength plots
-- **Velocity / frequency / wavelength filtering** — Apply range-based filters to clean data
-- **Near-field evaluation** — NACD (Normalized Array Center Distance) criteria for near-field effect assessment
-- **Statistical averaging** — Frequency-binned and wavelength-binned averaging with uncertainty envelopes
-- **Data appending** — Combine multiple files/arrays into a single session
-- **Layer management** — Per-layer visibility, color, marker, and style customization via right-click context menu
-- **Export Wizard** — Resample, smooth, and export cleaned curves to Geopsy-compatible TXT, CSV, or state files
-- **Publication figures** — Generate camera-ready plots with uncertainty bands
-- **Undo / Redo** — Full history stack for all editing operations
-
-### Screenshots
-
-> *Coming soon — screenshots of the main window, layer panel, and export wizard.*
+| Feature | Description |
+|---------|-------------|
+| **Multi-Format Import** | MATLAB `.mat` (MASW), CSV, Geopsy `.max` (passive FK), TXT, and saved session files |
+| **Interactive Editing** | Box-select, line-delete, and inclined-rectangle tools for precise outlier removal |
+| **Filtering** | Velocity, frequency, and wavelength range-based filters to clean data |
+| **Near-Field Evaluation** | NACD (Normalized Array Center Distance) criteria for near-field effect assessment |
+| **Statistical Averaging** | Frequency-binned and wavelength-binned averaging with uncertainty envelopes |
+| **Spectral Power Overlay** | Load and display power spectrum backgrounds from `.npz` files |
+| **Layer Management** | Per-layer visibility, color, marker, and style customization |
+| **Export Wizard** | Resample, smooth, and export cleaned curves to Geopsy-compatible TXT, CSV, or state files |
+| **Publication Figures** | Comprehensive generator for camera-ready plots with uncertainty bands |
+| **Undo / Redo** | Full history stack for all editing operations |
 
 ---
 
-## Domain
+## Visual Tour
 
-- **Geophysical Engineering / Near-Surface Geophysics**
-- Seismic wave analysis for soil and rock characterization
-- Surface wave methods: Active MASW, Passive FK/FDBF, Circular Array
+### 🖥️ Main Window
+
+Dual-panel workspace with frequency-domain and wavelength-domain plots side by side. The left dock provides a hierarchical layer tree with point counts, while the right dock controls per-layer visibility and average curve toggles.
+
+<p align="center">
+  <img src="Pics/Main_window_environment.jpg" width="90%" alt="Main application window"/>
+</p>
+
+---
+
+### 📂 Data Loading
+
+Import data from multiple sources and formats. Each file becomes a branch in the layer tree. Supports Active MASW, Passive FK, Circular Array, and saved session modes.
+
+<p align="center">
+  <img src="Pics/Data_loading.jpg" width="45%" alt="Active data loading dialog"/>
+  <img src="Pics/Circular_Array_Passive.jpg" width="40%" alt="Circular array loading dialog"/>
+</p>
+<p align="center"><em>Active data import (left) and circular array configuration (right)</em></p>
+
+---
+
+### 🎯 Editing & Refinement Tools
+
+Multiple selection tools — Box Select, Line Delete, and Inclined Rectangle — allow precise removal of outlier picks directly on the dispersion plot. Power spectrum contours can be overlaid for guided editing.
+
+<p align="center">
+  <img src="Pics/Multiple_Tools_for_refinement.jpg" width="90%" alt="Multiple editing tools with spectrum overlay"/>
+</p>
+
+<p align="center">
+  <img src="Pics/spectra_power_display.jpg" width="90%" alt="Spectral power display behind dispersion curves"/>
+</p>
+<p align="center"><em>Spectral power contour overlay for visually guided curve picking</em></p>
+
+---
+
+### 🔧 Filtering
+
+Apply threshold-based filters on frequency, velocity, or wavelength to quickly remove unwanted data ranges. The filter dialog works on the active view and respects layer visibility.
+
+<p align="center">
+  <img src="Pics/Filtering.jpg" width="80%" alt="Filter dialog overlaid on dispersion plot"/>
+</p>
+
+---
+
+### 📡 Near-Field Evaluation
+
+Evaluate near-field contamination using the NACD (Normalized Array Center Distance) criterion. Points with NACD below a configurable threshold are flagged in red. A per-offset checklist lets you review and selectively apply deletions.
+
+<p align="center">
+  <img src="Pics/Near_field_Analysis.jpg" width="90%" alt="Near-field evaluation panel"/>
+</p>
+
+---
+
+### 📊 Publication Figure Generator
+
+A comprehensive figure export dialog with categorized plot types — frequency/wavelength domain curves, modal analysis, uncertainty visualization, near-field analysis, spectral grids, and more. Configurable styling, axis limits, and output format (PDF, SVG, PNG, EPS).
+
+<p align="center">
+  <img src="Pics/Comprehensive_pub_figure_generator.jpg" width="55%" alt="Publication figure export dialog"/>
+</p>
+
+<details>
+<summary><strong>📈 Example Output Figures (click to expand)</strong></summary>
+<br>
+
+DC Cut generates a comprehensive set of publication-quality figures:
+
+<p align="center">
+  <img src="Pics/output_figures/1.jpg" width="70%" alt="Per-offset dispersion curves"/>
+  <br><em>Per-offset dispersion curves — phase velocity vs. frequency</em>
+</p>
+
+<p align="center">
+  <img src="Pics/output_figures/2.jpg" width="70%" alt="Dispersion curves with spectral power"/>
+  <br><em>Dispersion curves overlaid on spectral power background</em>
+</p>
+
+<p align="center">
+  <img src="Pics/output_figures/3.jpg" width="70%" alt="Per-offset spectrogram grid"/>
+  <br><em>Per-offset spectrogram grid with picked dispersion curves</em>
+</p>
+
+<p align="center">
+  <img src="Pics/output_figures/4.jpg" width="70%" alt="Combined NACD analysis"/>
+  <br><em>Combined NACD analysis — near-field flagged points shown in red</em>
+</p>
+
+<p align="center">
+  <img src="Pics/output_figures/5.jpg" width="70%" alt="Per-offset near-field analysis"/>
+  <br><em>Per-offset near-field analysis with NF percentages</em>
+</p>
+
+<p align="center">
+  <img src="Pics/output_figures/6.jpg" width="70%" alt="Per-offset FK spectrogram grid"/>
+  <br><em>Per-offset FK spectrogram grid</em>
+</p>
+
+</details>
 
 ---
 
@@ -75,6 +177,9 @@ source .venv/bin/activate
 pip install numpy pandas matplotlib scipy PyQt6
 ```
 
+<details>
+<summary><strong>Core Dependencies</strong></summary>
+
 | Package | Purpose |
 |---------|---------|
 | **NumPy** | Array operations and data processing |
@@ -82,6 +187,8 @@ pip install numpy pandas matplotlib scipy PyQt6
 | **Matplotlib** | Plotting with the Qt backend (`QtAgg`) |
 | **SciPy** | `.mat` file loading |
 | **PyQt6** | Qt GUI framework (PyQt5 also works) |
+
+</details>
 
 ### 4. Run the Application
 
@@ -97,7 +204,9 @@ The **Launcher Window** will appear, letting you select a data file and processi
 
 ---
 
-## Quick Start
+## Usage
+
+### Quick Start
 
 1. **Launch** — Run `python -m dc_cut`
 2. **Select mode** — Choose *Active*, *Passive*, *Circular Array*, or load a saved *State*
@@ -111,25 +220,40 @@ The **Launcher Window** will appear, letting you select a data file and processi
 
 | Action | Shortcut |
 |--------|----------|
-| Open Data | `Ctrl+Shift+O` |
+| Show Both Plots | `Ctrl+1` |
+| Show Frequency Plot Only | `Ctrl+2` |
+| Show Wavelength Plot Only | `Ctrl+3` |
 | Undo | `Ctrl+Z` |
 | Redo | `Ctrl+Y` |
 | Delete Selection | `Delete` |
 | Cancel Selection | `Esc` |
-| Add Point to Layer | `Ctrl+P` |
+| Save State | `Ctrl+S` |
 | Export Wizard | `Ctrl+E` |
+| Show Shortcuts Help | `F1` |
 
 ---
 
 ## Supported File Formats
 
+### Input Formats
+
 | Format | Extension | Description |
 |--------|-----------|-------------|
 | MATLAB | `.mat` | MASW dispersion data (`FrequencyRaw`, `VelocityRaw`, `setLeg` keys) |
-| CSV | `.csv` | Comma-separated frequency, velocity (, wavelength) columns |
-| Geopsy Max | `.max` | Passive FK picks from Geopsy |
+| CSV | `.csv` | Comma-separated columns: `Freq(label)`, `Vel(label)`, `Wave(label)` per offset |
+| Geopsy FK | `.max` | Passive FK picks from Geopsy (7-column format) |
 | Text | `.txt` | Tab/space-delimited dispersion data |
-| State | `.dc_state` | Saved DC Cut session (JSON) |
+| Spectrum | `.npz` | Power spectrum grid (frequencies, velocities, power) |
+| Session | `.pkl` | Saved DC Cut session (pickled state) |
+
+### Output Formats
+
+| Format | Extension | Description |
+|--------|-----------|-------------|
+| Geopsy TXT | `.txt` | Frequency, slowness, DinverStd, number of points |
+| Passive Stats | `.csv` | Mean frequency, slowness, uncertainty, and point count |
+| Session State | `.pkl` | Complete session for later restore |
+| Publication Figures | `.pdf` / `.svg` / `.png` / `.eps` | Camera-ready vector and raster figures |
 
 ---
 
@@ -149,6 +273,7 @@ dc_cut/
 │   ├── selection.py        # Point selection & removal
 │   ├── filters.py          # Velocity/frequency/wavelength filters
 │   ├── averages.py         # Statistical binning & averaging
+│   ├── nearfield.py        # NACD near-field evaluation
 │   ├── plot.py             # Legend assembly helpers
 │   └── controller_modules/ # Handler mix-ins (visualization, file I/O, etc.)
 │
@@ -186,12 +311,16 @@ dc_cut/
 
 ## Architecture
 
-DC Cut follows an **MVC-like pattern with an Action Registry**:
+DC Cut follows a **layered, modular architecture** with an Action Registry:
 
-- **Model** — `core/model.py` (`LayersModel`, `LayerData`) holds per-layer arrays and visibility state
-- **View** — `gui/` widgets display data via Matplotlib canvases embedded in Qt
-- **Controller** — `core/controller.py` orchestrates editing, history, and plot updates
-- **Services** — `services/` provides cross-cutting concerns (preferences, theming, logging)
+| Layer | Location | Role |
+|-------|----------|------|
+| **Core** | `core/` | Business logic — data manipulation, filtering, averaging, near-field evaluation, undo/redo |
+| **GUI** | `gui/` | PyQt6 application with menus, toolbars, docks, and Matplotlib-embedded canvases |
+| **I/O** | `io/` | Format-specific readers and writers (MAT, CSV, MAX, TXT, state) |
+| **Export Wizard** | `export_wizard/` | Interactive resampling, smoothing, and export pipeline |
+| **Pub Figures** | `pub_figures/` | Publication-quality figure generator with extensive plot type catalog |
+| **Services** | `services/` | Cross-cutting concerns — preferences, theming, logging, action registry |
 
 ---
 
@@ -204,6 +333,12 @@ Contributions are welcome! Please:
 3. Commit your changes (`git commit -m "Add my feature"`)
 4. Push to the branch (`git push origin feature/my-feature`)
 5. Open a Pull Request
+
+---
+
+## Acknowledgments
+
+This work was developed under the guidance of **Dr. Clinton Wood** at the University of Arkansas.
 
 ---
 
