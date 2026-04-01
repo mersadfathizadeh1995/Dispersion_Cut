@@ -118,7 +118,7 @@ cython_debug/
 .project
 .classpath
 .settings/
-
+copilot_resume.txt
 # ---- Windsurf / Cascade ----
 .windsurf/
 
