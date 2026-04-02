@@ -1,0 +1,24 @@
+# DC_Cut: Interactive Dispersion Curve Editor
+# Requirements for Python >= 3.10
+#
+# Install with:  pip install -r requirements.txt
+# Run with:      python -m dc_cut
+
+# --- Core scientific stack ---
+numpy>=1.24,<3.0
+scipy>=1.10
+pandas>=2.0
+
+# --- GUI framework ---
+# Matplotlib's qt_compat bridges to whichever Qt binding is installed.
+# PySide6 is the recommended Qt6 binding for this application.
+PySide6>=6.5
+matplotlib>=3.7
+
+# --- I/O & export ---
+# python-pptx is used for PowerPoint export of publication figures.
+python-pptx>=0.6.23
+
+# --- Pillow (transitive, pulled by matplotlib) ---
+# Listed explicitly so SW_Transform image utilities also work.
+Pillow>=9.0
