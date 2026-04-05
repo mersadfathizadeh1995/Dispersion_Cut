@@ -592,71 +592,144 @@ class LauncherWindow(QtWidgets.QMainWindow):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "State", f"Imports failed:\n{e}")
             return False
-        path = spec['path']; dx = float(spec['dx'])
+
+        dx = float(spec.get('dx', 2.0))
+
+        # Backward compat: wrap old single-file spec into multi-file list
+        if 'files' in spec:
+            files = spec['files']
+        else:
+            files = [{
+                'label': 'State',
+                'path': spec['path'],
+                'spectrum': spec.get('spectrum_path'),
+            }]
+
+        all_velocity, all_frequency, all_wavelength = [], [], []
+        all_labels = []
+        file_boundaries = []
+        spectrum_files = {}
+        first_state = None
+
+        for file_info in files:
+            label = file_info['label']
+            path = file_info['path']
+            spectrum_path = file_info.get('spectrum')
+
+            try:
+                S = load_session(path)
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(
+                    self, "State",
+                    f"Failed to load '{label}':\n{e}"
+                )
+                return False
+
+            if first_state is None:
+                first_state = S
+
+            v = S["velocity_arrays"]
+            f = S["frequency_arrays"]
+            w = S["wavelength_arrays"]
+            set_leg = S.get("set_leg", [f"Layer {i}" for i in range(len(v))])
+
+            start_idx = len(all_velocity)
+            for i in range(len(v)):
+                all_velocity.append(v[i])
+                all_frequency.append(f[i])
+                all_wavelength.append(w[i])
+                orig = set_leg[i] if i < len(set_leg) else f"Layer {i}"
+                all_labels.append(f"{label}/{orig}")
+            end_idx = len(all_velocity)
+
+            file_boundaries.append((label, start_idx, end_idx))
+
+            if spectrum_path:
+                spectrum_files[label] = spectrum_path
+
+        if not all_velocity:
+            QtWidgets.QMessageBox.warning(self, "State", "No layers found in selected state files.")
+            return False
+
         try:
-            S = load_session(path)
-            v = S["velocity_arrays"]; f = S["frequency_arrays"]; w = S["wavelength_arrays"]
-            set_leg = S.get("set_leg", None)
-            # Get array configuration from preferences
+            P = load_prefs()
+            n_phones = int(P.get('default_n_phones', 24))
+        except Exception:
+            n_phones = 24
+            P = {}
+
+        array_positions = np.arange(0, dx * n_phones, dx)
+
+        try:
+            ctrl = InteractiveRemovalWithLayers(
+                all_velocity, all_frequency, all_wavelength,
+                array_positions=array_positions, source_offsets=[],
+                set_leg=all_labels, receiver_dx=dx, legacy_controls=False,
+            )
+            ctrl._file_boundaries = file_boundaries
+            ctrl._spectrum_files = spectrum_files
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "State", f"Controller init failed:\n{e}")
+            return False
+
+        # Restore k-guides from first state that has them
+        for file_info in files:
             try:
-                P = load_prefs()
-                n_phones = int(P.get('default_n_phones', 24))
-            except Exception:
-                n_phones = 24
-            array_positions = np.arange(0, dx * n_phones, dx)
-            source_offsets = []
-            ctrl = InteractiveRemovalWithLayers(v, f, w, array_positions=array_positions, source_offsets=source_offsets, set_leg=set_leg, receiver_dx=dx, legacy_controls=False)
-            # Restore passive FK guides if present
-            if 'kmin' in S and 'kmax' in S:
-                try:
-                    ctrl.kmin = float(S['kmin']); ctrl.kmax = float(S['kmax']); ctrl.show_k_guides = bool(S.get('show_k_guides', False))
-                    ctrl._draw_k_guides(); ctrl._update_legend()
-                except Exception: pass
-            # Apply prefs for ticks if state lacks them
-            try:
-                P = load_prefs()
-                if 'freq_tick_style' in S:
-                    ctrl.freq_tick_style = S['freq_tick_style']
-                else:
-                    ctrl.freq_tick_style = P.get('freq_tick_style', getattr(ctrl, 'freq_tick_style', 'decades'))
-                if 'freq_custom_ticks' in S:
-                    ctrl.freq_custom_ticks = S['freq_custom_ticks']
-                else:
-                    ctrl.freq_custom_ticks = P.get('freq_custom_ticks', getattr(ctrl, 'freq_custom_ticks', []))
+                S = load_session(file_info['path'])
+                if 'kmin' in S and 'kmax' in S:
+                    ctrl.kmin = float(S['kmin'])
+                    ctrl.kmax = float(S['kmax'])
+                    ctrl.show_k_guides = bool(S.get('show_k_guides', False))
+                    ctrl._draw_k_guides()
+                    ctrl._update_legend()
+                    break
             except Exception:
                 pass
-            app_qt = show_shell(ctrl)
+
+        # Apply tick prefs from first state
+        try:
+            if first_state and 'freq_tick_style' in first_state:
+                ctrl.freq_tick_style = first_state['freq_tick_style']
+            else:
+                ctrl.freq_tick_style = P.get('freq_tick_style', getattr(ctrl, 'freq_tick_style', 'decades'))
+            if first_state and 'freq_custom_ticks' in first_state:
+                ctrl.freq_custom_ticks = first_state['freq_custom_ticks']
+            else:
+                ctrl.freq_custom_ticks = P.get('freq_custom_ticks', getattr(ctrl, 'freq_custom_ticks', []))
+        except Exception:
+            pass
+
+        app_qt = show_shell(ctrl)
+        try:
+            app_qt._masw_shell_window.adopt_controller(ctrl)
+            ctrl.suppress_mpl_controls_for_shell()
             try:
-                app_qt._masw_shell_window.adopt_controller(ctrl)
-                ctrl.suppress_mpl_controls_for_shell()
-                try: ctrl._enforce_shell_layout()
-                except Exception: pass
-            except Exception: pass
-            
-            # Load spectrum if provided
-            spectrum_path = spec.get('spectrum_path')
-            if spectrum_path:
+                ctrl._enforce_shell_layout()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        # Load spectra per-file
+        for file_label, spectrum_path in spectrum_files.items():
+            try:
+                if hasattr(ctrl, 'load_combined_spectrum_for_layers'):
+                    results = ctrl.load_combined_spectrum_for_layers(spectrum_path)
+                    if results:
+                        matched = sum(1 for val in results.values() if val)
+                        try:
+                            from dc_cut.services import log
+                            log.info(f"Loaded spectrum for {matched} layers from '{file_label}'")
+                        except Exception:
+                            pass
+            except Exception as e:
                 try:
-                    if hasattr(ctrl, 'load_combined_spectrum_for_layers'):
-                        results = ctrl.load_combined_spectrum_for_layers(spectrum_path)
-                        if results:
-                            matched = sum(1 for v in results.values() if v)
-                            try:
-                                from dc_cut.services import log
-                                log.info(f"Loaded spectrum for {matched} layers from state")
-                            except Exception:
-                                pass
-                except Exception as e:
-                    try:
-                        from dc_cut.services import log
-                        log.warning(f"Failed to load spectrum: {e}")
-                    except Exception:
-                        pass
-            
-            return True
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "State", f"Load failed:\n{e}")
-            return False
+                    from dc_cut.services import log
+                    log.warning(f"Failed to load spectrum for '{file_label}': {e}")
+                except Exception:
+                    pass
+
+        return True
 
     def _load_circular_array(self, spec: dict) -> bool:
         """Load circular array data and launch workflow."""

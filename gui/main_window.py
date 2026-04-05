@@ -626,11 +626,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     "Please use File → Open Data from the launcher to start a new session."
                 )
             elif mode == 'state':
-                QtWidgets.QMessageBox.warning(
-                    self, "State File",
-                    "State files replace the current session.\n"
-                    "Please use File → Open Data from the launcher to load a state file."
-                )
+                self._append_state_data(spec)
             else:
                 QtWidgets.QMessageBox.warning(self, "Error", f"Unknown mode: {mode}")
         except Exception as e:
@@ -741,76 +737,201 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.information(self, "Success", f"Appended {total_layers} layers.")
     
     def _append_passive_data(self, spec: dict):
-        """Append passive data to the current session."""
+        """Append passive data to the current session (multi-file or legacy)."""
         import numpy as np
         from dc_cut.io.max import parse_max_file
         import os
-        
-        max_path = spec.get('max_path')
-        vcut = spec.get('velocity_cutoff', 2000)
-        wave_type = spec.get('wave_type', 'all')
-        
-        if not max_path or not os.path.exists(max_path):
-            QtWidgets.QMessageBox.warning(self, "Error", "Invalid .max file path")
+
+        vcut = spec.get('vcut', spec.get('velocity_cutoff', 2000))
+
+        # Build file list — support both new multi-file and old single-file format
+        if 'files' in spec:
+            files = spec['files']
+        elif spec.get('max_path'):
+            files = [{
+                'label': os.path.splitext(os.path.basename(spec['max_path']))[0],
+                'path': spec['max_path'],
+                'wave_type': spec.get('wave_type', 'all'),
+            }]
+        else:
+            QtWidgets.QMessageBox.warning(self, "Error", "No passive files specified")
             return
-        
-        try:
-            df = parse_max_file(max_path, wave_type=wave_type)
-            
-            # Convert to velocity/frequency/wavelength
-            if 'slow' in df.columns:
-                slow = df['slow'].values
-                velocity = 1000.0 / np.maximum(slow, 1e-10)
-            elif 'velocity' in df.columns:
-                velocity = df['velocity'].values
-            else:
-                raise ValueError("No velocity or slowness column found")
-            
-            frequency = df['freq'].values
-            wavelength = velocity / np.maximum(frequency, 1e-10)
-            
-            # Apply velocity filter
-            mask = (velocity >= 0) & (velocity <= vcut)
-            velocity = velocity[mask]
-            frequency = frequency[mask]
-            wavelength = wavelength[mask]
-            
-            label = os.path.splitext(os.path.basename(max_path))[0]
-            
-            # Add as single layer
-            ctrl = self.controller
-            start_idx = len(ctrl.velocity_arrays)
-            
-            ctrl.velocity_arrays.append(velocity)
-            ctrl.frequency_arrays.append(frequency)
-            ctrl.wavelength_arrays.append(wavelength)
-            ctrl.offset_labels.append(label)
-            
-            end_idx = len(ctrl.velocity_arrays)
-            
-            # Update file boundaries
-            if not hasattr(ctrl, '_file_boundaries') or ctrl._file_boundaries is None:
-                ctrl._file_boundaries = []
-            ctrl._file_boundaries.append((label, start_idx, end_idx))
-            
-            # Create lines for new data
-            self._create_lines_for_new_data(start_idx, end_idx, [velocity], [frequency], [wavelength])
-            
-            # Update layers model
+
+        ctrl = self.controller
+        if not hasattr(ctrl, '_file_boundaries') or ctrl._file_boundaries is None:
+            ctrl._file_boundaries = []
+
+        total_points = 0
+
+        for file_info in files:
+            path = file_info.get('path', '')
+            label = file_info.get('label', os.path.splitext(os.path.basename(path))[0])
+            wave_type = file_info.get('wave_type', 'all')
+
+            if not path or not os.path.exists(path):
+                continue
+
+            try:
+                df = parse_max_file(path, wave_type=wave_type)
+
+                if 'slow' in df.columns:
+                    velocity = 1000.0 / np.maximum(df['slow'].values, 1e-10)
+                elif 'velocity' in df.columns:
+                    velocity = df['velocity'].values
+                else:
+                    raise ValueError("No velocity or slowness column found")
+
+                frequency = df['freq'].values
+                wavelength = velocity / np.maximum(frequency, 1e-10)
+
+                mask = (velocity >= 0) & (velocity <= vcut)
+                velocity = velocity[mask]
+                frequency = frequency[mask]
+                wavelength = wavelength[mask]
+
+                start_idx = len(ctrl.velocity_arrays)
+                ctrl.velocity_arrays.append(velocity)
+                ctrl.frequency_arrays.append(frequency)
+                ctrl.wavelength_arrays.append(wavelength)
+                end_idx = len(ctrl.velocity_arrays)
+
+                # Deduplicate group label
+                existing_labels = {b[0] for b in ctrl._file_boundaries}
+                dedup_label = label
+                counter = 2
+                while dedup_label in existing_labels:
+                    dedup_label = f"{label} ({counter})"
+                    counter += 1
+
+                ctrl._file_boundaries.append((dedup_label, start_idx, end_idx))
+
+                # Insert label before average labels
+                avg_labels = [
+                    getattr(ctrl, 'average_label', 'Average (Freq)'),
+                    getattr(ctrl, 'average_label_wave', 'Average (Wave)'),
+                ]
+                while ctrl.offset_labels and ctrl.offset_labels[-1] in avg_labels:
+                    ctrl.offset_labels.pop()
+                ctrl.offset_labels.append(f"{dedup_label}/{dedup_label}")
+                ctrl.offset_labels.append(avg_labels[0])
+                ctrl.offset_labels.append(avg_labels[1])
+
+                self._create_lines_for_new_data(
+                    start_idx, end_idx, [velocity], [frequency], [wavelength]
+                )
+                total_points += len(velocity)
+
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(
+                    self, "Parse Error", f"Failed to parse '{label}':\n{e}"
+                )
+
+        if total_points > 0:
             self._update_layers_model()
-            
-            # Recalculate averages to include new data
             if hasattr(ctrl, '_update_average_line'):
                 ctrl._update_average_line()
-            
             if hasattr(ctrl, 'on_layers_changed') and ctrl.on_layers_changed:
                 ctrl.on_layers_changed()
-            
-            QtWidgets.QMessageBox.information(self, "Success", f"Appended {len(velocity)} points from {label}")
-            
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to parse passive data:\n{e}")
+            QtWidgets.QMessageBox.information(
+                self, "Success",
+                f"Appended {total_points} points from {len(files)} passive file(s)."
+            )
     
+    def _append_state_data(self, spec: dict):
+        """Append state file(s) to the current session."""
+        import numpy as np
+        from dc_cut.io.state import load_session
+
+        # Support both multi-file and legacy single-file spec
+        if 'files' in spec:
+            files = spec['files']
+        else:
+            files = [{
+                'label': 'State',
+                'path': spec['path'],
+                'spectrum': spec.get('spectrum_path'),
+            }]
+
+        ctrl = self.controller
+        if not hasattr(ctrl, '_file_boundaries') or ctrl._file_boundaries is None:
+            ctrl._file_boundaries = []
+
+        total_layers = 0
+
+        for file_info in files:
+            label = file_info.get('label', 'State')
+            path = file_info.get('path')
+            spectrum_path = file_info.get('spectrum')
+
+            if not path:
+                continue
+
+            try:
+                S = load_session(path)
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(
+                    self, "State", f"Failed to load '{label}':\n{e}"
+                )
+                continue
+
+            v = S["velocity_arrays"]
+            f = S["frequency_arrays"]
+            w = S["wavelength_arrays"]
+            set_leg = S.get("set_leg", [f"Layer {i}" for i in range(len(v))])
+
+            start_idx = len(ctrl.velocity_arrays)
+            prefixed_labels = []
+            for i in range(len(v)):
+                ctrl.velocity_arrays.append(v[i])
+                ctrl.frequency_arrays.append(f[i])
+                ctrl.wavelength_arrays.append(w[i])
+                orig = set_leg[i] if i < len(set_leg) else f"Layer {i}"
+                prefixed_labels.append(f"{label}/{orig}")
+            end_idx = len(ctrl.velocity_arrays)
+
+            # Deduplicate group label
+            existing_labels = {b[0] for b in ctrl._file_boundaries}
+            dedup_label = label
+            counter = 2
+            while dedup_label in existing_labels:
+                dedup_label = f"{label} ({counter})"
+                counter += 1
+
+            ctrl._file_boundaries.append((dedup_label, start_idx, end_idx))
+
+            # Insert labels before average labels
+            avg_labels = [
+                getattr(ctrl, 'average_label', 'Average (Freq)'),
+                getattr(ctrl, 'average_label_wave', 'Average (Wave)'),
+            ]
+            while ctrl.offset_labels and ctrl.offset_labels[-1] in avg_labels:
+                ctrl.offset_labels.pop()
+            ctrl.offset_labels.extend(prefixed_labels)
+            ctrl.offset_labels.append(avg_labels[0])
+            ctrl.offset_labels.append(avg_labels[1])
+
+            # Create matplotlib lines for new layers
+            self._create_lines_for_new_data(start_idx, end_idx, v, f, w)
+            total_layers += len(v)
+
+            # Load spectrum if provided
+            if spectrum_path:
+                try:
+                    if hasattr(ctrl, 'load_combined_spectrum_for_layers'):
+                        ctrl.load_combined_spectrum_for_layers(spectrum_path)
+                except Exception:
+                    pass
+
+        if total_layers > 0:
+            self._update_layers_model()
+            if hasattr(ctrl, '_update_average_line'):
+                ctrl._update_average_line()
+            if hasattr(ctrl, 'on_layers_changed') and ctrl.on_layers_changed:
+                ctrl.on_layers_changed()
+            QtWidgets.QMessageBox.information(
+                self, "Success", f"Appended {total_layers} layers from state file(s)."
+            )
+
     def _append_data(self):
         """Append additional data to the current session (legacy method)."""
         self._open_data_append()

@@ -1429,43 +1429,168 @@ class OpenDataDialog(QtWidgets.QDialog):
 
     def _make_tab_state(self):
         w = QtWidgets.QWidget(self)
-        form = QtWidgets.QFormLayout(w)
-        form.setContentsMargins(12, 12, 12, 12)
-        
+        v = QtWidgets.QVBoxLayout(w)
+        v.setContentsMargins(6, 6, 6, 6)
+
         # Info label
-        info = QtWidgets.QLabel("<i>State files restore a complete previous session.</i>", w)
+        info = QtWidgets.QLabel(
+            "<i>Add one or more state files (.pkl). "
+            "Each file becomes a toggleable group in the layer tree.</i>"
+        )
         info.setWordWrap(True)
-        form.addRow(info)
-        
-        # File picker
-        row = QtWidgets.QHBoxLayout()
-        self.state_path = QtWidgets.QLineEdit(w)
-        self.state_path.setPlaceholderText("Select .pkl state file...")
-        btn = QtWidgets.QPushButton("Browse", w)
-        btn.clicked.connect(lambda: self._pick_file(self.state_path, "State", "*.pkl"))
-        row.addWidget(self.state_path, 1)
-        row.addWidget(btn)
-        form.addRow("State file:", row)
-        
-        # Spectrum file picker (optional)
-        row_spec = QtWidgets.QHBoxLayout()
-        self.state_spectrum_path = QtWidgets.QLineEdit(w)
-        self.state_spectrum_path.setPlaceholderText("(Optional) Select spectrum .npz file...")
-        btn_spec = QtWidgets.QPushButton("Browse", w)
-        btn_spec.clicked.connect(lambda: self._pick_file(self.state_spectrum_path, "Spectrum", "*.npz"))
-        row_spec.addWidget(self.state_spectrum_path, 1)
-        row_spec.addWidget(btn_spec)
-        form.addRow("Spectrum:", row_spec)
-        
-        # dx optional (used for geometry when state lacks it)
+        v.addWidget(info)
+
+        # Files table
+        files_group = QtWidgets.QGroupBox("State Files")
+        files_layout = QtWidgets.QVBoxLayout(files_group)
+
+        self.state_table = QtWidgets.QTableWidget(0, 4)
+        self.state_table.setHorizontalHeaderLabels(
+            ["Label", "State File (.pkl)", "NPZ Spectrum", ""]
+        )
+        self.state_table.horizontalHeader().setStretchLastSection(False)
+        try:
+            resize_mode = QtWidgets.QHeaderView.ResizeMode
+        except AttributeError:
+            resize_mode = QtWidgets.QHeaderView
+        self.state_table.horizontalHeader().setSectionResizeMode(
+            0, resize_mode.Interactive if hasattr(resize_mode, 'Interactive')
+            else QtWidgets.QHeaderView.Interactive
+        )
+        self.state_table.horizontalHeader().setSectionResizeMode(
+            1, resize_mode.Stretch if hasattr(resize_mode, 'Stretch')
+            else QtWidgets.QHeaderView.Stretch
+        )
+        self.state_table.setColumnWidth(0, 100)
+        self.state_table.setColumnWidth(2, 180)
+        self.state_table.setColumnWidth(3, 30)
+        files_layout.addWidget(self.state_table)
+
+        # Add / Remove buttons
+        btn_layout = QtWidgets.QHBoxLayout()
+        btn_add = QtWidgets.QPushButton("+ Add File")
+        btn_add.clicked.connect(self._add_state_file_row)
+        btn_remove = QtWidgets.QPushButton("- Remove Selected")
+        btn_remove.clicked.connect(self._remove_state_file_row)
+        btn_layout.addWidget(btn_add)
+        btn_layout.addWidget(btn_remove)
+        btn_layout.addStretch()
+        files_layout.addLayout(btn_layout)
+
+        v.addWidget(files_group)
+
+        # dx spinner
+        dx_layout = QtWidgets.QHBoxLayout()
+        dx_layout.addWidget(QtWidgets.QLabel("Δx (m):"))
         self.state_dx = QtWidgets.QDoubleSpinBox(w)
         self.state_dx.setRange(0.1, 100.0)
         self.state_dx.setValue(2.0)
         self.state_dx.setDecimals(2)
-        form.addRow("Δx (m):", self.state_dx)
-        
-        form.addRow(QtWidgets.QLabel(""))  # Spacer
+        dx_layout.addWidget(self.state_dx)
+        dx_layout.addStretch()
+        v.addLayout(dx_layout)
+
+        v.addStretch()
         return w
+
+    def _add_state_file_row(self):
+        """Add a new row to the state files table."""
+        row = self.state_table.rowCount()
+        self.state_table.insertRow(row)
+
+        # Label (editable)
+        label_edit = QtWidgets.QLineEdit()
+        label_edit.setPlaceholderText(f"State {row + 1}")
+        label_edit.setText(f"State {row + 1}")
+        self.state_table.setCellWidget(row, 0, label_edit)
+
+        # State file path with browse
+        path_widget = QtWidgets.QWidget()
+        path_h = QtWidgets.QHBoxLayout(path_widget)
+        path_h.setContentsMargins(0, 0, 0, 0)
+        path_edit = QtWidgets.QLineEdit()
+        path_edit.setPlaceholderText("Select .pkl file...")
+        btn_browse = QtWidgets.QPushButton("...")
+        btn_browse.setMaximumWidth(30)
+        btn_browse.clicked.connect(
+            lambda checked, e=path_edit: self._browse_state_pkl(e)
+        )
+        path_h.addWidget(path_edit, 1)
+        path_h.addWidget(btn_browse)
+        self.state_table.setCellWidget(row, 1, path_widget)
+
+        # NPZ spectrum path with browse
+        spec_widget = QtWidgets.QWidget()
+        spec_h = QtWidgets.QHBoxLayout(spec_widget)
+        spec_h.setContentsMargins(0, 0, 0, 0)
+        spec_edit = QtWidgets.QLineEdit()
+        spec_edit.setPlaceholderText("(Optional)")
+        btn_spec = QtWidgets.QPushButton("...")
+        btn_spec.setMaximumWidth(30)
+        btn_spec.clicked.connect(
+            lambda checked, e=spec_edit: self._browse_spectrum(e)
+        )
+        spec_h.addWidget(spec_edit, 1)
+        spec_h.addWidget(btn_spec)
+        self.state_table.setCellWidget(row, 2, spec_widget)
+
+        # Remove button
+        btn_remove = QtWidgets.QPushButton("×")
+        btn_remove.setMaximumWidth(30)
+        btn_remove.clicked.connect(
+            lambda checked, r=row: self._remove_state_row_at(r)
+        )
+        self.state_table.setCellWidget(row, 3, btn_remove)
+
+    def _remove_state_file_row(self):
+        """Remove the currently selected row from state files table."""
+        row = self.state_table.currentRow()
+        if row >= 0:
+            self.state_table.removeRow(row)
+
+    def _remove_state_row_at(self, row: int):
+        """Remove a specific row from state files table."""
+        if row < self.state_table.rowCount():
+            self.state_table.removeRow(row)
+
+    def _browse_state_pkl(self, path_edit):
+        """Browse for a .pkl state file."""
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select State File", "",
+            "State Files (*.pkl);;All Files (*.*)"
+        )
+        if path:
+            path_edit.setText(path)
+
+    def _get_state_files_config(self) -> list:
+        """Collect all rows from the state files table."""
+        files = []
+        for row in range(self.state_table.rowCount()):
+            label_widget = self.state_table.cellWidget(row, 0)
+            path_widget = self.state_table.cellWidget(row, 1)
+            spec_widget = self.state_table.cellWidget(row, 2)
+
+            label = label_widget.text().strip() if label_widget else f"State {row + 1}"
+
+            pkl_path = ""
+            if path_widget:
+                edit = path_widget.findChild(QtWidgets.QLineEdit)
+                if edit:
+                    pkl_path = edit.text().strip()
+
+            spectrum_path = ""
+            if spec_widget:
+                edit = spec_widget.findChild(QtWidgets.QLineEdit)
+                if edit:
+                    spectrum_path = edit.text().strip()
+
+            if pkl_path:
+                files.append({
+                    'label': label if label else f"State {row + 1}",
+                    'path': pkl_path,
+                    'spectrum': spectrum_path if spectrum_path else None,
+                })
+        return files
 
     def _make_tab_passive(self):
         """Passive Data tab with multi-file support."""
@@ -1987,16 +2112,17 @@ class OpenDataDialog(QtWidgets.QDialog):
                 'dx': float(self.pass_dx.value()),
                 'vcut': float(self.pass_vcut.value()),
             }
-        elif idx == 2:  # State
-            path = self.state_path.text().strip()
-            if not path:
-                QtWidgets.QMessageBox.warning(self, "State", "Please select a .pkl file."); return
-            spectrum_path = self.state_spectrum_path.text().strip() if hasattr(self, 'state_spectrum_path') else ''
+        elif idx == 2:  # State (multi-file)
+            files = self._get_state_files_config()
+            if not files:
+                QtWidgets.QMessageBox.warning(
+                    self, "State", "Please add at least one .pkl state file."
+                )
+                return
             self.result = {
                 'mode': 'state',
-                'path': path,
+                'files': files,
                 'dx': float(self.state_dx.value()),
-                'spectrum_path': spectrum_path if spectrum_path else None,
             }
         elif idx == 3:  # Circular Array
             is_valid, error_msg = self.tab_circular.validate()

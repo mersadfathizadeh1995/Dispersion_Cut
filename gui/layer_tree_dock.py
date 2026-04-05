@@ -51,11 +51,12 @@ class LayerTreeDock(QtWidgets.QDockWidget):
         
         # Tree widget
         self.tree = QtWidgets.QTreeWidget()
-        self.tree.setHeaderLabels(["Layer", "Points", "Visible"])
-        self.tree.setColumnCount(3)
+        self.tree.setHeaderLabels(["Layer", "Points", "Visible", "Color"])
+        self.tree.setColumnCount(4)
         self.tree.setColumnWidth(0, 150)
         self.tree.setColumnWidth(1, 50)
         self.tree.setColumnWidth(2, 50)
+        self.tree.setColumnWidth(3, 40)
         
         # Enable checkboxes
         self.tree.itemChanged.connect(self._on_item_changed)
@@ -197,9 +198,30 @@ class LayerTreeDock(QtWidgets.QDockWidget):
         uncheck_state = QtCore.Qt.CheckState.Unchecked if hasattr(QtCore.Qt, 'CheckState') else QtCore.Qt.Unchecked
         item.setCheckState(2, check_state if visible else uncheck_state)
         
+        # Color swatch in column 3
+        color = self._get_layer_color(layer_idx, layer)
+        if color:
+            try:
+                bg_role = QtCore.Qt.ItemDataRole.BackgroundRole if hasattr(QtCore.Qt, 'ItemDataRole') else QtCore.Qt.BackgroundRole
+                item.setData(3, bg_role, QtGui.QBrush(QtGui.QColor(color)))
+                item.setText(3, "")
+            except Exception:
+                pass
+        
         # Store layer index
         user_role = QtCore.Qt.ItemDataRole.UserRole if hasattr(QtCore.Qt, 'ItemDataRole') else QtCore.Qt.UserRole
         item.setData(0, user_role, ('layer', layer_idx))
+    
+    def _get_layer_color(self, layer_idx, layer):
+        """Get the current display color for a layer."""
+        if layer.style and layer.style.line_color:
+            return layer.style.line_color
+        if layer_idx < len(getattr(self.controller, 'lines_freq', [])):
+            try:
+                return self.controller.lines_freq[layer_idx].get_color()
+            except Exception:
+                pass
+        return None
     
     def _on_item_changed(self, item, column):
         """Handle item checkbox change."""
@@ -264,12 +286,16 @@ class LayerTreeDock(QtWidgets.QDockWidget):
                 self._set_all_visibility(False)
         
         elif data and data[0] in ('file', 'group'):
+            action_color_group = menu.addAction("Change Group Color...")
+            menu.addSeparator()
             action_show_group = menu.addAction("Show All in Group")
             action_hide_group = menu.addAction("Hide All in Group")
             
             action = menu.exec(self.tree.mapToGlobal(pos))
             
-            if action == action_show_group:
+            if action == action_color_group:
+                self._change_group_color(item)
+            elif action == action_show_group:
                 self._set_group_visibility(item, True)
             elif action == action_hide_group:
                 self._set_group_visibility(item, False)
@@ -336,6 +362,58 @@ class LayerTreeDock(QtWidgets.QDockWidget):
                     self.controller.model.layers[layer_idx].visible = visible
         
         self._refresh_after_visibility_change()
+    
+    def _change_group_color(self, group_item):
+        """Open color picker and apply chosen color to all layers in a group."""
+        from dc_cut.core.model import LayerStyle
+        
+        if not hasattr(self.controller, 'model') or not self.controller.model:
+            return
+        
+        color = QtWidgets.QColorDialog.getColor(
+            QtGui.QColor("#1f77b4"), self, "Select Group Color"
+        )
+        if not color.isValid():
+            return
+        
+        hex_color = color.name()
+        user_role = QtCore.Qt.ItemDataRole.UserRole if hasattr(QtCore.Qt, 'ItemDataRole') else QtCore.Qt.UserRole
+        model = self.controller.model
+        
+        for i in range(group_item.childCount()):
+            child = group_item.child(i)
+            data = child.data(0, user_role)
+            if not data or data[0] != 'layer':
+                continue
+            layer_idx = data[1]
+            if layer_idx >= len(model.layers):
+                continue
+            
+            layer = model.layers[layer_idx]
+            
+            # Update or create layer style
+            if layer.style:
+                layer.style.line_color = hex_color
+                layer.style.marker_color = hex_color
+            else:
+                layer.style = LayerStyle(line_color=hex_color, marker_color=hex_color)
+            
+            # Apply to matplotlib lines
+            if layer_idx < len(getattr(self.controller, 'lines_freq', [])):
+                line = self.controller.lines_freq[layer_idx]
+                line.set_color(hex_color)
+                line.set_markeredgecolor(hex_color)
+            if layer_idx < len(getattr(self.controller, 'lines_wave', [])):
+                line = self.controller.lines_wave[layer_idx]
+                line.set_color(hex_color)
+                line.set_markeredgecolor(hex_color)
+        
+        # Redraw and refresh tree
+        if hasattr(self.controller, 'fig') and self.controller.fig:
+            self.controller.fig.canvas.draw_idle()
+        self._populate_tree()
+        if hasattr(self.controller, 'on_layers_changed') and self.controller.on_layers_changed:
+            self.controller.on_layers_changed()
     
     def _refresh_after_visibility_change(self):
         """Refresh UI after visibility changes - syncs with Layers dock."""
