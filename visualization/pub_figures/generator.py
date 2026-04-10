@@ -184,7 +184,7 @@ class PublicationFigureGenerator(
             return self._bin_centers, self._binned_avg, self._binned_std
 
         # Import averaging function
-        from dc_cut.core.averages import compute_binned_avg_std
+        from dc_cut.core.processing.averages import compute_binned_avg_std
 
         # Gather all active data
         all_freqs = []
@@ -230,7 +230,7 @@ class PublicationFigureGenerator(
 
         # Import NACD computation
         try:
-            from dc_cut.core.nearfield import compute_nacd_for_all_data
+            from dc_cut.core.processing.nearfield import compute_nacd_for_all_data
         except ImportError:
             return None
 

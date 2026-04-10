@@ -32,7 +32,7 @@ class BasicWavelengthPlotsMixin:
         ])
 
         # Compute binned statistics
-        from dc_cut.core.averages import compute_binned_avg_std_wavelength
+        from dc_cut.core.processing.averages import compute_binned_avg_std_wavelength
         bin_centers, avg_vals, std_vals = compute_binned_avg_std_wavelength(
             wave_all, vel_all, num_bins=num_bins, log_bias=log_bias
         )

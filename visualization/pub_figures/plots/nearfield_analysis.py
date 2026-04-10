@@ -387,7 +387,8 @@ class NearFieldAnalysisMixin:
             self._save_figure(fig, output_path, config)
 
         return fig
-
+
+
     def generate_nacd_combined(
         self,
         output_path: Optional[str] = None,
@@ -811,7 +812,7 @@ class NearFieldAnalysisMixin:
         Returns:
             Array of NACD values, or None if computation not possible
         """
-        from dc_cut.core.nearfield import compute_nacd_array
+        from dc_cut.core.processing.nearfield import compute_nacd_array
 
         freqs = self.frequency_arrays[layer_idx]
         vels = self.velocity_arrays[layer_idx]
