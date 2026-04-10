@@ -1,13 +1,2 @@
+"""Backward-compatibility shim -- real modules live in dc_cut.core.io."""
 from __future__ import annotations
-
-# IO subpackage for loaders (matlab, csv, max, state)
-
-
-
-
-
-
-
-
-
-
