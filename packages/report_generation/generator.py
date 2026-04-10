@@ -75,7 +75,7 @@ class ReportGenerator(
             controller: Instance of InteractiveRemovalWithLayers
 
         Returns:
-            PublicationFigureGenerator instance
+            ReportGenerator instance
         """
         # Extract layer labels (offset_labels in controller)
         # Note: offset_labels includes average labels appended at the end,
@@ -155,7 +155,7 @@ class ReportGenerator(
             array_positions: Optional receiver positions
 
         Returns:
-            PublicationFigureGenerator instance
+            ReportGenerator instance
         """
         n = len(velocity_arrays)
         if layer_labels is None:

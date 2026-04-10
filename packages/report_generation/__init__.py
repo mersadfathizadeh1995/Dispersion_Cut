@@ -9,13 +9,9 @@ Public API:
 from dc_cut.packages.report_generation.config import ReportConfig, PlotConfig, COLORBLIND_PALETTE
 from dc_cut.packages.report_generation.generator import ReportGenerator
 
-# Backward-compat alias
-PublicationFigureGenerator = ReportGenerator
-
 __all__ = [
     'ReportGenerator',
     'ReportConfig',
     'PlotConfig',
-    'PublicationFigureGenerator',
     'COLORBLIND_PALETTE',
 ]

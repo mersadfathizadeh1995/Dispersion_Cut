@@ -1,7 +1,4 @@
 """Report generation dialog for GUI."""
-from .dialog import PublicationFigureDialog
+from .dialog import ReportDialog
 
-# New name
-ReportDialog = PublicationFigureDialog
-
-__all__ = ['PublicationFigureDialog', 'ReportDialog']
+__all__ = ['ReportDialog']

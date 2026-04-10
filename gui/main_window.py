@@ -336,9 +336,9 @@ class MainWindow(QtWidgets.QMainWindow):
         m_file.addAction(act_prefs)
 
         # Report Generation
-        act_pub_fig = QtGui.QAction("Report Generation...", self)
-        act_pub_fig.triggered.connect(self._show_pub_figure_dialog)
-        m_file.addAction(act_pub_fig)
+        act_report = QtGui.QAction("Report Generation...", self)
+        act_report.triggered.connect(self._show_report_dialog)
+        m_file.addAction(act_report)
 
         m_file.addSeparator()
 
@@ -491,14 +491,14 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open preferences:\n{e}")
 
-    def _show_pub_figure_dialog(self):
+    def _show_report_dialog(self):
         """Show the report generation dialog."""
         try:
             from dc_cut.packages.report_generation.dialog import ReportDialog
             dlg = ReportDialog(self.controller, self)
             dlg.exec()
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open publication figure dialog:\n{e}")
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open report generation dialog:\n{e}")
 
     def _add_point_to_layer(self):
         """Show dialog to add a point to a specific layer."""

@@ -1,4 +1,4 @@
-"""Main PublicationFigureDialog class."""
+"""Report generation dialog."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ QtGui = qt_compat.QtGui
 QtCore = qt_compat.QtCore
 
 from dc_cut.packages.report_generation import ReportGenerator, PlotConfig
-PublicationFigureGenerator = ReportGenerator
 from .qt_compat import (
     _get_qt_orientation_horizontal,
     _get_qt_align_top,
@@ -29,13 +28,13 @@ from .qt_compat import (
 from .constants import FIGURE_TYPES
 
 
-class PublicationFigureDialog(QtWidgets.QDialog):
+class ReportDialog(QtWidgets.QDialog):
     """Dialog for configuring and generating publication-quality figures."""
 
     def __init__(self, controller, parent: Optional[QtWidgets.QWidget] = None):
         super().__init__(parent)
         self.controller = controller
-        self.setWindowTitle("Export Publication Figure")
+        self.setWindowTitle("Report Generation")
         self.resize(600, 700)
 
         # Main layout
@@ -1466,7 +1465,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
 
         # Create generator from controller
         try:
-            generator = PublicationFigureGenerator.from_controller(self.controller)
+            generator = ReportGenerator.from_controller(self.controller)
         except Exception as e:
             QtWidgets.QMessageBox.critical(
                 self,
@@ -1571,7 +1570,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         """Generate all figures into a single PowerPoint file.
         
         Args:
-            generator: PublicationFigureGenerator instance
+            generator: ReportGenerator instance
             files_to_create: List of (plot_type, _, offset_info) tuples
             output_path: Path to save the combined PPTX
             config: PlotConfig instance
@@ -1654,7 +1653,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         """Generate a single figure as a PowerPoint file with one slide.
         
         Args:
-            generator: PublicationFigureGenerator instance
+            generator: ReportGenerator instance
             plot_type: Internal key of the plot type
             output_path: Path to save the PPTX
             config: PlotConfig instance
@@ -1727,7 +1726,7 @@ class PublicationFigureDialog(QtWidgets.QDialog):
         """Generate a single plot type.
         
         Args:
-            generator: PublicationFigureGenerator instance
+            generator: ReportGenerator instance
             plot_type: Internal key of the plot type
             output_path: Path to save the figure
             config: PlotConfig instance
