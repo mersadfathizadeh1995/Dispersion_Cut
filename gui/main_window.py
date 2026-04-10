@@ -270,7 +270,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if reply == yes_btn:
             try:
-                from dc_cut.io.state import load_session
+                from dc_cut.core.io.state import load_session
                 S = load_session(str(prev_path))
                 
                 if 'velocity_arrays' in S and 'frequency_arrays' in S:
@@ -635,7 +635,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _append_active_data(self, spec: dict):
         """Append active data to the current session."""
         import numpy as np
-        from dc_cut.io.universal import parse_any_file, parse_combined_csv
+        from dc_cut.core.io.universal import parse_any_file, parse_combined_csv
         import os
         
         files = spec.get('files', [])
@@ -739,7 +739,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _append_passive_data(self, spec: dict):
         """Append passive data to the current session (multi-file or legacy)."""
         import numpy as np
-        from dc_cut.io.max import parse_max_file
+        from dc_cut.core.io.max_parser import parse_max_file
         import os
 
         vcut = spec.get('vcut', spec.get('velocity_cutoff', 2000))
@@ -840,7 +840,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _append_state_data(self, spec: dict):
         """Append state file(s) to the current session."""
         import numpy as np
-        from dc_cut.io.state import load_session
+        from dc_cut.core.io.state import load_session
 
         # Support both multi-file and legacy single-file spec
         if 'files' in spec:
@@ -939,7 +939,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _do_append_data(self, spec: dict) -> bool:
         """Actually append the data to the controller."""
         import numpy as np
-        from dc_cut.io.universal import parse_any_file, parse_combined_csv
+        from dc_cut.core.io.universal import parse_any_file, parse_combined_csv
         import os
         
         path = spec.get('path')
@@ -1050,7 +1050,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _update_layers_model(self):
         """Rebuild layers model from controller arrays."""
         ctrl = self.controller
-        from dc_cut.core.model import LayersModel
+        from dc_cut.core.models import LayersModel
         
         # Always rebuild the model from current arrays
         ctrl._layers_model = LayersModel.from_arrays(
