@@ -607,6 +607,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
         all_velocity, all_frequency, all_wavelength = [], [], []
         all_labels = []
+        all_groups = []
         file_boundaries = []
         spectrum_files = {}
         first_state = None
@@ -639,7 +640,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 all_frequency.append(f[i])
                 all_wavelength.append(w[i])
                 orig = set_leg[i] if i < len(set_leg) else f"Layer {i}"
-                all_labels.append(f"{label}/{orig}")
+                all_labels.append(orig)
+                all_groups.append(label)
             end_idx = len(all_velocity)
 
             file_boundaries.append((label, start_idx, end_idx))
@@ -667,6 +669,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 set_leg=all_labels, receiver_dx=dx, legacy_controls=False,
             )
             ctrl._file_boundaries = file_boundaries
+            ctrl._layer_groups = all_groups
             ctrl._spectrum_files = spectrum_files
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "State", f"Controller init failed:\n{e}")

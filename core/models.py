@@ -24,6 +24,7 @@ class LayerData:
     velocity: np.ndarray
     wavelength: np.ndarray
     visible: bool = True
+    group: str = ""
 
     # Visual style settings
     style: Optional[LayerStyle] = None
@@ -46,6 +47,7 @@ class LayersModel:
         frequency_arrays: List[np.ndarray],
         wavelength_arrays: List[np.ndarray],
         labels: List[str],
+        groups: Optional[List[str]] = None,
     ) -> "LayersModel":
         layers: List[LayerData] = []
         n = min(len(velocity_arrays), len(frequency_arrays), len(wavelength_arrays), len(labels))
@@ -53,7 +55,8 @@ class LayersModel:
             v = np.asarray(velocity_arrays[i], float)
             f = np.asarray(frequency_arrays[i], float)
             w = np.asarray(wavelength_arrays[i], float)
-            layers.append(LayerData(label=str(labels[i]), frequency=f, velocity=v, wavelength=w, visible=True))
+            grp = groups[i] if groups and i < len(groups) else ""
+            layers.append(LayerData(label=str(labels[i]), frequency=f, velocity=v, wavelength=w, visible=True, group=grp))
         return cls(layers)
 
     def to_arrays(self, only_visible: bool = False) -> Tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray], List[str]]:

@@ -120,25 +120,22 @@ class LayerTreeDock(QtWidgets.QDockWidget):
                 self.tree.addTopLevelItem(file_item)
                 file_item.setExpanded(True)
         else:
-            # Flat list - group by label prefix if "/" present
+            # Group by layer.group field (or by '/' prefix as fallback)
             groups = {}
             for layer_idx, layer in enumerate(model.layers):
                 label = layer.label if hasattr(layer, 'label') else f"Layer {layer_idx + 1}"
-                
-                if '/' in label:
-                    group_name, layer_name = label.split('/', 1)
-                else:
-                    group_name = None
-                    layer_name = label
-                
+                group_name = getattr(layer, 'group', '') or ''
+
+                if not group_name and '/' in label:
+                    group_name, label = label.split('/', 1)
+
                 if group_name:
                     if group_name not in groups:
                         groups[group_name] = []
-                    groups[group_name].append((layer_idx, layer, layer_name))
+                    groups[group_name].append((layer_idx, layer, label))
                 else:
-                    # Add directly as top-level
                     item = QtWidgets.QTreeWidgetItem()
-                    self._configure_layer_item(item, layer_idx, layer, layer_name)
+                    self._configure_layer_item(item, layer_idx, layer, label)
                     self.tree.addTopLevelItem(item)
             
             # Add grouped items

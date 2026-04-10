@@ -880,13 +880,13 @@ class MainWindow(QtWidgets.QMainWindow):
             set_leg = S.get("set_leg", [f"Layer {i}" for i in range(len(v))])
 
             start_idx = len(ctrl.velocity_arrays)
-            prefixed_labels = []
+            clean_labels = []
             for i in range(len(v)):
                 ctrl.velocity_arrays.append(v[i])
                 ctrl.frequency_arrays.append(f[i])
                 ctrl.wavelength_arrays.append(w[i])
                 orig = set_leg[i] if i < len(set_leg) else f"Layer {i}"
-                prefixed_labels.append(f"{label}/{orig}")
+                clean_labels.append(orig)
             end_idx = len(ctrl.velocity_arrays)
 
             # Deduplicate group label
@@ -899,6 +899,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
             ctrl._file_boundaries.append((dedup_label, start_idx, end_idx))
 
+            # Track groups for each new layer
+            if not hasattr(ctrl, '_layer_groups') or ctrl._layer_groups is None:
+                ctrl._layer_groups = [""] * start_idx
+            ctrl._layer_groups.extend([dedup_label] * len(v))
+
             # Insert labels before average labels
             avg_labels = [
                 getattr(ctrl, 'average_label', 'Average (Freq)'),
@@ -906,7 +911,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ]
             while ctrl.offset_labels and ctrl.offset_labels[-1] in avg_labels:
                 ctrl.offset_labels.pop()
-            ctrl.offset_labels.extend(prefixed_labels)
+            ctrl.offset_labels.extend(clean_labels)
             ctrl.offset_labels.append(avg_labels[0])
             ctrl.offset_labels.append(avg_labels[1])
 
@@ -914,16 +919,23 @@ class MainWindow(QtWidgets.QMainWindow):
             self._create_lines_for_new_data(start_idx, end_idx, v, f, w)
             total_layers += len(v)
 
-            # Load spectrum if provided
+            # Collect spectrum path for loading after model rebuild
             if spectrum_path:
-                try:
-                    if hasattr(ctrl, 'load_combined_spectrum_for_layers'):
-                        ctrl.load_combined_spectrum_for_layers(spectrum_path)
-                except Exception:
-                    pass
+                if not hasattr(ctrl, '_spectrum_files') or ctrl._spectrum_files is None:
+                    ctrl._spectrum_files = {}
+                ctrl._spectrum_files[dedup_label] = spectrum_path
 
         if total_layers > 0:
             self._update_layers_model()
+
+            # Load spectra after model rebuild so matching runs against correct layers
+            if hasattr(ctrl, '_spectrum_files') and hasattr(ctrl, 'load_combined_spectrum_for_layers'):
+                for _lbl, sp in list(getattr(ctrl, '_spectrum_files', {}).items()):
+                    try:
+                        ctrl.load_combined_spectrum_for_layers(sp)
+                    except Exception:
+                        pass
+
             if hasattr(ctrl, '_update_average_line'):
                 ctrl._update_average_line()
             if hasattr(ctrl, 'on_layers_changed') and ctrl.on_layers_changed:
@@ -1048,17 +1060,32 @@ class MainWindow(QtWidgets.QMainWindow):
         ctrl.fig.canvas.draw_idle()
     
     def _update_layers_model(self):
-        """Rebuild layers model from controller arrays."""
+        """Rebuild layers model from controller arrays, preserving spectrum data."""
         ctrl = self.controller
         from dc_cut.core.models import LayersModel
-        
-        # Always rebuild the model from current arrays
+
+        # Snapshot spectrum state before rebuild
+        old_spectrum = {}
+        if hasattr(ctrl, '_layers_model') and ctrl._layers_model:
+            for i, layer in enumerate(ctrl._layers_model.layers):
+                if layer.spectrum_data is not None:
+                    old_spectrum[i] = (layer.spectrum_data, layer.spectrum_visible, layer.spectrum_alpha)
+
+        groups = getattr(ctrl, '_layer_groups', None)
         ctrl._layers_model = LayersModel.from_arrays(
             ctrl.velocity_arrays,
             ctrl.frequency_arrays,
             ctrl.wavelength_arrays,
-            ctrl.offset_labels
+            ctrl.offset_labels,
+            groups=groups,
         )
+
+        # Restore spectrum state
+        for i, (sd, sv, sa) in old_spectrum.items():
+            if i < len(ctrl._layers_model.layers):
+                ctrl._layers_model.layers[i].spectrum_data = sd
+                ctrl._layers_model.layers[i].spectrum_visible = sv
+                ctrl._layers_model.layers[i].spectrum_alpha = sa
 
     def _switch_tool(self, tool_name: str) -> None:
         """Switch to the specified selection tool."""
