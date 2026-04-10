@@ -108,8 +108,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
     def _load_passive(self, spec: dict) -> bool:
         """Load passive data with multi-file support."""
         try:
-            from dc_cut.io.max import load_klimits, load_klimits_multi, parse_max_file
-            from dc_cut.core.controller import InteractiveRemovalWithLayers
+            from dc_cut.core.io.max_parser import load_klimits, load_klimits_multi, parse_max_file
+            from dc_cut.gui.controller.composed import InteractiveRemovalWithLayers
             from dc_cut.gui.main_window import show_shell
             from dc_cut.services.prefs import load_prefs
             import numpy as np
@@ -288,8 +288,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
     def _load_active(self, spec: dict) -> bool:
         """Load active data from multiple files with column mapping."""
         try:
-            from dc_cut.io.universal import parse_any_file, parse_combined_csv
-            from dc_cut.core.controller import InteractiveRemovalWithLayers
+            from dc_cut.core.io.universal import parse_any_file, parse_combined_csv
+            from dc_cut.gui.controller.composed import InteractiveRemovalWithLayers
             from dc_cut.gui.main_window import show_shell
             from dc_cut.services.prefs import load_prefs
             import numpy as np
@@ -445,8 +445,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
     def _load_matlab(self, spec: dict) -> bool:
         try:
-            from dc_cut.io.matlab import load_matlab_data
-            from dc_cut.core.controller import InteractiveRemovalWithLayers
+            from dc_cut.core.io.matlab import load_matlab_data
+            from dc_cut.gui.controller.composed import InteractiveRemovalWithLayers
             from dc_cut.gui.main_window import show_shell
             from dc_cut.services.prefs import load_prefs
             import numpy as np
@@ -487,8 +487,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
     def _load_csv(self, spec: dict) -> bool:
         try:
-            from dc_cut.io.csv import load_combined_csv
-            from dc_cut.core.controller import InteractiveRemovalWithLayers
+            from dc_cut.core.io.csv_io import load_combined_csv
+            from dc_cut.gui.controller.composed import InteractiveRemovalWithLayers
             from dc_cut.gui.main_window import show_shell
             from dc_cut.services.prefs import load_prefs
             import numpy as np
@@ -584,8 +584,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
     def _load_state(self, spec: dict) -> bool:
         try:
-            from dc_cut.io.state import load_session
-            from dc_cut.core.controller import InteractiveRemovalWithLayers
+            from dc_cut.core.io.state import load_session
+            from dc_cut.gui.controller.composed import InteractiveRemovalWithLayers
             from dc_cut.gui.main_window import show_shell
             from dc_cut.services.prefs import load_prefs
             import numpy as np
@@ -738,9 +738,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
             from dc_cut.circular_array.config import WorkflowConfig, ArrayConfig, Stage
             from dc_cut.circular_array.io import load_multi_array_klimits
             from dc_cut.circular_array.orchestrator import CircularArrayOrchestrator
-            from dc_cut.io.max import parse_max_file
-            from dc_cut.io.state import load_session
-            from dc_cut.core.controller import InteractiveRemovalWithLayers
+            from dc_cut.core.io.max_parser import parse_max_file
+            from dc_cut.core.io.state import load_session
+            from dc_cut.gui.controller.composed import InteractiveRemovalWithLayers
             from dc_cut.gui.main_window import show_shell
             import numpy as np
         except Exception as e:
