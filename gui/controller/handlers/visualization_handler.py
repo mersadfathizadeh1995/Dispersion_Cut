@@ -13,9 +13,18 @@ import matplotlib.lines as mlines
 
 from dc_cut.visualization.plot_helpers import assemble_legend, set_line_xy
 from dc_cut.core.processing.averages import compute_avg_by_frequency, compute_avg_by_wavelength
-from dc_cut.core.limits import compute_padded_limits
+from dc_cut.core.processing.limits import compute_padded_limits as _compute_padded_limits
 from dc_cut.core.processing.guides import compute_k_guides
 from dc_cut.services.prefs import get_pref
+
+
+def _compute_limits_with_prefs(v, f, w, pad_frac=0.08):
+    return _compute_padded_limits(
+        v, f, w,
+        pad_frac=pad_frac,
+        robust_lower_pct=get_pref('robust_lower_pct', 0.5),
+        robust_upper_pct=get_pref('robust_upper_pct', 99.5),
+    )
 from dc_cut.services import log
 
 if TYPE_CHECKING:
@@ -313,7 +322,7 @@ class VisualizationHandler:
         w = np.asarray(visible_w)
 
         try:
-            L = compute_padded_limits(v, f, w)
+            L = _compute_limits_with_prefs(v, f, w)
             ymin, ymax = L['ymin'], L['ymax']
             fmin, fmax = L['fmin'], L['fmax']
             wmin, wmax = L['wmin'], L['wmax']
@@ -370,7 +379,7 @@ class VisualizationHandler:
     def _fallback_limits(
         self, v: np.ndarray, f: np.ndarray, w: np.ndarray
     ) -> Tuple[float, float, float, float, float, float]:
-        """Compute fallback limits when compute_padded_limits fails."""
+        """Compute fallback limits when _compute_limits_with_prefs fails."""
         v = v[np.isfinite(v)]
         f = f[np.isfinite(f)]
         w = w[np.isfinite(w)]
