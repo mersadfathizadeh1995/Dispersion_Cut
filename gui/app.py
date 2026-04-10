@@ -735,9 +735,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
         """Load circular array data and launch workflow."""
         try:
             from pathlib import Path
-            from dc_cut.extensions.circular_array.config import WorkflowConfig, ArrayConfig, Stage
-            from dc_cut.extensions.circular_array.io import load_multi_array_klimits
-            from dc_cut.extensions.circular_array.orchestrator import CircularArrayOrchestrator
+            from dc_cut.packages.circular_array.config import WorkflowConfig, ArrayConfig, Stage
+            from dc_cut.packages.circular_array.io import load_multi_array_klimits
+            from dc_cut.packages.circular_array.orchestrator import CircularArrayOrchestrator
             from dc_cut.core.io.max_parser import parse_max_file
             from dc_cut.core.io.state import load_session
             from dc_cut.gui.controller.composed import InteractiveRemovalWithLayers

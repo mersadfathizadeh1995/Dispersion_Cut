@@ -9,7 +9,7 @@ QtGui = qt_compat.QtGui
 QtCore = qt_compat.QtCore
 
 if TYPE_CHECKING:
-    from dc_cut.extensions.circular_array.orchestrator import CircularArrayOrchestrator
+    from dc_cut.packages.circular_array.orchestrator import CircularArrayOrchestrator
 
 
 class CircularArrayWorkflowDock(QtWidgets.QDockWidget):

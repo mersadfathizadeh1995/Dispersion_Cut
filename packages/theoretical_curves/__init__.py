@@ -11,20 +11,20 @@ Features:
 """
 from __future__ import annotations
 
-from dc_cut.extensions.theoretical_curves.config import (
+from dc_cut.packages.theoretical_curves.config import (
     TheoreticalCurve,
     TheoreticalCurveStyle,
     GenerationConfig,
 )
 
-from dc_cut.extensions.theoretical_curves.io import (
+from dc_cut.packages.theoretical_curves.io import (
     load_theoretical_csv,
     load_multiple_csv,
 )
 
-from dc_cut.extensions.theoretical_curves.renderer import TheoreticalCurveRenderer
-from dc_cut.extensions.theoretical_curves.dock import TheoreticalCurvesDock
-from dc_cut.extensions.theoretical_curves.generator import (
+from dc_cut.packages.theoretical_curves.renderer import TheoreticalCurveRenderer
+from dc_cut.packages.theoretical_curves.dock import TheoreticalCurvesDock
+from dc_cut.packages.theoretical_curves.generator import (
     TheoreticalCurveGenerator,
     validate_geopsy_installation,
 )

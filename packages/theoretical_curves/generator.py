@@ -6,8 +6,8 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Callable
 
-from dc_cut.extensions.theoretical_curves.config import GenerationConfig, TheoreticalCurve
-from dc_cut.extensions.theoretical_curves.io import load_theoretical_csv
+from dc_cut.packages.theoretical_curves.config import GenerationConfig, TheoreticalCurve
+from dc_cut.packages.theoretical_curves.io import load_theoretical_csv
 
 
 class TheoreticalCurveGenerator:

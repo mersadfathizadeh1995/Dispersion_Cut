@@ -6,7 +6,7 @@ from typing import List, Dict, Optional
 import numpy as np
 import pandas as pd
 
-from dc_cut.extensions.theoretical_curves.config import TheoreticalCurve, TheoreticalCurveStyle
+from dc_cut.packages.theoretical_curves.config import TheoreticalCurve, TheoreticalCurveStyle
 
 
 def load_theoretical_csv(

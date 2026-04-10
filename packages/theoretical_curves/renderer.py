@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 import numpy as np
 
 if TYPE_CHECKING:
-    from dc_cut.extensions.theoretical_curves.config import TheoreticalCurve
+    from dc_cut.packages.theoretical_curves.config import TheoreticalCurve
 
 
 class TheoreticalCurveRenderer:

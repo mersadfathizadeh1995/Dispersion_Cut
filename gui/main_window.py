@@ -45,7 +45,7 @@ from dc_cut.gui.views.spectrum_dock import SpectrumDock
 from dc_cut.gui.views.nf_eval_dock import NFEvalDock
 from dc_cut.gui.views.quick_actions import QuickActionsDock
 from dc_cut.gui.views.layer_tree_dock import LayerTreeDock
-from dc_cut.extensions.theoretical_curves import TheoreticalCurveRenderer, TheoreticalCurvesDock
+from dc_cut.packages.theoretical_curves import TheoreticalCurveRenderer, TheoreticalCurvesDock
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -186,7 +186,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         
         try:
-            from dc_cut.extensions.circular_array.workflow_dock import CircularArrayWorkflowDock
+            from dc_cut.packages.circular_array.workflow_dock import CircularArrayWorkflowDock
             
             if hasattr(self, 'workflow_dock') and self.workflow_dock is not None:
                 return
@@ -585,7 +585,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _open_export_wizard(self):
         """Open the Export Wizard - prompts user to select a file to load."""
         try:
-            from dc_cut.extensions.export_wizard import ExportWizardWindow
+            from dc_cut.packages.export_wizard import ExportWizardWindow
             
             # Get suggested file path (last saved file if available)
             suggested_file = None
