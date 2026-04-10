@@ -7,10 +7,10 @@ import numpy as np
 
 from dc_cut.circular_array.config import WorkflowConfig, Stage
 from dc_cut.circular_array.io import export_stage_to_mat, export_dinver_txt
-from dc_cut.io.state import save_session, load_session
+from dc_cut.core.io.state import save_session, load_session
 
 if TYPE_CHECKING:
-    from dc_cut.core.controller import InteractiveRemovalWithLayers
+    from dc_cut.gui.controller.composed import InteractiveRemovalWithLayers
 
 
 class CircularArrayOrchestrator:

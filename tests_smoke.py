@@ -28,7 +28,7 @@ def main():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     # Minimal dataset: two points
     import numpy as np
-    from dc_cut.core.controller import InteractiveRemovalWithLayers
+    from dc_cut.gui.controller.composed import InteractiveRemovalWithLayers
     v = [np.array([500.0, 1500.0])]
     f = [np.array([2.0, 20.0])]
     w = [v[0] / f[0]]
