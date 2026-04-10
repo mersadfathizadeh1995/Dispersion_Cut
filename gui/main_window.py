@@ -10,7 +10,7 @@ QtWidgets = qt_compat.QtWidgets
 QtGui     = qt_compat.QtGui
 QtCore    = qt_compat.QtCore
 
-from dc_cut.gui.properties import PropertiesDock
+from dc_cut.gui.views.properties import PropertiesDock
 # Optional file explorer is not essential; keep simple fallback
 class FileExplorerDock(QtWidgets.QDockWidget):
     def __init__(self, start_path: str | None = None, parent: Optional[QtWidgets.QWidget] = None) -> None:
@@ -40,11 +40,11 @@ class FileExplorerDock(QtWidgets.QDockWidget):
         else:
             lst = QtWidgets.QListWidget(self); [lst.addItem(name) for name in sorted(os.listdir(root))]
             self.setWidget(lst)
-from dc_cut.gui.layers_dock import LayersDock
-from dc_cut.gui.spectrum_dock import SpectrumDock
-from dc_cut.gui.nf_eval_dock import NFEvalDock
-from dc_cut.gui.quick_actions import QuickActionsDock
-from dc_cut.gui.layer_tree_dock import LayerTreeDock
+from dc_cut.gui.views.layers_dock import LayersDock
+from dc_cut.gui.views.spectrum_dock import SpectrumDock
+from dc_cut.gui.views.nf_eval_dock import NFEvalDock
+from dc_cut.gui.views.quick_actions import QuickActionsDock
+from dc_cut.gui.views.layer_tree_dock import LayerTreeDock
 from dc_cut.theoretical_curves import TheoreticalCurveRenderer, TheoreticalCurvesDock
 
 
@@ -485,7 +485,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _show_preferences(self):
         """Show the preferences dialog."""
         try:
-            from dc_cut.gui.preferences_dialog import PreferencesDialog
+            from dc_cut.gui.dialogs.preferences_dialog import PreferencesDialog
             dlg = PreferencesDialog(self)
             dlg.exec()
         except Exception as e:
@@ -494,7 +494,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _show_pub_figure_dialog(self):
         """Show the publication figure export dialog."""
         try:
-            from dc_cut.gui.pub_figures_dialog import PublicationFigureDialog
+            from dc_cut.gui.dialogs.pub_figures_dialog import PublicationFigureDialog
             dlg = PublicationFigureDialog(self.controller, self)
             dlg.exec()
         except Exception as e:
@@ -503,7 +503,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _add_point_to_layer(self):
         """Show dialog to add a point to a specific layer."""
         try:
-            from dc_cut.gui.add_point_dialog import AddPointDialog
+            from dc_cut.gui.dialogs.add_point_dialog import AddPointDialog
             import numpy as np
             
             ctrl = self.controller
@@ -606,7 +606,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _open_data_append(self):
         """Open data dialog to append data to the current session."""
         try:
-            from dc_cut.gui.open_data import OpenDataDialog
+            from dc_cut.gui.dialogs.open_data import OpenDataDialog
             dlg = OpenDataDialog(self)
             if dlg.exec() != 1 or not dlg.result:
                 return
