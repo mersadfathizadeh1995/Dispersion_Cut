@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
 import numpy as np
 
-from dc_cut.circular_array.config import WorkflowConfig, Stage
-from dc_cut.circular_array.io import export_stage_to_mat, export_dinver_txt
+from dc_cut.extensions.circular_array.config import WorkflowConfig, Stage
+from dc_cut.extensions.circular_array.io import export_stage_to_mat, export_dinver_txt
 from dc_cut.core.io.state import save_session, load_session
 
 if TYPE_CHECKING:

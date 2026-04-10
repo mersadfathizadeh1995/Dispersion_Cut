@@ -10,7 +10,7 @@ QtGui = qt_compat.QtGui
 QtCore = qt_compat.QtCore
 
 if TYPE_CHECKING:
-    from dc_cut.theoretical_curves.renderer import TheoreticalCurveRenderer
+    from dc_cut.extensions.theoretical_curves.renderer import TheoreticalCurveRenderer
 
 
 class TheoreticalCurvesDock(QtWidgets.QDockWidget):
@@ -253,7 +253,7 @@ class TheoreticalCurvesDock(QtWidgets.QDockWidget):
     
     def _add_curve_widget(self, curve) -> None:
         """Add a widget for a single curve."""
-        from dc_cut.theoretical_curves.config import TheoreticalCurve
+        from dc_cut.extensions.theoretical_curves.config import TheoreticalCurve
         
         container = QtWidgets.QGroupBox(curve.name)
         container.setCheckable(True)
@@ -443,7 +443,7 @@ class TheoreticalCurvesDock(QtWidgets.QDockWidget):
     
     def _load_csv_files(self, filepaths: List[str]) -> None:
         """Load curves from CSV files."""
-        from dc_cut.theoretical_curves.io import load_multiple_csv
+        from dc_cut.extensions.theoretical_curves.io import load_multiple_csv
         
         try:
             curves = load_multiple_csv(filepaths)
@@ -490,8 +490,8 @@ class TheoreticalCurvesDock(QtWidgets.QDockWidget):
     
     def _on_generate(self) -> None:
         """Generate theoretical curves from report."""
-        from dc_cut.theoretical_curves.config import GenerationConfig
-        from dc_cut.theoretical_curves.generator import TheoreticalCurveGenerator, validate_geopsy_installation
+        from dc_cut.extensions.theoretical_curves.config import GenerationConfig
+        from dc_cut.extensions.theoretical_curves.generator import TheoreticalCurveGenerator, validate_geopsy_installation
         
         if not self.edit_report.text():
             QtWidgets.QMessageBox.warning(self, "Missing Input", "Please select a report file.")

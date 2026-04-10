@@ -11,20 +11,20 @@ Workflow Stages:
 """
 from __future__ import annotations
 
-from dc_cut.circular_array.config import (
+from dc_cut.extensions.circular_array.config import (
     Stage,
     ArrayConfig,
     WorkflowConfig,
 )
 
-from dc_cut.circular_array.io import (
+from dc_cut.extensions.circular_array.io import (
     load_multi_array_klimits,
     export_stage_to_mat,
     export_dinver_txt,
 )
 
-from dc_cut.circular_array.orchestrator import CircularArrayOrchestrator
-from dc_cut.circular_array.workflow_dock import CircularArrayWorkflowDock
+from dc_cut.extensions.circular_array.orchestrator import CircularArrayOrchestrator
+from dc_cut.extensions.circular_array.workflow_dock import CircularArrayWorkflowDock
 
 __all__ = [
     "Stage",
