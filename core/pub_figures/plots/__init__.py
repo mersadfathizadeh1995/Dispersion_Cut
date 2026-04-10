@@ -1,15 +1,9 @@
-"""Plot generation mixins for publication figures."""
-
-from .basic_frequency import BasicFrequencyPlotsMixin
-from .basic_wavelength import BasicWavelengthPlotsMixin
-from .canvas_export import CanvasExportMixin
-from .offset_analysis import OffsetAnalysisMixin
-from .nearfield_analysis import NearFieldAnalysisMixin
-
-__all__ = [
-    'BasicFrequencyPlotsMixin',
-    'BasicWavelengthPlotsMixin',
-    'CanvasExportMixin',
-    'OffsetAnalysisMixin',
-    'NearFieldAnalysisMixin',
-]
+"""Backward-compatibility shim -- real package is dc_cut.visualization.pub_figures.plots."""
+from dc_cut.visualization.pub_figures.plots import *  # noqa: F401,F403
+from dc_cut.visualization.pub_figures.plots import (
+    BasicFrequencyPlotsMixin,
+    BasicWavelengthPlotsMixin,
+    CanvasExportMixin,
+    OffsetAnalysisMixin,
+    NearFieldAnalysisMixin,
+)

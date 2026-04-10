@@ -38,7 +38,7 @@ def generate_publication_figure(
         if progress_callback:
             progress_callback(10, f"Generating {figure_type} figure...")
 
-        from dc_cut.core.pub_figures import PublicationFigureGenerator, PlotConfig
+        from dc_cut.visualization.pub_figures import PublicationFigureGenerator, PlotConfig
 
         config = PlotConfig(**(plot_config or {}))
         gen = PublicationFigureGenerator(
