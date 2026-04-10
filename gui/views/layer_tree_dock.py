@@ -365,7 +365,7 @@ class LayerTreeDock(QtWidgets.QDockWidget):
     
     def _change_group_color(self, group_item):
         """Open color picker and apply chosen color to all layers in a group."""
-        from dc_cut.core.model import LayerStyle
+        from dc_cut.core.models import LayerStyle
         
         if not hasattr(self.controller, 'model') or not self.controller.model:
             return
@@ -448,7 +448,7 @@ class LayerTreeDock(QtWidgets.QDockWidget):
         
         # Import here to avoid circular imports
         from dc_cut.gui.dialogs.layer_settings_dialog import LayerSettingsDialog
-        from dc_cut.core.model import LayerStyle
+        from dc_cut.core.models import LayerStyle
         
         # Get current settings from layer style or from matplotlib lines
         current_settings = {}
@@ -482,7 +482,7 @@ class LayerTreeDock(QtWidgets.QDockWidget):
     
     def _apply_layer_settings(self, layer_idx: int, settings: dict):
         """Apply visual settings to a layer."""
-        from dc_cut.core.model import LayerStyle
+        from dc_cut.core.models import LayerStyle
         
         if not hasattr(self.controller, 'model') or not self.controller.model:
             return

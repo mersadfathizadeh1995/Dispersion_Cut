@@ -9,7 +9,7 @@ QtCore = qt_compat.QtCore
 QtGui = qt_compat.QtGui
 
 if TYPE_CHECKING:
-    from dc_cut.core.controller import InteractiveRemovalWithLayers
+    from dc_cut.gui.controller.composed import InteractiveRemovalWithLayers
 
 
 class LoadedSourcesDock(QtWidgets.QDockWidget):
