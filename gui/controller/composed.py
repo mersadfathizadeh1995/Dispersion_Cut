@@ -30,7 +30,7 @@ from dc_cut.gui.controller.handlers import (
     VisualizationHandler,
 )
 from dc_cut.core.models import LayersModel
-from dc_cut.core.nearfield import NearFieldInspector
+from dc_cut.gui.controller.nf_inspector import NearFieldInspector
 from dc_cut.gui.controller.line_tool import LineSelector
 from dc_cut.gui.controller.inclined_rect_tool import InclinedRectTool
 from dc_cut.services.actions import ActionRegistry
