@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from typing import Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..config import PlotConfig
+    from ...config import PlotConfig
 
 
 class BasicWavelengthPlotsMixin:

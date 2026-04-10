@@ -8,7 +8,7 @@ from matplotlib.figure import Figure
 from typing import Optional, List, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..config import PlotConfig
+    from ...config import PlotConfig
 
 
 class NearFieldAnalysisMixin:
@@ -39,7 +39,7 @@ class NearFieldAnalysisMixin:
         Returns:
             matplotlib Figure object
         """
-        from ..config import PlotConfig
+        from ...config import PlotConfig
         if config is None:
             config = PlotConfig()
 
@@ -205,7 +205,7 @@ class NearFieldAnalysisMixin:
         Returns:
             matplotlib Figure object
         """
-        from ..config import PlotConfig
+        from ...config import PlotConfig
         if config is None:
             config = PlotConfig()
 
@@ -407,7 +407,7 @@ class NearFieldAnalysisMixin:
         Returns:
             matplotlib Figure object
         """
-        from ..config import PlotConfig
+        from ...config import PlotConfig
         if config is None:
             config = PlotConfig()
 
@@ -591,7 +591,7 @@ class NearFieldAnalysisMixin:
         Returns:
             matplotlib Figure object
         """
-        from ..config import PlotConfig
+        from ...config import PlotConfig
         if config is None:
             config = PlotConfig()
 
@@ -692,7 +692,7 @@ class NearFieldAnalysisMixin:
         Returns:
             matplotlib Figure object
         """
-        from ..config import PlotConfig
+        from ...config import PlotConfig
         if config is None:
             config = PlotConfig()
 

@@ -11,7 +11,8 @@ QtWidgets = qt_compat.QtWidgets
 QtGui = qt_compat.QtGui
 QtCore = qt_compat.QtCore
 
-from dc_cut.visualization.pub_figures import PublicationFigureGenerator, PlotConfig
+from dc_cut.packages.report_generation import ReportGenerator, PlotConfig
+PublicationFigureGenerator = ReportGenerator
 from .qt_compat import (
     _get_qt_orientation_horizontal,
     _get_qt_align_top,

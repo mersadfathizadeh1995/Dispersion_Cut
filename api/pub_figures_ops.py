@@ -1,6 +1,6 @@
-"""Publication figure generation operations.
+"""Report generation operations.
 
-Wraps the pub_figures generator with validation and standardized returns.
+Wraps the ReportGenerator with validation and standardized returns.
 """
 from __future__ import annotations
 
@@ -38,14 +38,14 @@ def generate_publication_figure(
         if progress_callback:
             progress_callback(10, f"Generating {figure_type} figure...")
 
-        from dc_cut.visualization.pub_figures import PublicationFigureGenerator, PlotConfig
+        from dc_cut.packages.report_generation import ReportGenerator, PlotConfig
 
         config = PlotConfig(**(plot_config or {}))
-        gen = PublicationFigureGenerator(
+        gen = ReportGenerator.from_arrays(
             velocity_arrays=velocity_arrays,
             frequency_arrays=frequency_arrays,
             wavelength_arrays=wavelength_arrays,
-            labels=labels,
+            layer_labels=labels,
             array_positions=array_positions,
         )
 

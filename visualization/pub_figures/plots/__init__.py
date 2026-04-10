@@ -1,10 +1,11 @@
-"""Plot generation mixins for publication figures."""
-
-from .basic_frequency import BasicFrequencyPlotsMixin
-from .basic_wavelength import BasicWavelengthPlotsMixin
-from .canvas_export import CanvasExportMixin
-from .offset_analysis import OffsetAnalysisMixin
-from .nearfield_analysis import NearFieldAnalysisMixin
+"""Backward-compatibility shim -- canonical location is packages.report_generation.plots."""
+from dc_cut.packages.report_generation.plots import (
+    BasicFrequencyPlotsMixin,
+    BasicWavelengthPlotsMixin,
+    CanvasExportMixin,
+    OffsetAnalysisMixin,
+    NearFieldAnalysisMixin,
+)
 
 __all__ = [
     'BasicFrequencyPlotsMixin',

@@ -1,10 +1,9 @@
-"""Publication-quality figure generation for DC Cut.
-
-This is the canonical location. Backward-compat shims exist at
-dc_cut.core.pub_figures and dc_cut.pub_figures.
-"""
-from dc_cut.visualization.pub_figures.config import PlotConfig, COLORBLIND_PALETTE
-from dc_cut.visualization.pub_figures.generator import PublicationFigureGenerator
+"""Backward-compatibility shim -- canonical location is packages.report_generation."""
+from dc_cut.packages.report_generation import (
+    ReportGenerator as PublicationFigureGenerator,
+    ReportConfig as PlotConfig,
+    COLORBLIND_PALETTE,
+)
 
 __all__ = [
     'PlotConfig',

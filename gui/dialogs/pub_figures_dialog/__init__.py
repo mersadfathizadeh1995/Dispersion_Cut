@@ -1,5 +1,4 @@
-"""Publication figure dialog for GUI."""
+"""Backward-compatibility shim -- canonical location is packages.report_generation.dialog."""
+from dc_cut.packages.report_generation.dialog import PublicationFigureDialog, ReportDialog
 
-from .dialog import PublicationFigureDialog
-
-__all__ = ['PublicationFigureDialog']
+__all__ = ['PublicationFigureDialog', 'ReportDialog']

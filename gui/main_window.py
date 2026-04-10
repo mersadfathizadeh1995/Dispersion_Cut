@@ -335,8 +335,8 @@ class MainWindow(QtWidgets.QMainWindow):
         act_prefs.triggered.connect(self._show_preferences)
         m_file.addAction(act_prefs)
 
-        # Export Publication Figure
-        act_pub_fig = QtGui.QAction("Export Publication Figure...", self)
+        # Report Generation
+        act_pub_fig = QtGui.QAction("Report Generation...", self)
         act_pub_fig.triggered.connect(self._show_pub_figure_dialog)
         m_file.addAction(act_pub_fig)
 
@@ -492,10 +492,10 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open preferences:\n{e}")
 
     def _show_pub_figure_dialog(self):
-        """Show the publication figure export dialog."""
+        """Show the report generation dialog."""
         try:
-            from dc_cut.gui.dialogs.pub_figures_dialog import PublicationFigureDialog
-            dlg = PublicationFigureDialog(self.controller, self)
+            from dc_cut.packages.report_generation.dialog import ReportDialog
+            dlg = ReportDialog(self.controller, self)
             dlg.exec()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open publication figure dialog:\n{e}")

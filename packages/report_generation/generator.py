@@ -1,4 +1,4 @@
-"""Main PublicationFigureGenerator class."""
+"""ReportGenerator -- orchestrator for report-quality figure generation."""
 
 from __future__ import annotations
 
@@ -8,16 +8,14 @@ from pathlib import Path
 
 from .config import PlotConfig
 from . import utils
-from .plots import (
-    BasicFrequencyPlotsMixin,
-    BasicWavelengthPlotsMixin,
-    CanvasExportMixin,
-    OffsetAnalysisMixin,
-    NearFieldAnalysisMixin,
-)
+from .plots.frequency.basic import BasicFrequencyPlotsMixin
+from .plots.wavelength.basic import BasicWavelengthPlotsMixin
+from .plots.canvas.export import CanvasExportMixin
+from .plots.offset.analysis import OffsetAnalysisMixin
+from .plots.nearfield.analysis import NearFieldAnalysisMixin
 
 
-class PublicationFigureGenerator(
+class ReportGenerator(
     BasicFrequencyPlotsMixin,
     BasicWavelengthPlotsMixin,
     CanvasExportMixin,
@@ -70,7 +68,7 @@ class PublicationFigureGenerator(
         self._nacd_values = None
 
     @classmethod
-    def from_controller(cls, controller) -> 'PublicationFigureGenerator':
+    def from_controller(cls, controller) -> 'ReportGenerator':
         """Create generator from InteractiveRemovalWithLayers controller.
 
         Args:
@@ -146,7 +144,7 @@ class PublicationFigureGenerator(
         wavelength_arrays: List[np.ndarray],
         layer_labels: Optional[List[str]] = None,
         array_positions: Optional[np.ndarray] = None,
-    ) -> 'PublicationFigureGenerator':
+    ) -> 'ReportGenerator':
         """Create generator from raw data arrays.
 
         Args:
