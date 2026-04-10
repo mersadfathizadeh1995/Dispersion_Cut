@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import matplotlib
 
 if TYPE_CHECKING:
-    from dc_cut.core.base_controller import BaseInteractiveRemoval
+    from dc_cut.gui.controller.base import BaseInteractiveRemoval
 
 
 class DialogsHandler:

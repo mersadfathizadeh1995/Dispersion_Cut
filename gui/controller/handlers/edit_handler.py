@@ -10,16 +10,16 @@ from typing import TYPE_CHECKING, List, Tuple
 import numpy as np
 import matplotlib
 
-from dc_cut.core.selection import remove_in_freq_box, remove_in_wave_box
-from dc_cut.core.inclined_rect_tool import remove_in_polygon_freq, remove_in_polygon_wave
-from dc_cut.core.filters import apply_filters
+from dc_cut.core.processing.selection import remove_in_freq_box, remove_in_wave_box
+from dc_cut.gui.controller.inclined_rect_tool import remove_in_polygon_freq, remove_in_polygon_wave
+from dc_cut.core.processing.filters import apply_filters
 from dc_cut.core.history import push_undo, perform_undo, perform_redo
-from dc_cut.core.plot import set_line_xy
-from dc_cut.core.model import LayersModel
+from dc_cut.visualization.plot_helpers import set_line_xy
+from dc_cut.core.models import LayersModel
 from dc_cut.services import log
 
 if TYPE_CHECKING:
-    from dc_cut.core.base_controller import BaseInteractiveRemoval
+    from dc_cut.gui.controller.base import BaseInteractiveRemoval
 
 
 class EditHandler:

@@ -10,15 +10,15 @@ from typing import TYPE_CHECKING, Optional, Tuple
 import numpy as np
 import matplotlib
 
-from dc_cut.core.add_mode import start_add_to_offset, start_add_new_layer
-from dc_cut.core.plot import set_line_xy
-from dc_cut.core.model import LayersModel
-from dc_cut.io.state import load_session
-from dc_cut.io.csv import load_combined_csv
+from dc_cut.gui.controller.add_mode import start_add_to_offset, start_add_new_layer
+from dc_cut.visualization.plot_helpers import set_line_xy
+from dc_cut.core.models import LayersModel
+from dc_cut.core.io.state import load_session
+from dc_cut.core.io.csv_io import load_combined_csv
 from dc_cut.services import log
 
 if TYPE_CHECKING:
-    from dc_cut.core.base_controller import BaseInteractiveRemoval
+    from dc_cut.gui.controller.base import BaseInteractiveRemoval
 
 
 class AddHandler:

@@ -11,15 +11,15 @@ from typing import TYPE_CHECKING, List, Optional, Tuple
 import numpy as np
 import matplotlib.lines as mlines
 
-from dc_cut.core.plot import assemble_legend, set_line_xy
-from dc_cut.core.averages import compute_avg_by_frequency, compute_avg_by_wavelength
+from dc_cut.visualization.plot_helpers import assemble_legend, set_line_xy
+from dc_cut.core.processing.averages import compute_avg_by_frequency, compute_avg_by_wavelength
 from dc_cut.core.limits import compute_padded_limits
-from dc_cut.core.guides import compute_k_guides
+from dc_cut.core.processing.guides import compute_k_guides
 from dc_cut.services.prefs import get_pref
 from dc_cut.services import log
 
 if TYPE_CHECKING:
-    from dc_cut.core.base_controller import BaseInteractiveRemoval
+    from dc_cut.gui.controller.base import BaseInteractiveRemoval
 
 
 class VisualizationHandler:

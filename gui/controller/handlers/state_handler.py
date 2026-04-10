@@ -8,12 +8,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from dc_cut.core.model import LayersModel
-from dc_cut.core.plot import set_line_xy
+from dc_cut.core.models import LayersModel
+from dc_cut.visualization.plot_helpers import set_line_xy
 from dc_cut.services import log
 
 if TYPE_CHECKING:
-    from dc_cut.core.base_controller import BaseInteractiveRemoval
+    from dc_cut.gui.controller.base import BaseInteractiveRemoval
 
 
 class StateHandler:

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Dict, Optional
 import numpy as np
 import matplotlib.cm as cm
 
-from dc_cut.core.spectrum_loader import (
+from dc_cut.core.io.spectrum import (
     load_spectrum_npz,
     load_combined_spectrum_npz,
     match_csv_labels_to_spectrum,
@@ -22,7 +22,7 @@ from dc_cut.services.prefs import get_pref, set_pref
 from dc_cut.services import log
 
 if TYPE_CHECKING:
-    from dc_cut.core.base_controller import BaseInteractiveRemoval
+    from dc_cut.gui.controller.base import BaseInteractiveRemoval
 
 
 class SpectrumHandler:

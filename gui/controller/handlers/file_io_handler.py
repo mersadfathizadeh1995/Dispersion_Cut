@@ -11,13 +11,13 @@ from typing import TYPE_CHECKING, Dict, Optional
 import numpy as np
 import matplotlib
 
-from dc_cut.core.averages import compute_avg_by_frequency
-from dc_cut.io.state import save_session, load_session
-from dc_cut.io.export import write_geopsy_txt, write_passive_stats_csv
+from dc_cut.core.processing.averages import compute_avg_by_frequency
+from dc_cut.core.io.state import save_session, load_session
+from dc_cut.core.io.export import write_geopsy_txt, write_passive_stats_csv
 from dc_cut.services import log
 
 if TYPE_CHECKING:
-    from dc_cut.core.base_controller import BaseInteractiveRemoval
+    from dc_cut.gui.controller.base import BaseInteractiveRemoval
 
 
 class FileIOHandler:

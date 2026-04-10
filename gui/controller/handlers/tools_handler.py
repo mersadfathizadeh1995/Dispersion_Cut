@@ -9,14 +9,14 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from dc_cut.core.selection import remove_on_side_of_line, line_mask
-from dc_cut.core.plot import set_line_xy
+from dc_cut.core.processing.selection import remove_on_side_of_line, line_mask
+from dc_cut.visualization.plot_helpers import set_line_xy
 from dc_cut.core.history import push_undo
-from dc_cut.core.model import LayersModel
+from dc_cut.core.models import LayersModel
 from dc_cut.services import log
 
 if TYPE_CHECKING:
-    from dc_cut.core.base_controller import BaseInteractiveRemoval
+    from dc_cut.gui.controller.base import BaseInteractiveRemoval
 
 
 class ToolsHandler:
