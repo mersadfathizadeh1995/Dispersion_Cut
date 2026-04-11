@@ -25,6 +25,7 @@ from .models import (
     SpectrumConfig,
     CurveOverlayConfig,
     NearFieldConfig,
+    StudioLayerState,
 )
 
 CONFIG_VERSION = 1
@@ -42,6 +43,7 @@ _DATACLASS_MAP = {
     "SpectrumConfig": SpectrumConfig,
     "CurveOverlayConfig": CurveOverlayConfig,
     "NearFieldConfig": NearFieldConfig,
+    "StudioLayerState": StudioLayerState,
     "ReportStudioSettings": ReportStudioSettings,
 }
 
@@ -102,6 +104,14 @@ def _from_dict(cls, d: dict):
             kwargs[f.name] = tuple(val)
         elif _is_optional_tuple(ftype):
             kwargs[f.name] = tuple(val) if isinstance(val, list) else val
+        elif _is_list_of_dataclass(ftype) and isinstance(val, list):
+            dc_cls = _get_list_item_class(ftype)
+            kwargs[f.name] = [
+                _from_dict(dc_cls, v) if isinstance(v, dict) else v
+                for v in val
+            ]
+        elif get_origin(ftype) is list and isinstance(val, list):
+            kwargs[f.name] = val
         elif _is_optional_list(ftype):
             kwargs[f.name] = val
         else:
@@ -116,6 +126,43 @@ def _is_optional_tuple(ftype) -> bool:
             if get_origin(a) is tuple:
                 return True
     return False
+
+
+def _is_list_of_dataclass(ftype) -> bool:
+    """Check if ftype is List[SomeDataclass]."""
+    origin = get_origin(ftype)
+    if origin is list:
+        args = get_args(ftype)
+        if args:
+            name = getattr(args[0], "__name__", "")
+            return name in _DATACLASS_MAP
+    # Also check Optional[List[SomeDataclass]]
+    if origin is not None:
+        for a in get_args(ftype):
+            if get_origin(a) is list:
+                inner_args = get_args(a)
+                if inner_args:
+                    name = getattr(inner_args[0], "__name__", "")
+                    return name in _DATACLASS_MAP
+    return False
+
+
+def _get_list_item_class(ftype):
+    """Extract the dataclass type from List[SomeDataclass] or Optional[List[SomeDataclass]]."""
+    origin = get_origin(ftype)
+    if origin is list:
+        args = get_args(ftype)
+        if args:
+            name = getattr(args[0], "__name__", "")
+            return _DATACLASS_MAP.get(name)
+    if origin is not None:
+        for a in get_args(ftype):
+            if get_origin(a) is list:
+                inner_args = get_args(a)
+                if inner_args:
+                    name = getattr(inner_args[0], "__name__", "")
+                    return _DATACLASS_MAP.get(name)
+    return None
 
 
 def _is_optional_list(ftype) -> bool:

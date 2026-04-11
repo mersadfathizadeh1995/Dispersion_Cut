@@ -19,21 +19,23 @@ from ...models import ReportStudioSettings
 class NearFieldSettings(BasePlotSettingsWidget):
     """Settings for nacd_curve, nacd_grid, nacd_combined, nacd_comparison, nacd_summary."""
 
-    def __init__(self, n_offsets: int = 0, parent=None):
+    def __init__(self, offset_labels: list | None = None, parent=None):
         super().__init__(parent)
-        self._n_offsets = n_offsets
+        labels = offset_labels or []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        # -- Offset selection --
+        # -- Offset selection (by name) --
         offset_group = QGroupBox("Offset Selection")
         offset_form = QFormLayout(offset_group)
 
-        self._offset_index = QSpinBox()
-        self._offset_index.setRange(0, max(0, n_offsets - 1))
-        self._offset_index.setValue(0)
-        self._offset_index.valueChanged.connect(self.changed)
-        offset_form.addRow("Offset index:", self._offset_index)
+        self._offset_combo = QComboBox()
+        for i, label in enumerate(labels):
+            self._offset_combo.addItem(label, i)
+        if not labels:
+            self._offset_combo.addItem("No offsets loaded", 0)
+        self._offset_combo.currentIndexChanged.connect(lambda: self.changed.emit())
+        offset_form.addRow("Offset:", self._offset_combo)
 
         layout.addWidget(offset_group)
 
@@ -84,7 +86,8 @@ class NearFieldSettings(BasePlotSettingsWidget):
 
     @property
     def offset_index(self) -> int:
-        return self._offset_index.value()
+        data = self._offset_combo.currentData()
+        return data if data is not None else 0
 
     @property
     def grid_rows(self) -> int | None:

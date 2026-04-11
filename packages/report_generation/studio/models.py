@@ -16,6 +16,7 @@ class FigureConfig:
     width: float = 8.0
     height: float = 6.0
     dpi: int = 300
+    preview_dpi: int = 100
     margin_left: float = 0.8
     margin_right: float = 0.3
     margin_top: float = 0.4
@@ -144,6 +145,22 @@ class NearFieldConfig:
 
 
 @dataclass
+class StudioLayerState:
+    """Per-layer style overrides and point mask for the Report Studio."""
+    index: int = 0
+    label: str = ""
+    visible: bool = True
+    point_mask: Optional[List[bool]] = None
+    color: Optional[str] = None
+    line_width: Optional[float] = None
+    line_style: str = "solid"
+    marker_size: Optional[float] = None
+    marker_style: Optional[str] = None
+    alpha: float = 1.0
+    legend_label: Optional[str] = None
+
+
+@dataclass
 class ReportStudioSettings:
     """Aggregate settings object for the Report Studio.
 
@@ -161,12 +178,15 @@ class ReportStudioSettings:
     near_field: NearFieldConfig = field(default_factory=NearFieldConfig)
 
     active_plot_type: str = ""
+    committed: bool = False
     color_palette: str = "vibrant"
     line_width: float = 1.5
     marker_size: float = 4.0
     marker_style: str = "o"
     uncertainty_alpha: float = 0.3
     max_offsets: int = 10
+    grid_offset_indices: Optional[List[int]] = None
+    layer_states: List[StudioLayerState] = field(default_factory=list)
 
     axis_overrides: Dict[str, AxisConfig] = field(default_factory=dict)
     legend_overrides: Dict[str, LegendConfig] = field(default_factory=dict)

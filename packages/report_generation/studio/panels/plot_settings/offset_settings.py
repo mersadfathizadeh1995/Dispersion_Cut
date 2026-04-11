@@ -9,7 +9,6 @@ QGroupBox = QtWidgets.QGroupBox
 QSpinBox = QtWidgets.QSpinBox
 QComboBox = QtWidgets.QComboBox
 QCheckBox = QtWidgets.QCheckBox
-QDoubleSpinBox = QtWidgets.QDoubleSpinBox
 
 from .base import BasePlotSettingsWidget
 from ...models import ReportStudioSettings
@@ -18,54 +17,33 @@ from ...models import ReportStudioSettings
 class OffsetSettings(BasePlotSettingsWidget):
     """Settings for offset_curve_only, offset_with_spectrum, offset_spectrum_only, offset_grid."""
 
-    def __init__(self, n_offsets: int = 0, parent=None):
+    def __init__(self, offset_labels: list | None = None, parent=None):
         super().__init__(parent)
-        self._n_offsets = n_offsets
+        labels = offset_labels or []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        # -- Offset selection --
+        # -- Offset selection (by name) --
         offset_group = QGroupBox("Offset Selection")
         offset_form = QFormLayout(offset_group)
 
-        self._offset_index = QSpinBox()
-        self._offset_index.setRange(0, max(0, n_offsets - 1))
-        self._offset_index.setValue(0)
-        self._offset_index.valueChanged.connect(self.changed)
-        offset_form.addRow("Offset index:", self._offset_index)
+        self._offset_combo = QComboBox()
+        for i, label in enumerate(labels):
+            self._offset_combo.addItem(label, i)
+        if not labels:
+            self._offset_combo.addItem("No offsets loaded", 0)
+        self._offset_combo.currentIndexChanged.connect(lambda: self.changed.emit())
+        offset_form.addRow("Offset:", self._offset_combo)
 
         layout.addWidget(offset_group)
 
-        # -- Spectrum options --
-        spec_group = QGroupBox("Spectrum Display")
+        # -- Spectrum toggle (whether to include spectrum in this plot) --
+        spec_group = QGroupBox("Spectrum in Plot")
         spec_form = QFormLayout(spec_group)
 
-        self._include_spectrum = QCheckBox("Include spectrum")
+        self._include_spectrum = QCheckBox("Include spectrum background")
         self._include_spectrum.toggled.connect(self.changed)
         spec_form.addRow(self._include_spectrum)
-
-        self._render_mode = QComboBox()
-        self._render_mode.addItems(["imshow", "contour"])
-        self._render_mode.setCurrentText("imshow")
-        self._render_mode.currentTextChanged.connect(lambda: self.changed.emit())
-        spec_form.addRow("Render mode:", self._render_mode)
-
-        self._colormap = QComboBox()
-        self._colormap.addItems([
-            "viridis", "plasma", "inferno", "magma", "cividis",
-            "jet", "hot", "coolwarm", "RdYlBu",
-        ])
-        self._colormap.setCurrentText("viridis")
-        self._colormap.currentTextChanged.connect(lambda: self.changed.emit())
-        spec_form.addRow("Colormap:", self._colormap)
-
-        self._spectrum_alpha = QDoubleSpinBox()
-        self._spectrum_alpha.setRange(0.0, 1.0)
-        self._spectrum_alpha.setSingleStep(0.05)
-        self._spectrum_alpha.setDecimals(2)
-        self._spectrum_alpha.setValue(0.8)
-        self._spectrum_alpha.valueChanged.connect(self.changed)
-        spec_form.addRow("Alpha:", self._spectrum_alpha)
 
         layout.addWidget(spec_group)
 
@@ -107,7 +85,8 @@ class OffsetSettings(BasePlotSettingsWidget):
 
     @property
     def offset_index(self) -> int:
-        return self._offset_index.value()
+        data = self._offset_combo.currentData()
+        return data if data is not None else 0
 
     @property
     def grid_rows(self) -> int | None:
@@ -120,21 +99,13 @@ class OffsetSettings(BasePlotSettingsWidget):
         return v if v > 0 else None
 
     def write_to(self, settings: ReportStudioSettings) -> None:
-        settings.spectrum.render_mode = self._render_mode.currentText()
-        settings.spectrum.colormap = self._colormap.currentText()
-        settings.spectrum.alpha = self._spectrum_alpha.value()
         settings.curve_overlay.style = self._overlay_style.currentText()
         settings.curve_overlay.outline = self._peak_outline.isChecked()
 
     def read_from(self, settings: ReportStudioSettings) -> None:
-        for w in (self._render_mode, self._colormap, self._spectrum_alpha,
-                  self._overlay_style, self._peak_outline):
+        for w in (self._overlay_style, self._peak_outline):
             w.blockSignals(True)
-        self._render_mode.setCurrentText(settings.spectrum.render_mode)
-        self._colormap.setCurrentText(settings.spectrum.colormap)
-        self._spectrum_alpha.setValue(settings.spectrum.alpha)
         self._overlay_style.setCurrentText(settings.curve_overlay.style)
         self._peak_outline.setChecked(settings.curve_overlay.outline)
-        for w in (self._render_mode, self._colormap, self._spectrum_alpha,
-                  self._overlay_style, self._peak_outline):
+        for w in (self._overlay_style, self._peak_outline):
             w.blockSignals(False)

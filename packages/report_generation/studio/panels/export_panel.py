@@ -138,6 +138,11 @@ class ExportPanel(QWidget):
     def output_directory(self) -> str:
         return self._dir_edit.text().strip()
 
+    def set_output_directory(self, path: str) -> None:
+        """Programmatically set the output directory (e.g. from project dir)."""
+        if path and not self._dir_edit.text().strip():
+            self._dir_edit.setText(os.path.join(path, "exports"))
+
     def _browse_directory(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "Select Output Directory",
                                              self._dir_edit.text())

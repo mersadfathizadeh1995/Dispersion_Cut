@@ -105,3 +105,15 @@ try:
     QKeySequence = QtGui.QKeySequence
 except AttributeError:
     QKeySequence = QtCore.QKeySequence
+
+# QMessageBox standard buttons (flat in Qt5, scoped in Qt6)
+_QMB = QtWidgets.QMessageBox
+try:
+    MsgBoxYes = _QMB.Yes
+except AttributeError:
+    MsgBoxYes = _QMB.StandardButton.Yes
+
+try:
+    MsgBoxNo = _QMB.No
+except AttributeError:
+    MsgBoxNo = _QMB.StandardButton.No

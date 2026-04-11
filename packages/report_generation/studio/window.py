@@ -15,6 +15,7 @@ from .qt_compat import (
     QtWidgets, QtCore,
     Horizontal, ScrollBarAlwaysOff, WA_DeleteOnClose,
     QAction, QKeySequence,
+    MsgBoxYes, MsgBoxNo,
 )
 
 QMainWindow = QtWidgets.QMainWindow
@@ -24,6 +25,7 @@ QHBoxLayout = QtWidgets.QHBoxLayout
 QTabWidget = QtWidgets.QTabWidget
 QStatusBar = QtWidgets.QStatusBar
 QSplitter = QtWidgets.QSplitter
+QStackedWidget = QtWidgets.QStackedWidget
 QApplication = QtWidgets.QApplication
 QScrollArea = QtWidgets.QScrollArea
 QLabel = QtWidgets.QLabel
@@ -35,30 +37,34 @@ QTimer = QtCore.QTimer
 from ..generator import ReportGenerator
 from ..utils import ensure_parent_dir_for_file
 from .models import (
-    ReportStudioSettings, apply_preset,
+    ReportStudioSettings, StudioLayerState, apply_preset,
     PRESET_LABELS,
 )
 from .canvas_view import CanvasView
 from .renderer import StudioRenderer
 from .panels.plot_selector import PlotSelector
+from .panels.layer_editor import LayerEditor
 from .panels.figure_panel import FigurePanel
 from .panels.typography_panel import TypographyPanel
 from .panels.axis_panel import AxisPanel
 from .panels.legend_panel import LegendPanel
 from .panels.layers_panel import LayersPanel
 from .panels.export_panel import ExportPanel
+from .panels.spectrum_theme_panel import SpectrumThemePanel
 from .panels.plot_settings.frequency_settings import FrequencySettings
 from .panels.plot_settings.wavelength_settings import WavelengthSettings
 from .panels.plot_settings.nearfield_settings import NearFieldSettings
 from .panels.plot_settings.offset_settings import OffsetSettings
 from .panels.plot_settings.canvas_settings import CanvasSettings
+from .panels.plot_settings.offset_grid_settings import OffsetGridSettings
 from .sheet_tabs import SheetTabs
 from .config_persistence import (
     save_render_config, load_render_config, list_render_configs,
     settings_to_dict,
 )
 from .sheet_persistence import (
-    save_sheet, load_sheet, list_saved_sheets,
+    save_sheet, load_sheet, load_sheet_with_fingerprint,
+    check_data_match, list_saved_sheets,
 )
 
 _FREQUENCY_KEYS = {"aggregated", "per_offset", "uncertainty"}
@@ -96,6 +102,7 @@ class ReportStudioWindow(QMainWindow):
         self._init_panels()
 
         QTimer.singleShot(200, self._do_render)
+        QTimer.singleShot(400, self._prompt_project_dir)
 
     # ── UI construction ───────────────────────────────────────────
 
@@ -117,17 +124,39 @@ class ReportStudioWindow(QMainWindow):
 
         splitter = QSplitter(Horizontal)
 
-        # Left: plot selector
+        # Left: stacked widget (page 0 = plot selector, page 1 = layer editor)
+        self._left_stack = QStackedWidget()
+        self._left_stack.setMinimumWidth(200)
+        self._left_stack.setMaximumWidth(360)
+
+        # Page 0: plot selector + commit button
+        selector_page = QWidget()
+        selector_layout = QVBoxLayout(selector_page)
+        selector_layout.setContentsMargins(0, 0, 0, 0)
+        selector_layout.setSpacing(2)
         self._plot_selector = PlotSelector()
-        self._plot_selector.setMinimumWidth(200)
-        self._plot_selector.setMaximumWidth(320)
         self._plot_selector.plot_type_changed.connect(self._on_plot_type_changed)
-        splitter.addWidget(self._plot_selector)
+        selector_layout.addWidget(self._plot_selector, stretch=1)
+        self._commit_btn = QtWidgets.QPushButton("Commit to Sheet")
+        self._commit_btn.setToolTip("Lock this plot type and switch to layer editing")
+        self._commit_btn.clicked.connect(self._on_commit_to_sheet)
+        selector_layout.addWidget(self._commit_btn)
+        self._left_stack.addWidget(selector_page)
+
+        # Page 1: layer editor
+        self._layer_editor = LayerEditor()
+        self._layer_editor.layer_config_changed.connect(self._on_layer_config_changed)
+        self._layer_editor.back_requested.connect(self._on_back_to_selector)
+        self._left_stack.addWidget(self._layer_editor)
+
+        self._left_stack.setCurrentIndex(0)
+        splitter.addWidget(self._left_stack)
 
         # Center: canvas
         w = self._settings.figure.width
         h = self._settings.figure.height
         self._canvas_view = CanvasView(w, h)
+        self._canvas_view.preview_dpi_changed.connect(self._on_preview_dpi_changed)
         splitter.addWidget(self._canvas_view)
 
         # Right: settings tabs
@@ -139,6 +168,7 @@ class ReportStudioWindow(QMainWindow):
         self._typography_panel = TypographyPanel()
         self._axis_panel = AxisPanel()
         self._legend_panel = LegendPanel()
+        self._spectrum_panel = SpectrumThemePanel()
         self._layers_panel = LayersPanel()
         self._export_panel = ExportPanel()
 
@@ -147,6 +177,7 @@ class ReportStudioWindow(QMainWindow):
             (self._typography_panel, "Typography"),
             (self._axis_panel, "Axis"),
             (self._legend_panel, "Legend"),
+            (self._spectrum_panel, "Spectrum"),
             (self._layers_panel, "Layers"),
             (self._export_panel, "Export"),
         ]:
@@ -175,6 +206,7 @@ class ReportStudioWindow(QMainWindow):
         self._typography_panel.preset_requested.connect(self._apply_preset)
         self._axis_panel.changed.connect(self._schedule_render)
         self._legend_panel.changed.connect(self._schedule_render)
+        self._spectrum_panel.changed.connect(self._schedule_render)
         self._layers_panel.visibility_changed.connect(self._on_layers_changed)
         self._export_panel.export_requested.connect(self._do_export)
         self._export_panel.batch_requested.connect(self._do_batch_export)
@@ -210,7 +242,7 @@ class ReportStudioWindow(QMainWindow):
         export_act = QAction("Export...", self)
         export_act.setShortcut(QKeySequence("Ctrl+E"))
         export_act.triggered.connect(
-            lambda: self._tabs.setCurrentIndex(5)  # Export tab
+            lambda: self._tabs.setCurrentIndex(6)  # Export tab
         )
         file_menu.addAction(export_act)
 
@@ -247,20 +279,26 @@ class ReportStudioWindow(QMainWindow):
 
     def _register_plot_settings(self) -> None:
         """Create and register per-plot-type settings widgets."""
-        n = len(self._generator.velocity_arrays)
+        labels = list(self._generator.layer_labels)
+        spec_flags = [sd is not None for sd in self._generator.spectrum_data_list]
 
         self._freq_settings = FrequencySettings()
         self._wave_settings = WavelengthSettings()
-        self._nf_settings = NearFieldSettings(n_offsets=n)
-        self._offset_settings = OffsetSettings(n_offsets=n)
+        self._nf_settings = NearFieldSettings(offset_labels=labels)
+        self._offset_settings = OffsetSettings(offset_labels=labels)
         self._canvas_settings = CanvasSettings()
+        self._grid_settings = OffsetGridSettings(
+            offset_labels=labels, spectrum_flags=spec_flags,
+        )
 
+        _single_offset_keys = {"offset_curve_only", "offset_with_spectrum", "offset_spectrum_only"}
         all_widgets = [
             (self._freq_settings, _FREQUENCY_KEYS),
             (self._wave_settings, _WAVELENGTH_KEYS),
-            (self._nf_settings, _NEARFIELD_KEYS),
-            (self._offset_settings, _OFFSET_KEYS),
+            (self._nf_settings, _NEARFIELD_KEYS - {"nacd_grid"}),
+            (self._offset_settings, _single_offset_keys),
             (self._canvas_settings, _CANVAS_KEYS),
+            (self._grid_settings, {"offset_grid", "nacd_grid"}),
         ]
         for widget, keys in all_widgets:
             widget.changed.connect(self._schedule_render)
@@ -269,10 +307,12 @@ class ReportStudioWindow(QMainWindow):
 
     def _init_panels(self) -> None:
         """Initialize panels from current settings and data."""
+        self._canvas_view.set_preview_dpi(self._settings.figure.preview_dpi)
         self._figure_panel.read_from(self._settings.figure)
         self._typography_panel.read_from(self._settings.typography)
         self._axis_panel.read_from(self._settings.axis)
         self._legend_panel.read_from(self._settings.legend)
+        self._spectrum_panel.read_from(self._settings.spectrum)
         self._export_panel.read_from_configs(
             self._settings.export, self._settings.output,
         )
@@ -297,6 +337,7 @@ class ReportStudioWindow(QMainWindow):
             fig = self._canvas_view.figure
             w = self._settings.figure.width
             h = self._settings.figure.height
+            self._canvas_view.set_preview_dpi(self._settings.figure.preview_dpi)
             self._canvas_view.update_size(w, h)
 
             extra_kw = self._build_extra_kwargs()
@@ -319,6 +360,7 @@ class ReportStudioWindow(QMainWindow):
         self._typography_panel.write_to(self._settings.typography)
         self._axis_panel.write_to(self._settings.axis)
         self._legend_panel.write_to(self._settings.legend)
+        self._spectrum_panel.write_to(self._settings.spectrum)
         self._export_panel.write_to_configs(
             self._settings.export, self._settings.output,
         )
@@ -328,6 +370,8 @@ class ReportStudioWindow(QMainWindow):
             self._freq_settings.write_to(self._settings)
         elif key in _WAVELENGTH_KEYS:
             self._wave_settings.write_to(self._settings)
+        elif key in {"offset_grid", "nacd_grid"}:
+            self._grid_settings.write_to(self._settings)
         elif key in _NEARFIELD_KEYS:
             self._nf_settings.write_to(self._settings)
         elif key in _OFFSET_KEYS:
@@ -339,14 +383,14 @@ class ReportStudioWindow(QMainWindow):
         key = self._settings.active_plot_type
         kw: dict = {"max_offsets": self._settings.max_offsets}
 
-        if key in _NEARFIELD_KEYS:
+        if key in {"offset_grid", "nacd_grid"}:
+            kw["rows"] = self._grid_settings.grid_rows
+            kw["cols"] = self._grid_settings.grid_cols
+            kw["include_spectrum"] = self._grid_settings.include_spectrum
+            kw["include_curves"] = self._grid_settings.include_curves
+        elif key in _NEARFIELD_KEYS:
             kw["rows"] = self._nf_settings.grid_rows
             kw["cols"] = self._nf_settings.grid_cols
-        elif key == "offset_grid":
-            kw["rows"] = self._offset_settings.grid_rows
-            kw["cols"] = self._offset_settings.grid_cols
-            kw["include_spectrum"] = self._offset_settings._include_spectrum.isChecked()
-            kw["include_curves"] = True
         return kw
 
     def _get_current_offset_index(self) -> int:
@@ -359,8 +403,61 @@ class ReportStudioWindow(QMainWindow):
 
     # ── Slots ─────────────────────────────────────────────────────
 
+    def _on_preview_dpi_changed(self, dpi: int) -> None:
+        self._settings.figure.preview_dpi = dpi
+        self._schedule_render()
+
     def _on_plot_type_changed(self, key: str) -> None:
         self._settings.active_plot_type = key
+        self._schedule_render()
+
+    def _on_commit_to_sheet(self) -> None:
+        """Lock the current plot type and switch to layer editor."""
+        plot_type = self._settings.active_plot_type
+        if not plot_type:
+            QMessageBox.information(self, "Commit", "Select a plot type first.")
+            return
+        self._settings.committed = True
+        self._build_layer_states()
+        self._layer_editor.set_plot_type(plot_type)
+        self._layer_editor.populate(
+            self._settings.layer_states,
+            list(self._generator.frequency_arrays),
+            list(self._generator.velocity_arrays),
+        )
+        self._left_stack.setCurrentIndex(1)
+        self._status.showMessage(f"Committed: {plot_type}", 3000)
+
+    def _on_back_to_selector(self) -> None:
+        """Return to the plot selector from the layer editor."""
+        self._settings.committed = False
+        self._left_stack.setCurrentIndex(0)
+
+    def _build_layer_states(self) -> None:
+        """Initialize layer_states from generator data if not already set."""
+        existing = {ls.index for ls in self._settings.layer_states}
+        n = len(self._generator.velocity_arrays)
+        for i in range(n):
+            if i not in existing:
+                self._settings.layer_states.append(StudioLayerState(
+                    index=i,
+                    label=self._generator.layer_labels[i]
+                        if i < len(self._generator.layer_labels) else f"Layer {i}",
+                    visible=self._generator.active_flags[i]
+                        if i < len(self._generator.active_flags) else True,
+                ))
+
+    def _on_layer_config_changed(self) -> None:
+        """Respond to layer property or point mask changes from the editor."""
+        states = self._layer_editor.get_layer_states()
+        self._settings.layer_states = states
+        for ls in states:
+            if ls.index < len(self._generator.active_flags):
+                self._generator.active_flags[ls.index] = ls.visible
+        self._generator._binned_avg = None
+        self._generator._binned_std = None
+        self._generator._bin_centers = None
+        self._generator._nacd_values = None
         self._schedule_render()
 
     def _on_layers_changed(self) -> None:
@@ -403,6 +500,16 @@ class ReportStudioWindow(QMainWindow):
         self._init_panels()
         if self._settings.active_plot_type:
             self._plot_selector.select_plot_type(self._settings.active_plot_type)
+        if self._settings.committed and self._settings.layer_states:
+            self._layer_editor.set_plot_type(self._settings.active_plot_type)
+            self._layer_editor.populate(
+                self._settings.layer_states,
+                list(self._generator.frequency_arrays),
+                list(self._generator.velocity_arrays),
+            )
+            self._left_stack.setCurrentIndex(1)
+        else:
+            self._left_stack.setCurrentIndex(0)
         self._schedule_render()
 
     def _on_new_sheet(self) -> None:
@@ -500,6 +607,96 @@ class ReportStudioWindow(QMainWindow):
         self._status.showMessage(
             f"Batch export: {', '.join(exported)} to {directory}", 5000,
         )
+
+    # ── Project directory ───────────────────────────────────────
+
+    def _prompt_project_dir(self) -> None:
+        """Ask the user for a project directory if none is set."""
+        if self._project_dir:
+            return
+        reply = QMessageBox.question(
+            self, "Report Studio",
+            "Would you like to select a project directory?\n\n"
+            "This enables auto-save, sheet persistence, and organized output.",
+            MsgBoxYes | MsgBoxNo,
+        )
+        if reply == MsgBoxYes:
+            d = QFileDialog.getExistingDirectory(
+                self, "Select Project Directory",
+            )
+            if d:
+                self._set_project_dir(d)
+
+    def _set_project_dir(self, path: str) -> None:
+        self._project_dir = path
+        for sub in ("render", "sheets", "exports", "session"):
+            os.makedirs(os.path.join(path, sub), exist_ok=True)
+        self._export_panel.set_output_directory(path)
+        self.setWindowTitle(f"Report Studio — {os.path.basename(path)}")
+        self._status.showMessage(f"Project: {path}", 4000)
+
+    def _auto_save_session(self) -> None:
+        """Save all sheet states to session/ for restore on next open."""
+        if not self._project_dir:
+            return
+        session_dir = os.path.join(self._project_dir, "session")
+        os.makedirs(session_dir, exist_ok=True)
+        import json
+        self._snapshot_current_settings()
+        manifest = {"sheets": []}
+        for i, name in enumerate(self._sheet_tabs.all_sheet_names()):
+            settings = self._sheet_tabs._sheet_settings.get(i)
+            if settings is None:
+                continue
+            d = settings_to_dict(settings)
+            d["_sheet_name"] = name
+            fpath = os.path.join(session_dir, f"sheet_{i}.json")
+            with open(fpath, "w", encoding="utf-8") as f:
+                json.dump(d, f, indent=2, ensure_ascii=False)
+            manifest["sheets"].append({"index": i, "name": name, "file": f"sheet_{i}.json"})
+        with open(os.path.join(session_dir, "session_manifest.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+    def _try_restore_session(self) -> bool:
+        """Attempt to restore sheets from a previous session. Returns True if restored."""
+        if not self._project_dir:
+            return False
+        import json
+        manifest_path = os.path.join(self._project_dir, "session", "session_manifest.json")
+        if not os.path.isfile(manifest_path):
+            return False
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            sheets = manifest.get("sheets", [])
+            if not sheets:
+                return False
+            reply = QMessageBox.question(
+                self, "Restore Session",
+                f"Found {len(sheets)} sheet(s) from a previous session.\nRestore them?",
+                MsgBoxYes | MsgBoxNo,
+            )
+            if reply != MsgBoxYes:
+                return False
+            from .config_persistence import settings_from_dict
+            session_dir = os.path.join(self._project_dir, "session")
+            for entry in sheets:
+                fpath = os.path.join(session_dir, entry["file"])
+                if not os.path.isfile(fpath):
+                    continue
+                with open(fpath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                data.pop("_sheet_name", None)
+                loaded = settings_from_dict(data)
+                self._sheet_tabs.add_sheet(entry["name"], loaded)
+            self._on_sheet_changed(self._sheet_tabs.current_sheet_name())
+            return True
+        except Exception:
+            return False
+
+    def closeEvent(self, event) -> None:
+        self._auto_save_session()
+        super().closeEvent(event)
 
     # ── Config persistence ────────────────────────────────────────
 
@@ -601,7 +798,12 @@ class ReportStudioWindow(QMainWindow):
         if not ok or not name.strip():
             return
         try:
-            save_sheet(proj, name.strip(), self._settings)
+            save_sheet(
+                proj, name.strip(), self._settings,
+                layer_labels=list(self._generator.layer_labels),
+                freq_arrays=list(self._generator.frequency_arrays),
+                vel_arrays=list(self._generator.velocity_arrays),
+            )
             self._status.showMessage(f"Sheet saved: {name.strip()}", 4000)
         except Exception as e:
             QMessageBox.warning(self, "Save Error", str(e))
@@ -631,7 +833,18 @@ class ReportStudioWindow(QMainWindow):
         for n, folder in sheets:
             if n == choice:
                 try:
-                    sheet_name, loaded_settings = load_sheet(folder)
+                    sheet_name, loaded_settings, fp = load_sheet_with_fingerprint(folder)
+                    if fp and not check_data_match(
+                        fp,
+                        list(self._generator.layer_labels),
+                        list(self._generator.frequency_arrays),
+                        list(self._generator.velocity_arrays),
+                    ):
+                        QMessageBox.warning(
+                            self, "Data Mismatch",
+                            "The loaded data has changed since this sheet was saved.\n"
+                            "Layer states and point masks may not match.",
+                        )
                     self._snapshot_current_settings()
                     idx = self._sheet_tabs.add_sheet(
                         sheet_name, loaded_settings,
@@ -642,6 +855,16 @@ class ReportStudioWindow(QMainWindow):
                         self._plot_selector.select_plot_type(
                             self._settings.active_plot_type,
                         )
+                    if self._settings.committed and self._settings.layer_states:
+                        self._layer_editor.set_plot_type(self._settings.active_plot_type)
+                        self._layer_editor.populate(
+                            self._settings.layer_states,
+                            list(self._generator.frequency_arrays),
+                            list(self._generator.velocity_arrays),
+                        )
+                        self._left_stack.setCurrentIndex(1)
+                    else:
+                        self._left_stack.setCurrentIndex(0)
                     self._schedule_render()
                     self._status.showMessage(
                         f"Sheet loaded: {sheet_name}", 4000,

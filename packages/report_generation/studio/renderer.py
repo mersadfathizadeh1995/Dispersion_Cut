@@ -3,18 +3,22 @@
 Translates the nested studio settings into a flat PlotConfig, then dispatches
 to the appropriate ReportGenerator method. All rendering is done into a
 provided matplotlib Figure (for live preview on the canvas).
+
+Supports per-layer point masks (NaN masking) and post-render style overrides
+so that the generator methods stay unchanged while the studio adds visual
+customization on top.
 """
 from __future__ import annotations
 
-from dataclasses import asdict
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 
 from ..config import PlotConfig
 from ..generator import ReportGenerator
-from .models import ReportStudioSettings
+from .models import ReportStudioSettings, StudioLayerState
 
 
 class StudioRenderer:
@@ -81,7 +85,7 @@ class StudioRenderer:
             peak_line_width=overlay.line_width,
             curve_overlay_style=overlay.style,
             spectrum_colorbar_orientation=spec.colorbar_orientation,
-            grid_offset_indices=None,
+            grid_offset_indices=settings.grid_offset_indices,
             grid_shared_colorbar=spec.colorbar_orientation,
         )
 
@@ -99,6 +103,9 @@ class StudioRenderer:
         and dispatches to the appropriate generator method.
         The generator creates its own axes via plt.subplots -- we intercept
         by temporarily patching plt.subplots to reuse *fig*.
+
+        After rendering, applies per-layer style overrides and enables
+        draggable legends.
         """
         fig.clear()
 
@@ -115,6 +122,8 @@ class StudioRenderer:
         config = self.build_plot_config(settings)
         gen = self._generator
         kw = extra_kwargs or {}
+
+        saved = self._apply_point_masks(settings.layer_states)
 
         _orig_subplots = plt.subplots
 
@@ -143,8 +152,87 @@ class StudioRenderer:
             self._dispatch(gen, plot_type, config, offset_index, kw)
         finally:
             plt.subplots = _orig_subplots
+            self._restore_arrays(saved)
+
+        self._apply_style_overrides(fig, settings.layer_states)
+        self._enable_draggable_legends(fig)
 
         return fig
+
+    # ── Point mask helpers ────────────────────────────────────────
+
+    def _apply_point_masks(
+        self, layer_states: List[StudioLayerState],
+    ) -> Dict[int, tuple]:
+        """Replace masked points with NaN in generator arrays; returns originals."""
+        saved: Dict[int, tuple] = {}
+        gen = self._generator
+        for ls in layer_states:
+            i = ls.index
+            if ls.point_mask is None:
+                continue
+            if i >= len(gen.frequency_arrays):
+                continue
+            saved[i] = (
+                gen.frequency_arrays[i].copy(),
+                gen.velocity_arrays[i].copy(),
+                gen.wavelength_arrays[i].copy() if i < len(gen.wavelength_arrays) else None,
+            )
+            mask_arr = np.array(ls.point_mask[:len(gen.frequency_arrays[i])])
+            gen.frequency_arrays[i] = np.where(mask_arr, gen.frequency_arrays[i], np.nan)
+            gen.velocity_arrays[i] = np.where(mask_arr, gen.velocity_arrays[i], np.nan)
+            if i < len(gen.wavelength_arrays):
+                gen.wavelength_arrays[i] = np.where(mask_arr, gen.wavelength_arrays[i], np.nan)
+        return saved
+
+    def _restore_arrays(self, saved: Dict[int, tuple]) -> None:
+        gen = self._generator
+        for i, (freq, vel, wave) in saved.items():
+            gen.frequency_arrays[i] = freq
+            gen.velocity_arrays[i] = vel
+            if wave is not None and i < len(gen.wavelength_arrays):
+                gen.wavelength_arrays[i] = wave
+
+    # ── Post-render style overrides ───────────────────────────────
+
+    def _apply_style_overrides(
+        self, fig: Figure, layer_states: List[StudioLayerState],
+    ) -> None:
+        """Patch colors, linewidths, markers on artists after rendering."""
+        if not layer_states:
+            return
+        override_map = {ls.index: ls for ls in layer_states
+                        if ls.color or ls.line_width or ls.marker_style or ls.alpha < 1.0}
+        if not override_map:
+            return
+
+        for ax in fig.axes:
+            for idx, line in enumerate(ax.get_lines()):
+                if idx not in override_map:
+                    continue
+                ls = override_map[idx]
+                if ls.color:
+                    line.set_color(ls.color)
+                if ls.line_width is not None:
+                    line.set_linewidth(ls.line_width)
+                if ls.line_style:
+                    line.set_linestyle(ls.line_style)
+                if ls.marker_style:
+                    line.set_marker(ls.marker_style)
+                if ls.marker_size is not None:
+                    line.set_markersize(ls.marker_size)
+                if ls.alpha < 1.0:
+                    line.set_alpha(ls.alpha)
+
+    @staticmethod
+    def _enable_draggable_legends(fig: Figure) -> None:
+        for ax in fig.axes:
+            leg = ax.get_legend()
+            if leg is not None:
+                try:
+                    leg.set_draggable(True)
+                except AttributeError:
+                    pass
 
     def _dispatch(
         self,
