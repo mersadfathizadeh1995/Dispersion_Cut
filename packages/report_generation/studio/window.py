@@ -13,7 +13,7 @@ from functools import partial
 
 from .qt_compat import (
     QtWidgets, QtCore,
-    Horizontal, ScrollBarAlwaysOff, WA_DeleteOnClose,
+    Horizontal, ScrollBarAlwaysOff,
     QAction, QKeySequence,
     MsgBoxYes, MsgBoxNo,
 )
@@ -37,13 +37,17 @@ QTimer = QtCore.QTimer
 from ..generator import ReportGenerator
 from ..utils import ensure_parent_dir_for_file
 from .models import (
-    ReportStudioSettings, StudioLayerState, apply_preset,
+    ReportStudioSettings, apply_preset,
     PRESET_LABELS,
 )
+from .figure_model import FigureModel
+from .preset_builder import build_from_preset
 from .canvas_view import CanvasView
 from .renderer import StudioRenderer
+from .composable_renderer import ComposableRenderer
 from .panels.plot_selector import PlotSelector
-from .panels.layer_editor import LayerEditor
+from .panels.data_tree import DataTree
+from .panels.properties_router import PropertiesRouter
 from .panels.figure_panel import FigurePanel
 from .panels.typography_panel import TypographyPanel
 from .panels.axis_panel import AxisPanel
@@ -63,7 +67,7 @@ from .config_persistence import (
     settings_to_dict,
 )
 from .sheet_persistence import (
-    save_sheet, load_sheet, load_sheet_with_fingerprint,
+    save_sheet, load_sheet_with_fingerprint,
     check_data_match, list_saved_sheets,
 )
 
@@ -85,6 +89,7 @@ class ReportStudioWindow(QMainWindow):
         self._settings = ReportStudioSettings()
         self._generator = ReportGenerator.from_controller(controller)
         self._renderer = StudioRenderer(self._generator)
+        self._composable_renderer = ComposableRenderer(self._generator)
         self._project_dir = ""
 
         self._render_timer = QTimer(self)
@@ -143,11 +148,14 @@ class ReportStudioWindow(QMainWindow):
         selector_layout.addWidget(self._commit_btn)
         self._left_stack.addWidget(selector_page)
 
-        # Page 1: layer editor
-        self._layer_editor = LayerEditor()
-        self._layer_editor.layer_config_changed.connect(self._on_layer_config_changed)
-        self._layer_editor.back_requested.connect(self._on_back_to_selector)
-        self._left_stack.addWidget(self._layer_editor)
+        # Page 1: data tree (composable mode)
+        self._data_tree = DataTree()
+        self._data_tree.set_offset_labels(list(self._generator.layer_labels))
+        self._data_tree.back_requested.connect(self._on_back_to_selector)
+        self._data_tree.selection_changed.connect(self._on_tree_selection_changed)
+        self._data_tree.data_visibility_changed.connect(self._on_data_visibility_changed)
+        self._data_tree.structure_changed.connect(self._on_tree_structure_changed)
+        self._left_stack.addWidget(self._data_tree)
 
         self._left_stack.setCurrentIndex(0)
         splitter.addWidget(self._left_stack)
@@ -159,10 +167,8 @@ class ReportStudioWindow(QMainWindow):
         self._canvas_view.preview_dpi_changed.connect(self._on_preview_dpi_changed)
         splitter.addWidget(self._canvas_view)
 
-        # Right: settings tabs
+        # Right: context-sensitive properties via PropertiesRouter
         self._tabs = QTabWidget()
-        self._tabs.setMinimumWidth(280)
-        self._tabs.setMaximumWidth(460)
 
         self._figure_panel = FigurePanel()
         self._typography_panel = TypographyPanel()
@@ -187,7 +193,11 @@ class ReportStudioWindow(QMainWindow):
             scroll.setHorizontalScrollBarPolicy(ScrollBarAlwaysOff)
             self._tabs.addTab(scroll, label)
 
-        splitter.addWidget(self._tabs)
+        self._properties_router = PropertiesRouter(self._tabs)
+        self._properties_router.setMinimumWidth(280)
+        self._properties_router.setMaximumWidth(460)
+        self._properties_router.style_changed.connect(self._schedule_render)
+        splitter.addWidget(self._properties_router)
 
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
@@ -241,9 +251,7 @@ class ReportStudioWindow(QMainWindow):
 
         export_act = QAction("Export...", self)
         export_act.setShortcut(QKeySequence("Ctrl+E"))
-        export_act.triggered.connect(
-            lambda: self._tabs.setCurrentIndex(6)  # Export tab
-        )
+        export_act.triggered.connect(self._show_export_tab)
         file_menu.addAction(export_act)
 
         file_menu.addSeparator()
@@ -285,7 +293,9 @@ class ReportStudioWindow(QMainWindow):
         self._freq_settings = FrequencySettings()
         self._wave_settings = WavelengthSettings()
         self._nf_settings = NearFieldSettings(offset_labels=labels)
-        self._offset_settings = OffsetSettings(offset_labels=labels)
+        self._offset_settings = OffsetSettings(
+            offset_labels=labels, spectrum_flags=spec_flags,
+        )
         self._canvas_settings = CanvasSettings()
         self._grid_settings = OffsetGridSettings(
             offset_labels=labels, spectrum_flags=spec_flags,
@@ -340,12 +350,16 @@ class ReportStudioWindow(QMainWindow):
             self._canvas_view.set_preview_dpi(self._settings.figure.preview_dpi)
             self._canvas_view.update_size(w, h)
 
-            extra_kw = self._build_extra_kwargs()
-            self._renderer.render(
-                self._settings, fig,
-                offset_index=self._get_current_offset_index(),
-                extra_kwargs=extra_kw,
-            )
+            model = self._settings.figure_model
+            if self._settings.committed and isinstance(model, FigureModel):
+                self._composable_renderer.render(model, self._settings, fig)
+            else:
+                extra_kw = self._build_extra_kwargs()
+                self._renderer.render(
+                    self._settings, fig,
+                    offset_index=self._get_current_offset_index(),
+                    extra_kwargs=extra_kw,
+                )
             self._canvas_view.refresh()
             self._status.showMessage("Ready", 3000)
         except Exception as e:
@@ -403,6 +417,10 @@ class ReportStudioWindow(QMainWindow):
 
     # ── Slots ─────────────────────────────────────────────────────
 
+    def _show_export_tab(self) -> None:
+        self._properties_router.show_global()
+        self._tabs.setCurrentIndex(6)
+
     def _on_preview_dpi_changed(self, dpi: int) -> None:
         self._settings.figure.preview_dpi = dpi
         self._schedule_render()
@@ -412,52 +430,53 @@ class ReportStudioWindow(QMainWindow):
         self._schedule_render()
 
     def _on_commit_to_sheet(self) -> None:
-        """Lock the current plot type and switch to layer editor."""
+        """Lock the current plot type and switch to data tree."""
         plot_type = self._settings.active_plot_type
         if not plot_type:
             QMessageBox.information(self, "Commit", "Select a plot type first.")
             return
         self._settings.committed = True
-        self._build_layer_states()
-        self._layer_editor.set_plot_type(plot_type)
-        self._layer_editor.populate(
-            self._settings.layer_states,
-            list(self._generator.frequency_arrays),
-            list(self._generator.velocity_arrays),
+
+        extra = {}
+        if plot_type in _OFFSET_KEYS:
+            extra["offset_indices"] = self._offset_settings.get_selected_indices() or [0]
+            extra["grid_rows"] = self._offset_settings.grid_rows
+            extra["grid_cols"] = self._offset_settings.grid_cols
+        elif plot_type in {"offset_grid", "nacd_grid"}:
+            extra["offset_indices"] = self._grid_settings.get_selected_indices()
+            extra["grid_rows"] = self._grid_settings.grid_rows
+            extra["grid_cols"] = self._grid_settings.grid_cols
+
+        model = build_from_preset(
+            plot_type, self._generator, self._settings, **extra,
         )
+        self._settings.figure_model = model
+        self._properties_router.set_model(model)
+        self._data_tree.populate(model)
         self._left_stack.setCurrentIndex(1)
+        self._schedule_render()
         self._status.showMessage(f"Committed: {plot_type}", 3000)
 
     def _on_back_to_selector(self) -> None:
-        """Return to the plot selector from the layer editor."""
+        """Return to the plot selector from the data tree."""
         self._settings.committed = False
+        self._settings.figure_model = None
+        self._properties_router.set_model(None)
+        self._properties_router.show_global()
         self._left_stack.setCurrentIndex(0)
+        self._schedule_render()
 
-    def _build_layer_states(self) -> None:
-        """Initialize layer_states from generator data if not already set."""
-        existing = {ls.index for ls in self._settings.layer_states}
-        n = len(self._generator.velocity_arrays)
-        for i in range(n):
-            if i not in existing:
-                self._settings.layer_states.append(StudioLayerState(
-                    index=i,
-                    label=self._generator.layer_labels[i]
-                        if i < len(self._generator.layer_labels) else f"Layer {i}",
-                    visible=self._generator.active_flags[i]
-                        if i < len(self._generator.active_flags) else True,
-                ))
+    def _on_tree_selection_changed(self, item_type: str, key: str) -> None:
+        """Respond to selection changes in the data tree."""
+        if hasattr(self, "_properties_router"):
+            self._properties_router.show_for(item_type, key, self._settings)
 
-    def _on_layer_config_changed(self) -> None:
-        """Respond to layer property or point mask changes from the editor."""
-        states = self._layer_editor.get_layer_states()
-        self._settings.layer_states = states
-        for ls in states:
-            if ls.index < len(self._generator.active_flags):
-                self._generator.active_flags[ls.index] = ls.visible
-        self._generator._binned_avg = None
-        self._generator._binned_std = None
-        self._generator._bin_centers = None
-        self._generator._nacd_values = None
+    def _on_data_visibility_changed(self, uid: str, visible: bool) -> None:
+        """Respond to checkbox toggle on a data series."""
+        self._schedule_render()
+
+    def _on_tree_structure_changed(self) -> None:
+        """Respond to add/remove subplot or data, or drag-drop reorder."""
         self._schedule_render()
 
     def _on_layers_changed(self) -> None:
@@ -484,6 +503,10 @@ class ReportStudioWindow(QMainWindow):
         self._settings.active_plot_type = plot_type
         self._generator = ReportGenerator.from_controller(self._controller)
         self._renderer = StudioRenderer(self._generator)
+        self._composable_renderer = ComposableRenderer(self._generator)
+        self._properties_router.set_model(None)
+        self._properties_router.show_global()
+        self._left_stack.setCurrentIndex(0)
         self._init_panels()
         self._schedule_render()
         self._status.showMessage("Settings reset to defaults", 3000)
@@ -500,15 +523,14 @@ class ReportStudioWindow(QMainWindow):
         self._init_panels()
         if self._settings.active_plot_type:
             self._plot_selector.select_plot_type(self._settings.active_plot_type)
-        if self._settings.committed and self._settings.layer_states:
-            self._layer_editor.set_plot_type(self._settings.active_plot_type)
-            self._layer_editor.populate(
-                self._settings.layer_states,
-                list(self._generator.frequency_arrays),
-                list(self._generator.velocity_arrays),
-            )
+        model = self._settings.figure_model
+        if self._settings.committed and isinstance(model, FigureModel):
+            self._properties_router.set_model(model)
+            self._data_tree.populate(model)
             self._left_stack.setCurrentIndex(1)
         else:
+            self._properties_router.set_model(None)
+            self._properties_router.show_global()
             self._left_stack.setCurrentIndex(0)
         self._schedule_render()
 
@@ -533,26 +555,27 @@ class ReportStudioWindow(QMainWindow):
         try:
             from matplotlib.figure import Figure as MplFigure
 
-            config = self._renderer.build_plot_config(self._settings)
-            config = config.__class__(
-                **{**config.__dict__, "dpi": options.get("dpi", 300)}
-            )
+            export_dpi = options.get("dpi", 300)
             export_fig = MplFigure(
                 figsize=(self._settings.figure.width, self._settings.figure.height),
-                dpi=options.get("dpi", 300),
+                dpi=export_dpi,
             )
 
-            extra_kw = self._build_extra_kwargs()
-            self._renderer.render(
-                self._settings, export_fig,
-                offset_index=self._get_current_offset_index(),
-                extra_kwargs=extra_kw,
-            )
+            model = self._settings.figure_model
+            if self._settings.committed and isinstance(model, FigureModel):
+                self._composable_renderer.render(model, self._settings, export_fig)
+            else:
+                extra_kw = self._build_extra_kwargs()
+                self._renderer.render(
+                    self._settings, export_fig,
+                    offset_index=self._get_current_offset_index(),
+                    extra_kwargs=extra_kw,
+                )
 
             ensure_parent_dir_for_file(resolved)
             export_fig.savefig(
                 resolved,
-                dpi=options.get("dpi", 300),
+                dpi=export_dpi,
                 transparent=options.get("transparent", False),
                 bbox_inches=options.get("bbox_inches", "tight"),
                 pad_inches=options.get("pad_inches", 0.1),
@@ -581,22 +604,27 @@ class ReportStudioWindow(QMainWindow):
                 from matplotlib.figure import Figure as MplFigure
 
                 path = os.path.join(directory, f"{plot_type}.{fmt}")
+                export_dpi = options.get("dpi", 300)
                 export_fig = MplFigure(
                     figsize=(self._settings.figure.width, self._settings.figure.height),
-                    dpi=options.get("dpi", 300),
+                    dpi=export_dpi,
                 )
-                extra_kw = self._build_extra_kwargs()
-                self._renderer.render(
-                    self._settings, export_fig,
-                    offset_index=self._get_current_offset_index(),
-                    extra_kwargs=extra_kw,
-                )
+
+                model = self._settings.figure_model
+                if self._settings.committed and isinstance(model, FigureModel):
+                    self._composable_renderer.render(model, self._settings, export_fig)
+                else:
+                    extra_kw = self._build_extra_kwargs()
+                    self._renderer.render(
+                        self._settings, export_fig,
+                        offset_index=self._get_current_offset_index(),
+                        extra_kwargs=extra_kw,
+                    )
+
                 ensure_parent_dir_for_file(path)
                 export_fig.savefig(
-                    path,
-                    dpi=options.get("dpi", 300),
-                    bbox_inches="tight",
-                    facecolor="white",
+                    path, dpi=export_dpi,
+                    bbox_inches="tight", facecolor="white",
                 )
                 import matplotlib.pyplot as plt
                 plt.close(export_fig)
@@ -855,15 +883,14 @@ class ReportStudioWindow(QMainWindow):
                         self._plot_selector.select_plot_type(
                             self._settings.active_plot_type,
                         )
-                    if self._settings.committed and self._settings.layer_states:
-                        self._layer_editor.set_plot_type(self._settings.active_plot_type)
-                        self._layer_editor.populate(
-                            self._settings.layer_states,
-                            list(self._generator.frequency_arrays),
-                            list(self._generator.velocity_arrays),
-                        )
+                    model = self._settings.figure_model
+                    if self._settings.committed and isinstance(model, FigureModel):
+                        self._properties_router.set_model(model)
+                        self._data_tree.populate(model)
                         self._left_stack.setCurrentIndex(1)
                     else:
+                        self._properties_router.set_model(None)
+                        self._properties_router.show_global()
                         self._left_stack.setCurrentIndex(0)
                     self._schedule_render()
                     self._status.showMessage(

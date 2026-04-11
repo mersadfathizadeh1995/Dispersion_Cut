@@ -1,8 +1,8 @@
 """Matplotlib canvas widget for the Report Studio.
 
-Wraps a Figure + FigureCanvasQTAgg + NavigationToolbar inside a QScrollArea
-so the preview renders at exact configured dimensions and scrolls if needed.
-Supports mouse-wheel zoom and adjustable preview DPI.
+Wraps a Figure + FigureCanvasQTAgg + NavigationToolbar inside a QScrollArea.
+Explicit +/- buttons control image-level zoom. Middle-click drag pans the
+scroll area. Matplotlib toolbar handles per-axis data zoom/pan as usual.
 """
 from __future__ import annotations
 
@@ -22,19 +22,38 @@ QVBoxLayout = QtWidgets.QVBoxLayout
 QHBoxLayout = QtWidgets.QHBoxLayout
 QScrollArea = QtWidgets.QScrollArea
 QComboBox = QtWidgets.QComboBox
+QPushButton = QtWidgets.QPushButton
 QLabel = QtWidgets.QLabel
 
 DEFAULT_PREVIEW_DPI = 100
-_ZOOM_FACTOR_IN = 0.85
-_ZOOM_FACTOR_OUT = 1.0 / _ZOOM_FACTOR_IN
+
+try:
+    _MID_BUTTON = QtCore.Qt.MiddleButton
+except AttributeError:
+    _MID_BUTTON = QtCore.Qt.MouseButton.MiddleButton
+
+try:
+    _MOUSE_MOVE = QtCore.QEvent.MouseMove
+except AttributeError:
+    _MOUSE_MOVE = QtCore.QEvent.Type.MouseMove
+
+try:
+    _MOUSE_PRESS = QtCore.QEvent.MouseButtonPress
+except AttributeError:
+    _MOUSE_PRESS = QtCore.QEvent.Type.MouseButtonPress
+
+try:
+    _MOUSE_RELEASE = QtCore.QEvent.MouseButtonRelease
+except AttributeError:
+    _MOUSE_RELEASE = QtCore.QEvent.Type.MouseButtonRelease
 
 
 class CanvasView(QWidget):
     """Central canvas widget: toolbar on top, scrollable matplotlib canvas below.
 
-    Features:
-    - Mouse-wheel zoom around cursor position on all axes
-    - Adjustable preview DPI via a dropdown in the toolbar row
+    Zoom is controlled via explicit +/- buttons in the toolbar.
+    Middle-click drag pans the scroll area.
+    Matplotlib NavigationToolbar handles per-axis data zoom/pan.
     """
 
     preview_dpi_changed = Signal(int)
@@ -43,6 +62,9 @@ class CanvasView(QWidget):
                  parent: QWidget | None = None):
         super().__init__(parent)
         self._preview_dpi = DEFAULT_PREVIEW_DPI
+        self._zoom_level = 1.0
+        self._mid_drag = False
+        self._mid_drag_origin = QtCore.QPoint()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -54,10 +76,7 @@ class CanvasView(QWidget):
             facecolor="white",
         )
         self._canvas = FigureCanvas(self._figure)
-        self._canvas.setFixedSize(
-            int(width_in * self._preview_dpi),
-            int(height_in * self._preview_dpi),
-        )
+        self._update_canvas_pixel_size()
 
         self._toolbar = NavigationToolbar(self._canvas, self)
 
@@ -65,6 +84,24 @@ class CanvasView(QWidget):
         toolbar_row.setContentsMargins(0, 0, 0, 0)
         toolbar_row.setSpacing(4)
         toolbar_row.addWidget(self._toolbar, stretch=1)
+
+        self._zoom_out_btn = QPushButton("-")
+        self._zoom_out_btn.setFixedSize(26, 26)
+        self._zoom_out_btn.setToolTip("Zoom out (image)")
+        self._zoom_out_btn.clicked.connect(lambda: self._apply_zoom(1.0 / 1.25))
+        toolbar_row.addWidget(self._zoom_out_btn)
+
+        self._zoom_reset_btn = QPushButton("1:1")
+        self._zoom_reset_btn.setFixedSize(32, 26)
+        self._zoom_reset_btn.setToolTip("Reset zoom to 100%")
+        self._zoom_reset_btn.clicked.connect(self.reset_zoom)
+        toolbar_row.addWidget(self._zoom_reset_btn)
+
+        self._zoom_in_btn = QPushButton("+")
+        self._zoom_in_btn.setFixedSize(26, 26)
+        self._zoom_in_btn.setToolTip("Zoom in (image)")
+        self._zoom_in_btn.clicked.connect(lambda: self._apply_zoom(1.25))
+        toolbar_row.addWidget(self._zoom_in_btn)
 
         toolbar_row.addWidget(QLabel("Preview:"))
         self._dpi_combo = QComboBox()
@@ -87,9 +124,8 @@ class CanvasView(QWidget):
         self._scroll.setHorizontalScrollBarPolicy(ScrollBarAsNeeded)
         self._scroll.setVerticalScrollBarPolicy(ScrollBarAsNeeded)
 
+        self._scroll.viewport().installEventFilter(self)
         layout.addWidget(self._scroll, stretch=1)
-
-        self._canvas.mpl_connect("scroll_event", self._on_scroll_zoom)
 
     @property
     def figure(self) -> Figure:
@@ -104,40 +140,65 @@ class CanvasView(QWidget):
         return self._preview_dpi
 
     def set_preview_dpi(self, dpi: int) -> None:
-        """Change the preview DPI and resize accordingly."""
         if dpi == self._preview_dpi:
             return
         self._preview_dpi = dpi
         self._dpi_combo.blockSignals(True)
         self._dpi_combo.setCurrentText(str(dpi))
         self._dpi_combo.blockSignals(False)
-        w, h = self._figure.get_size_inches()
         self._figure.set_dpi(dpi)
-        self._canvas.setFixedSize(
-            max(int(w * dpi), 200),
-            max(int(h * dpi), 150),
-        )
+        self._update_canvas_pixel_size()
         self._canvas.draw_idle()
 
     def update_size(self, width_in: float, height_in: float) -> None:
-        """Resize the figure and canvas widget to match new dimensions."""
-        dpi = self._preview_dpi
         self._figure.set_size_inches(width_in, height_in)
-        self._figure.set_dpi(dpi)
-        w_px = max(int(width_in * dpi), 200)
-        h_px = max(int(height_in * dpi), 150)
-        self._canvas.setFixedSize(w_px, h_px)
+        self._figure.set_dpi(self._preview_dpi)
+        self._update_canvas_pixel_size()
 
     def refresh(self) -> None:
-        """Redraw the canvas after the figure has been modified."""
-        dpi = self._preview_dpi
-        actual_w, actual_h = self._figure.get_size_inches()
-        w_px = max(int(actual_w * dpi), 200)
-        h_px = max(int(actual_h * dpi), 150)
-        self._canvas.setFixedSize(w_px, h_px)
+        self._update_canvas_pixel_size()
         self._canvas.draw_idle()
 
-    # ── Internal slots ────────────────────────────────────────────
+    def reset_zoom(self) -> None:
+        self._zoom_level = 1.0
+        self._update_canvas_pixel_size()
+
+    def _apply_zoom(self, factor: float) -> None:
+        self._zoom_level = max(0.25, min(4.0, self._zoom_level * factor))
+        self._update_canvas_pixel_size()
+
+    def _update_canvas_pixel_size(self) -> None:
+        w, h = self._figure.get_size_inches()
+        dpi = self._preview_dpi
+        z = self._zoom_level
+        self._canvas.setFixedSize(
+            max(int(w * dpi * z), 200),
+            max(int(h * dpi * z), 150),
+        )
+
+    def eventFilter(self, obj, event) -> bool:
+        """Middle-click drag to pan the scroll area."""
+        if obj is not self._scroll.viewport():
+            return super().eventFilter(obj, event)
+
+        etype = event.type()
+        if etype == _MOUSE_PRESS and event.button() == _MID_BUTTON:
+            self._mid_drag = True
+            self._mid_drag_origin = event.globalPos()
+            return True
+        if etype == _MOUSE_RELEASE and event.button() == _MID_BUTTON:
+            self._mid_drag = False
+            return True
+        if etype == _MOUSE_MOVE and self._mid_drag:
+            delta = event.globalPos() - self._mid_drag_origin
+            self._mid_drag_origin = event.globalPos()
+            h_bar = self._scroll.horizontalScrollBar()
+            v_bar = self._scroll.verticalScrollBar()
+            h_bar.setValue(h_bar.value() - delta.x())
+            v_bar.setValue(v_bar.value() - delta.y())
+            return True
+
+        return super().eventFilter(obj, event)
 
     def _on_dpi_changed(self, text: str) -> None:
         try:
@@ -147,56 +208,7 @@ class CanvasView(QWidget):
         if dpi < 10:
             return
         self._preview_dpi = dpi
-        w, h = self._figure.get_size_inches()
         self._figure.set_dpi(dpi)
-        self._canvas.setFixedSize(
-            max(int(w * dpi), 200),
-            max(int(h * dpi), 150),
-        )
+        self._update_canvas_pixel_size()
         self._canvas.draw_idle()
         self.preview_dpi_changed.emit(dpi)
-
-    def _on_scroll_zoom(self, event) -> None:
-        """Zoom in/out around cursor position on all axes."""
-        if event.inaxes is None:
-            return
-        ax = event.inaxes
-        factor = _ZOOM_FACTOR_IN if event.button == "up" else _ZOOM_FACTOR_OUT
-
-        xdata, ydata = event.xdata, event.ydata
-        if xdata is None or ydata is None:
-            return
-
-        xlim = ax.get_xlim()
-        ylim = ax.get_ylim()
-
-        x_scale = ax.get_xscale()
-        y_scale = ax.get_yscale()
-
-        if x_scale == "log" and xdata > 0:
-            import math
-            log_xmin = math.log10(xlim[0]) if xlim[0] > 0 else 0
-            log_xmax = math.log10(xlim[1]) if xlim[1] > 0 else 1
-            log_xc = math.log10(xdata)
-            new_log_xmin = log_xc - (log_xc - log_xmin) * factor
-            new_log_xmax = log_xc + (log_xmax - log_xc) * factor
-            ax.set_xlim(10 ** new_log_xmin, 10 ** new_log_xmax)
-        else:
-            new_xmin = xdata - (xdata - xlim[0]) * factor
-            new_xmax = xdata + (xlim[1] - xdata) * factor
-            ax.set_xlim(new_xmin, new_xmax)
-
-        if y_scale == "log" and ydata > 0:
-            import math
-            log_ymin = math.log10(ylim[0]) if ylim[0] > 0 else 0
-            log_ymax = math.log10(ylim[1]) if ylim[1] > 0 else 1
-            log_yc = math.log10(ydata)
-            new_log_ymin = log_yc - (log_yc - log_ymin) * factor
-            new_log_ymax = log_yc + (log_ymax - log_yc) * factor
-            ax.set_ylim(10 ** new_log_ymin, 10 ** new_log_ymax)
-        else:
-            new_ymin = ydata - (ydata - ylim[0]) * factor
-            new_ymax = ydata + (ylim[1] - ydata) * factor
-            ax.set_ylim(new_ymin, new_ymax)
-
-        self._canvas.draw_idle()

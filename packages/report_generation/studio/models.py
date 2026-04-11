@@ -187,6 +187,7 @@ class ReportStudioSettings:
     max_offsets: int = 10
     grid_offset_indices: Optional[List[int]] = None
     layer_states: List[StudioLayerState] = field(default_factory=list)
+    figure_model: Optional[object] = None
 
     axis_overrides: Dict[str, AxisConfig] = field(default_factory=dict)
     legend_overrides: Dict[str, LegendConfig] = field(default_factory=dict)

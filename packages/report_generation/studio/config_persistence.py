@@ -27,6 +27,7 @@ from .models import (
     NearFieldConfig,
     StudioLayerState,
 )
+from .figure_model import DataSeries, SubplotModel, FigureModel
 
 CONFIG_VERSION = 1
 RENDER_DIR = "render"
@@ -44,6 +45,9 @@ _DATACLASS_MAP = {
     "CurveOverlayConfig": CurveOverlayConfig,
     "NearFieldConfig": NearFieldConfig,
     "StudioLayerState": StudioLayerState,
+    "DataSeries": DataSeries,
+    "SubplotModel": SubplotModel,
+    "FigureModel": FigureModel,
     "ReportStudioSettings": ReportStudioSettings,
 }
 
@@ -114,6 +118,8 @@ def _from_dict(cls, d: dict):
             kwargs[f.name] = val
         elif _is_optional_list(ftype):
             kwargs[f.name] = val
+        elif f.name == "figure_model" and isinstance(val, dict):
+            kwargs[f.name] = _from_dict(FigureModel, val)
         else:
             kwargs[f.name] = val
     return cls(**kwargs)

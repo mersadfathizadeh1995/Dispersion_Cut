@@ -81,6 +81,31 @@ except AttributeError:
     ItemIsSelectable = _Qt.ItemFlag.ItemIsSelectable
 
 try:
+    ItemIsEnabled = _Qt.ItemIsEnabled
+except AttributeError:
+    ItemIsEnabled = _Qt.ItemFlag.ItemIsEnabled
+
+try:
+    ItemIsDragEnabled = _Qt.ItemIsDragEnabled
+except AttributeError:
+    ItemIsDragEnabled = _Qt.ItemFlag.ItemIsDragEnabled
+
+try:
+    ItemIsDropEnabled = _Qt.ItemIsDropEnabled
+except AttributeError:
+    ItemIsDropEnabled = _Qt.ItemFlag.ItemIsDropEnabled
+
+try:
+    MoveAction = _Qt.MoveAction
+except AttributeError:
+    MoveAction = _Qt.DropAction.MoveAction
+
+try:
+    InternalMove = QtWidgets.QAbstractItemView.InternalMove
+except AttributeError:
+    InternalMove = QtWidgets.QAbstractItemView.DragDropMode.InternalMove
+
+try:
     Checked = _Qt.Checked
 except AttributeError:
     Checked = _Qt.CheckState.Checked
