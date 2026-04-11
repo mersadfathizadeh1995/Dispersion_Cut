@@ -143,6 +143,7 @@ class CanvasExportMixin:
         if output_path:
             self._save_figure(fig, output_path, config)
 
+        return fig
 
     def generate_canvas_wavelength(
         self,
@@ -243,6 +244,7 @@ class CanvasExportMixin:
         if output_path:
             self._save_figure(fig, output_path, config)
 
+        return fig
 
     def generate_canvas_dual(
         self,

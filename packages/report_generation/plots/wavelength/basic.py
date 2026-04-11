@@ -10,6 +10,8 @@ from typing import Optional, Tuple, TYPE_CHECKING
 if TYPE_CHECKING:
     from ...config import PlotConfig
 
+from ...utils import ensure_parent_dir_for_file
+
 
 class BasicWavelengthPlotsMixin:
     """Mixin for basic wavelength domain plots."""
@@ -125,6 +127,7 @@ class BasicWavelengthPlotsMixin:
         if output_path:
             is_raster = config.output_format.lower() in ['png', 'jpg', 'jpeg']
             transparent = not is_raster
+            ensure_parent_dir_for_file(output_path)
             fig.savefig(
                 output_path,
                 dpi=config.dpi,
@@ -219,6 +222,7 @@ class BasicWavelengthPlotsMixin:
         if output_path:
             is_raster = config.output_format.lower() in ['png', 'jpg', 'jpeg']
             transparent = not is_raster
+            ensure_parent_dir_for_file(output_path)
             fig.savefig(
                 output_path,
                 dpi=config.dpi,
@@ -332,6 +336,7 @@ class BasicWavelengthPlotsMixin:
         if output_path:
             is_raster = config.output_format.lower() in ['png', 'jpg', 'jpeg']
             transparent = not is_raster
+            ensure_parent_dir_for_file(output_path)
             fig.savefig(
                 output_path,
                 dpi=config.dpi,

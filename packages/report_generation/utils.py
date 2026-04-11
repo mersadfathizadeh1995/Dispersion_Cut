@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -13,6 +15,14 @@ if TYPE_CHECKING:
     from .config import PlotConfig, COLORBLIND_PALETTE
 
 logger = logging.getLogger(__name__)
+
+
+def ensure_parent_dir_for_file(filepath: str) -> None:
+    """Create parent directories for filepath if missing (matplotlib does not)."""
+    p = Path(filepath).expanduser()
+    parent = p.parent
+    if parent and str(parent) not in ('.', ''):
+        parent.mkdir(parents=True, exist_ok=True)
 
 
 def apply_style(config: 'PlotConfig'):
@@ -224,6 +234,7 @@ def add_colorbar(
 
 def save_figure(fig: Figure, output_path: str, config: 'PlotConfig'):
     """Helper method to save figure with proper settings."""
+    ensure_parent_dir_for_file(output_path)
     is_raster = config.output_format.lower() in ['png', 'jpg', 'jpeg']
     transparent = not is_raster
     fig.savefig(

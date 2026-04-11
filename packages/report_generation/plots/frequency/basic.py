@@ -10,6 +10,8 @@ from typing import Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from ...config import PlotConfig
 
+from ...utils import ensure_parent_dir_for_file
+
 
 class BasicFrequencyPlotsMixin:
     """Mixin for basic frequency domain plots."""
@@ -140,6 +142,7 @@ class BasicFrequencyPlotsMixin:
             # Determine transparency based on format
             is_raster = config.output_format.lower() in ['png', 'jpg', 'jpeg']
             transparent = not is_raster
+            ensure_parent_dir_for_file(output_path)
             fig.savefig(
                 output_path,
                 dpi=config.dpi,
@@ -235,6 +238,7 @@ class BasicFrequencyPlotsMixin:
             # Determine transparency based on format
             is_raster = config.output_format.lower() in ['png', 'jpg', 'jpeg']
             transparent = not is_raster
+            ensure_parent_dir_for_file(output_path)
             fig.savefig(
                 output_path,
                 dpi=config.dpi,
@@ -358,6 +362,7 @@ class BasicFrequencyPlotsMixin:
             # Determine transparency based on format
             is_raster = config.output_format.lower() in ['png', 'jpg', 'jpeg']
             transparent = not is_raster
+            ensure_parent_dir_for_file(output_path)
             fig.savefig(
                 output_path,
                 dpi=config.dpi,
@@ -366,4 +371,4 @@ class BasicFrequencyPlotsMixin:
                 transparent=transparent
             )
 
-
+        return fig

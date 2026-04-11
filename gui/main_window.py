@@ -492,13 +492,17 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open preferences:\n{e}")
 
     def _show_report_dialog(self):
-        """Show the report generation dialog."""
+        """Open the Report Studio window."""
         try:
-            from dc_cut.packages.report_generation.dialog import ReportDialog
-            dlg = ReportDialog(self.controller, self)
-            dlg.exec()
+            from dc_cut.packages.report_generation.studio import ReportStudioWindow
+            win = ReportStudioWindow(self.controller, parent=self)
+            try:
+                win.setAttribute(QtCore.Qt.WA_DeleteOnClose)
+            except AttributeError:
+                win.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
+            win.show()
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open report generation dialog:\n{e}")
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open Report Studio:\n{e}")
 
     def _add_point_to_layer(self):
         """Show dialog to add a point to a specific layer."""

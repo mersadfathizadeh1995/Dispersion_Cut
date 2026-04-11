@@ -12,6 +12,7 @@ QtGui = qt_compat.QtGui
 QtCore = qt_compat.QtCore
 
 from dc_cut.packages.report_generation import ReportGenerator, PlotConfig
+from dc_cut.packages.report_generation.utils import ensure_parent_dir_for_file
 from .qt_compat import (
     _get_qt_orientation_horizontal,
     _get_qt_align_top,
@@ -1645,6 +1646,7 @@ class ReportDialog(QtWidgets.QDialog):
                 slide.shapes.add_picture(str(temp_png), left, top, width=width)
                 slide_count += 1
         
+        ensure_parent_dir_for_file(output_path)
         prs.save(output_path)
         return [output_path]
     
@@ -1719,6 +1721,7 @@ class ReportDialog(QtWidgets.QDialog):
             
             slide.shapes.add_picture(str(temp_png), left, top, width=width)
         
+        ensure_parent_dir_for_file(output_path)
         prs.save(output_path)
 
     def _generate_single_plot(self, generator, plot_type: str, output_path: str, config: PlotConfig, 

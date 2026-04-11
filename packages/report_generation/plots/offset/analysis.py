@@ -86,6 +86,7 @@ class OffsetAnalysisMixin:
         if output_path:
             self._save_figure(fig, output_path, config)
 
+        return fig
 
     def generate_offset_with_spectrum(
         self,
@@ -251,6 +252,7 @@ class OffsetAnalysisMixin:
         if output_path:
             self._save_figure(fig, output_path, config)
 
+        return fig
 
     def generate_offset_spectrum_only(
         self,
@@ -360,6 +362,7 @@ class OffsetAnalysisMixin:
         if output_path:
             self._save_figure(fig, output_path, config)
 
+        return fig
 
     def generate_offset_grid(
         self,
@@ -581,4 +584,4 @@ class OffsetAnalysisMixin:
         if output_path:
             self._save_figure(fig, output_path, config)
 
-
+        return fig

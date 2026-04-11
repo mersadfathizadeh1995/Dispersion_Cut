@@ -193,6 +193,8 @@ def compute_smart_axis_limits(
 
 def save_figure(fig: Figure, output_path: str, config: 'PlotConfig'):
     """Save with proper DPI, transparency, tight layout."""
+    from .utils import ensure_parent_dir_for_file
+    ensure_parent_dir_for_file(output_path)
     is_raster = config.output_format.lower() in ('png', 'jpg', 'jpeg')
     fig.savefig(
         output_path,
