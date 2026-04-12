@@ -55,6 +55,8 @@ class OffsetCurve:
     color: str = "#2196F3"
     line_width: float = 1.5
     marker_size: float = 4.0
+    line_style: str = "-"       # "-", "--", "-.", ":"
+    marker_style: str = "o"     # "o", "s", "^", "D", "none"
 
     # Subplot assignment
     subplot_key: str = "main"
@@ -65,6 +67,9 @@ class OffsetCurve:
     # Spectrum association
     spectrum_uid: str = ""
     spectrum_visible: bool = False
+    spectrum_cmap: str = "jet"
+    spectrum_alpha: float = 0.85
+    spectrum_colorbar: bool = False
 
     def __post_init__(self):
         if not self.uid:
@@ -140,6 +145,24 @@ class SubplotState:
     auto_x: bool = True
     auto_y: bool = True
 
+    # Axis scales: "linear" | "log"
+    x_scale: str = "linear"
+    y_scale: str = "linear"
+
+    # Typography (per-subplot overrides; empty = use global)
+    font_family: str = ""
+    title_font_size: int = 0    # 0 = use global
+    axis_label_font_size: int = 0
+    tick_label_font_size: int = 0
+
+    # Tick format: "plain" | "sci" | "eng"
+    x_tick_format: str = "plain"
+    y_tick_format: str = "plain"
+
+    # Label overrides (empty = use default)
+    x_label: str = ""
+    y_label: str = ""
+
     @property
     def display_name(self) -> str:
         return self.name or self.key
@@ -194,6 +217,9 @@ class SheetState:
     wspace: float = 0.3
     figure_width: float = 10.0
     figure_height: float = 7.0
+
+    # Canvas rendering quality (DPI for interactive display)
+    canvas_dpi: int = 72
 
     # Legend
     legend: LegendConfig = field(default_factory=LegendConfig)

@@ -162,10 +162,114 @@ class FileActionsMixin:
         if self._sheets:
             self.sheet_tabs.setCurrentIndex(0)
             self.data_tree.populate(self._sheets[0])
-            if hasattr(self, "sheet_panel"):
-                self.sheet_panel.populate(self._sheets[0])
+            if hasattr(self, "right_panel"):
+                self.right_panel.populate_global(self._sheets[0])
+                self.right_panel.update_subplot_list(
+                    self._sheets[0].subplot_keys_ordered())
             self._render_current()
 
         self.statusBar().showMessage(
             f"Loaded project with {len(sheets)} sheets"
         )
+
+    # ── Export panel handlers ─────────────────────────────────────────
+
+    def _on_export_figure(self, opts: dict):
+        """Export full figure from export panel."""
+        sheet = self._current_sheet()
+        canvas = self.sheet_tabs.current_canvas()
+        if not sheet or not canvas:
+            return
+
+        from ...rendering.renderer import render_sheet
+        from ...rendering.style import StyleConfig
+
+        style = StyleConfig(
+            title_size=sheet.typography.title_size,
+            axis_label_size=sheet.typography.axis_label_size,
+            tick_label_size=sheet.typography.tick_label_size,
+            font_family=sheet.typography.font_family,
+            legend_visible=sheet.legend.visible,
+            legend_position=sheet.legend.position,
+            legend_font_size=sheet.legend.font_size,
+            legend_frame_on=sheet.legend.frame_on,
+            legend_alpha=sheet.legend.alpha,
+        )
+        import matplotlib.pyplot as mpl_plt
+        fig = mpl_plt.figure()
+        fig.set_size_inches(opts.get("width", 10), opts.get("height", 7))
+        render_sheet(fig, sheet, style, quality="high")
+        fig.savefig(opts["path"], dpi=opts.get("dpi", 300),
+                    bbox_inches="tight")
+        mpl_plt.close(fig)
+        self.statusBar().showMessage(f"Exported figure to {opts['path']}")
+
+    def _on_export_subplots(self, opts: dict):
+        """Export individual subplots from export panel."""
+        import os
+        sheet = self._current_sheet()
+        if not sheet:
+            return
+
+        from ...rendering.renderer import render_sheet
+        from ...rendering.style import StyleConfig
+        import matplotlib.pyplot as plt
+
+        style = StyleConfig(
+            title_size=sheet.typography.title_size,
+            axis_label_size=sheet.typography.axis_label_size,
+            tick_label_size=sheet.typography.tick_label_size,
+            font_family=sheet.typography.font_family,
+            legend_visible=sheet.legend.visible,
+            legend_position=sheet.legend.position,
+            legend_font_size=sheet.legend.font_size,
+            legend_frame_on=sheet.legend.frame_on,
+            legend_alpha=sheet.legend.alpha,
+        )
+
+        dpi = opts.get("dpi", 300)
+        fmt = opts.get("format", "png")
+        keys = opts.get("keys", [])
+        out_dir = opts["path"]
+
+        for key in keys:
+            if key not in sheet.subplots:
+                continue
+            # Render single-subplot sheet
+            from ...core.models import SheetState
+            single = SheetState(name=key, grid_rows=1, grid_cols=1)
+            single.set_grid(1, 1)
+            sp_key = single.subplot_keys_ordered()[0]
+            sp_src = sheet.subplots[key]
+            # Copy curves
+            for uid in sp_src.curve_uids:
+                if uid in sheet.curves:
+                    single.add_curve(sheet.curves[uid], sp_key)
+            # Copy spectra
+            for uid, spec in sheet.spectra.items():
+                single.spectra[uid] = spec
+
+            fig = plt.figure()
+            fig.set_size_inches(opts.get("width", 6), opts.get("height", 4))
+            render_sheet(fig, single, style, quality="high")
+            safe = "".join(c if c.isalnum() or c in "._- " else "_" for c in key)
+            fpath = os.path.join(out_dir, f"{safe}.{fmt}")
+            fig.savefig(fpath, dpi=dpi, bbox_inches="tight")
+            plt.close(fig)
+
+        self.statusBar().showMessage(
+            f"Exported {len(keys)} subplots to {out_dir}")
+
+    def _on_export_data(self, opts: dict):
+        """Export curve data from export panel."""
+        sheet = self._current_sheet()
+        if not sheet:
+            return
+
+        from ...core.exporters.curve_exporter import CurveExporter
+        exporter = CurveExporter()
+        if exporter.can_export(sheet):
+            msg = exporter.export(sheet, opts["path"], opts)
+            self.statusBar().showMessage(msg)
+        else:
+            self.statusBar().showMessage("No curves to export")

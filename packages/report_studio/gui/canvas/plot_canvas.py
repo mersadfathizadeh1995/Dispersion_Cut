@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 _ZOOM_STEP = 1.08   # per wheel-notch scale factor
 _MIN_SCALE = 0.05
 _MAX_SCALE = 20.0
-_RENDER_DPI = 150    # rendering resolution (higher = sharper on zoom)
+_DEFAULT_CANVAS_DPI = 72  # low DPI for fast interactive rendering
 
 
 # ── Qt compat helpers ─────────────────────────────────────────────────────
@@ -215,7 +215,7 @@ class PlotCanvas(QtWidgets.QWidget):
     curve_clicked = Signal(str)
     subplot_clicked = Signal(str)
 
-    def __init__(self, parent=None, dpi: int = _RENDER_DPI):
+    def __init__(self, parent=None, dpi: int = _DEFAULT_CANVAS_DPI):
         super().__init__(parent)
 
         self._dpi = dpi
@@ -268,14 +268,20 @@ class PlotCanvas(QtWidgets.QWidget):
         self._axes = axes
 
     def render(self, sheet: "SheetState", style: "StyleConfig",
-               selected_uid: str = ""):
+               selected_uid: str = "", quality: str = "draft"):
         """Render a SheetState and display as QPixmap."""
         from ...rendering.renderer import render_sheet
 
         self._selected_uid = selected_uid
+
+        # Use canvas DPI from sheet state for interactive rendering
+        canvas_dpi = getattr(sheet, "canvas_dpi", _DEFAULT_CANVAS_DPI) or _DEFAULT_CANVAS_DPI
+        self._dpi = canvas_dpi
+        self._figure.set_dpi(canvas_dpi)
         self._figure.set_size_inches(sheet.figure_width, sheet.figure_height)
         self._axes = render_sheet(self._figure, sheet, style,
-                                  selected_uid=selected_uid)
+                                  selected_uid=selected_uid,
+                                  quality=quality)
 
         # Record subplot bounding boxes (in figure pixel coords)
         self._store_subplot_boxes()

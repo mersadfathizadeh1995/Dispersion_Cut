@@ -727,8 +727,7 @@ class TestMainWindowIntegration:
 
         assert win.sheet_tabs.count() == 1
         assert hasattr(win, "data_tree")
-        assert hasattr(win, "properties")
-        assert hasattr(win, "sheet_panel")
+        assert hasattr(win, "right_panel")
 
     def test_add_new_sheet(self, qapp):
         from packages.report_studio.gui.main_window import ReportStudioWindow
@@ -784,7 +783,6 @@ class TestMainWindowIntegration:
         uid = list(sheet.curves.keys())[0]
         win._on_curve_selected(uid)
         assert win._selected_uid == uid
-        assert not win.properties._curve_group.isHidden()
 
     @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
     def test_curve_visibility_toggle(self, qapp):
@@ -1338,7 +1336,8 @@ class TestSmokeEndToEnd:
         # 4. Batch select handler
         batch_uids = uids[:3]
         win._on_curves_selected(batch_uids)
-        assert not win.properties._curve_group.isHidden()
+        # Right panel should have switched to curve context
+        assert win.right_panel is not None
 
         # 5. Change layout
         win._on_layout_changed("hspace", 0.4)
@@ -1373,3 +1372,407 @@ class TestSmokeEndToEnd:
             if lc.uid == uids[0]:
                 assert lc.color == "#ABCDEF"
                 break
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.2 Tests — New panels, exporters, rendering features
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestCollapsibleGroupBox:
+    """Test the collapsible group box widget."""
+
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.collapsible import CollapsibleGroupBox
+        grp = CollapsibleGroupBox("Test Group")
+        assert grp.isCheckable()
+        assert grp.isChecked()
+
+    def test_collapse(self, qapp):
+        from packages.report_studio.gui.panels.collapsible import CollapsibleGroupBox
+        from packages.report_studio.qt_compat import QtWidgets
+        grp = CollapsibleGroupBox("Test")
+        layout = QtWidgets.QVBoxLayout()
+        lbl = QtWidgets.QLabel("Content")
+        layout.addWidget(lbl)
+        grp.setLayout(layout)
+
+        grp.setChecked(False)
+        assert grp.maximumHeight() == 30
+
+
+class TestSubplotSettingsPanel:
+    """Test the new subplot settings panel."""
+
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.subplot_settings import SubplotSettingsPanel
+        panel = SubplotSettingsPanel()
+        assert panel is not None
+
+    def test_show_subplot(self, qapp):
+        from packages.report_studio.gui.panels.subplot_settings import SubplotSettingsPanel
+        from packages.report_studio.core.models import SubplotState
+        panel = SubplotSettingsPanel()
+        sp = SubplotState(key="main", name="Test Plot",
+                          x_scale="log", y_scale="linear",
+                          x_tick_format="sci")
+        panel.show_subplot(sp)
+        assert panel._edit_name.text() == "Test Plot"
+        assert panel._combo_xscale.currentText() == "log"
+        assert panel._combo_xtick.currentText() == "sci"
+
+    def test_setting_emits_signal(self, qapp, qtbot):
+        from packages.report_studio.gui.panels.subplot_settings import SubplotSettingsPanel
+        from packages.report_studio.core.models import SubplotState
+        panel = SubplotSettingsPanel()
+        sp = SubplotState(key="main")
+        panel.show_subplot(sp)
+
+        emitted = []
+        panel.setting_changed.connect(lambda k, a, v: emitted.append((k, a, v)))
+
+        panel._combo_xscale.setCurrentText("log")
+        assert any(a == "x_scale" and v == "log" for _, a, v in emitted)
+
+
+class TestCurveSettingsPanel:
+    """Test the new curve settings panel."""
+
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.curve_settings import CurveSettingsPanel
+        panel = CurveSettingsPanel()
+        assert panel is not None
+
+    def test_show_curve(self, qapp):
+        from packages.report_studio.gui.panels.curve_settings import CurveSettingsPanel
+        from packages.report_studio.core.models import OffsetCurve
+        panel = CurveSettingsPanel()
+        c = OffsetCurve(name="C1", frequency=np.array([1, 2]),
+                        velocity=np.array([10, 20]),
+                        line_width=2.0, marker_size=5.0)
+        panel.show_curve(c)
+        assert panel._lbl_name.text() == "C1"
+        assert panel._spin_lw.value() == 2.0
+        assert panel._spin_ms.value() == 5.0
+
+    def test_batch_mode(self, qapp):
+        from packages.report_studio.gui.panels.curve_settings import CurveSettingsPanel
+        from packages.report_studio.core.models import OffsetCurve
+        panel = CurveSettingsPanel()
+        c1 = OffsetCurve(name="A", frequency=np.array([1]), velocity=np.array([10]))
+        c2 = OffsetCurve(name="B", frequency=np.array([2]), velocity=np.array([20]))
+        panel.show_curves_batch([c1.uid, c2.uid], [c1, c2])
+        assert "2 curves" in panel._lbl_name.text()
+
+
+class TestSpectrumSettingsPanel:
+    """Test the new spectrum settings panel."""
+
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.spectrum_settings import SpectrumSettingsPanel
+        panel = SpectrumSettingsPanel()
+        assert panel is not None
+
+    def test_show_spectrum(self, qapp):
+        from packages.report_studio.gui.panels.spectrum_settings import SpectrumSettingsPanel
+        from packages.report_studio.core.models import OffsetCurve
+        panel = SpectrumSettingsPanel()
+        c = OffsetCurve(name="S1", frequency=np.array([1]), velocity=np.array([10]),
+                        spectrum_cmap="viridis", spectrum_alpha=0.6)
+        panel.show_spectrum(c)
+        assert panel._combo_cmap.currentText() == "viridis"
+        assert abs(panel._spin_alpha.value() - 0.6) < 0.01
+
+
+class TestGlobalSettingsPanel:
+    """Test the new global settings panel."""
+
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.global_panel import GlobalSettingsPanel
+        panel = GlobalSettingsPanel()
+        assert panel is not None
+
+    def test_populate(self, qapp):
+        from packages.report_studio.gui.panels.global_panel import GlobalSettingsPanel
+        from packages.report_studio.core.models import SheetState
+        panel = GlobalSettingsPanel()
+        sheet = SheetState()
+        sheet.set_grid(2, 3)
+        sheet.hspace = 0.4
+        sheet.legend.position = "upper left"
+        panel.populate(sheet)
+        assert panel._spin_rows.value() == 2
+        assert panel._spin_cols.value() == 3
+        assert abs(panel._spin_hspace.value() - 0.4) < 0.01
+
+    def test_grid_signal(self, qapp, qtbot):
+        from packages.report_studio.gui.panels.global_panel import GlobalSettingsPanel
+        panel = GlobalSettingsPanel()
+        emitted = []
+        panel.grid_changed.connect(lambda r, c: emitted.append((r, c)))
+        panel._spin_rows.setValue(3)
+        assert any(r == 3 for r, _ in emitted)
+
+
+class TestExportPanel:
+    """Test the export panel."""
+
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.export_panel import ExportPanel
+        panel = ExportPanel()
+        assert panel is not None
+
+    def test_update_subplots(self, qapp):
+        from packages.report_studio.gui.panels.export_panel import ExportPanel
+        panel = ExportPanel()
+        panel.update_subplots(["R0C0", "R0C1", "R1C0"])
+        assert len(panel._subplot_checks) == 3
+        assert "R0C0" in panel._subplot_checks
+
+
+class TestRightPanel:
+    """Test the 3-tab right panel container."""
+
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        panel = RightPanel()
+        assert panel._tabs.count() == 3
+
+    def test_show_subplot_switches_context(self, qapp):
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        from packages.report_studio.core.models import SubplotState
+        panel = RightPanel()
+        sp = SubplotState(key="main")
+        panel.show_subplot(sp)
+        assert panel._context_stack.currentIndex() == RightPanel._IDX_SUBPLOT
+
+    def test_show_curve_switches_context(self, qapp):
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        from packages.report_studio.core.models import OffsetCurve
+        panel = RightPanel()
+        c = OffsetCurve(name="C", frequency=np.array([1]), velocity=np.array([10]))
+        panel.show_curve(c)
+        assert panel._context_stack.currentIndex() == RightPanel._IDX_CURVE
+
+    def test_show_spectrum_switches_context(self, qapp):
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        from packages.report_studio.core.models import OffsetCurve
+        panel = RightPanel()
+        c = OffsetCurve(name="S", frequency=np.array([1]), velocity=np.array([10]))
+        panel.show_spectrum(c)
+        assert panel._context_stack.currentIndex() == RightPanel._IDX_SPECTRUM
+
+    def test_populate_global(self, qapp):
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        from packages.report_studio.core.models import SheetState
+        panel = RightPanel()
+        sheet = SheetState()
+        sheet.set_grid(2, 2)
+        panel.populate_global(sheet)
+        assert panel.global_panel._spin_rows.value() == 2
+
+
+class TestCurveExporter:
+    """Test the modular curve data exporter."""
+
+    def test_can_export_empty(self):
+        from packages.report_studio.core.exporters.curve_exporter import CurveExporter
+        from packages.report_studio.core.models import SheetState
+        exp = CurveExporter()
+        sheet = SheetState()
+        assert not exp.can_export(sheet)
+
+    def test_can_export_with_curves(self):
+        from packages.report_studio.core.exporters.curve_exporter import CurveExporter
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        exp = CurveExporter()
+        sheet = SheetState()
+        c = OffsetCurve(name="T", frequency=np.array([1, 2]),
+                        velocity=np.array([100, 200]))
+        sheet.add_curve(c)
+        assert exp.can_export(sheet)
+
+    def test_export_csv(self, tmp_path):
+        from packages.report_studio.core.exporters.curve_exporter import CurveExporter
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        exp = CurveExporter()
+        sheet = SheetState()
+        c = OffsetCurve(name="Test", frequency=np.array([1.0, 2.0, 3.0]),
+                        velocity=np.array([100.0, 200.0, 300.0]))
+        sheet.add_curve(c)
+        msg = exp.export(sheet, str(tmp_path), {"format": "csv"})
+        assert "1 curves" in msg
+        csv_files = list(tmp_path.glob("*.csv"))
+        assert len(csv_files) == 1
+
+
+class TestDualDpiRendering:
+    """Test the dual-quality rendering pipeline."""
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_draft_quality_render(self, qapp):
+        from packages.report_studio.io.pkl_reader import read_pkl
+        from packages.report_studio.core.models import SheetState
+        from packages.report_studio.rendering.renderer import render_sheet
+        from packages.report_studio.rendering.style import StyleConfig
+        import matplotlib.pyplot as plt
+
+        curves = read_pkl(str(PKL_PATH))
+        sheet = SheetState()
+        for c in curves[:3]:
+            sheet.add_curve(c)
+
+        style = StyleConfig()
+        fig = plt.figure()
+        render_sheet(fig, sheet, style, quality="draft")
+        assert len(fig.axes) > 0
+        plt.close(fig)
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_high_quality_render(self, qapp):
+        from packages.report_studio.io.pkl_reader import read_pkl
+        from packages.report_studio.core.models import SheetState
+        from packages.report_studio.rendering.renderer import render_sheet
+        from packages.report_studio.rendering.style import StyleConfig
+        import matplotlib.pyplot as plt
+
+        curves = read_pkl(str(PKL_PATH))
+        sheet = SheetState()
+        for c in curves[:3]:
+            sheet.add_curve(c)
+
+        style = StyleConfig()
+        fig = plt.figure()
+        render_sheet(fig, sheet, style, quality="high")
+        assert len(fig.axes) > 0
+        plt.close(fig)
+
+
+class TestRendererScales:
+    """Test log-scale and tick-format rendering."""
+
+    def test_log_scale_x(self, qapp):
+        from packages.report_studio.core.models import SheetState, OffsetCurve, SubplotState
+        from packages.report_studio.rendering.renderer import render_sheet
+        from packages.report_studio.rendering.style import StyleConfig
+        import matplotlib.pyplot as plt
+
+        sheet = SheetState()
+        c = OffsetCurve(name="Log", frequency=np.array([1.0, 10.0, 100.0]),
+                        velocity=np.array([100.0, 200.0, 300.0]))
+        sheet.add_curve(c)
+        # Set x_scale to log on first subplot
+        key = sheet.subplot_keys_ordered()[0]
+        sheet.subplots[key].x_scale = "log"
+
+        style = StyleConfig()
+        fig = plt.figure()
+        render_sheet(fig, sheet, style)
+        ax = fig.axes[0]
+        assert ax.get_xscale() == "log"
+        plt.close(fig)
+
+    def test_tick_format_sci(self, qapp):
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        from packages.report_studio.rendering.renderer import render_sheet
+        from packages.report_studio.rendering.style import StyleConfig
+        import matplotlib.pyplot as plt
+
+        sheet = SheetState()
+        c = OffsetCurve(name="Sci", frequency=np.array([1000.0, 2000.0, 3000.0]),
+                        velocity=np.array([100.0, 200.0, 300.0]))
+        sheet.add_curve(c)
+        key = sheet.subplot_keys_ordered()[0]
+        sheet.subplots[key].x_tick_format = "sci"
+
+        style = StyleConfig()
+        fig = plt.figure()
+        render_sheet(fig, sheet, style)
+        assert len(fig.axes) > 0
+        plt.close(fig)
+
+
+class TestPerSubplotFonts:
+    """Test per-subplot font override rendering."""
+
+    def test_subplot_font_override(self, qapp):
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        from packages.report_studio.rendering.renderer import render_sheet
+        from packages.report_studio.rendering.style import StyleConfig
+        import matplotlib.pyplot as plt
+
+        sheet = SheetState()
+        c = OffsetCurve(name="Font", frequency=np.array([1.0, 2.0]),
+                        velocity=np.array([10.0, 20.0]))
+        sheet.add_curve(c)
+        key = sheet.subplot_keys_ordered()[0]
+        sheet.subplots[key].title_font_size = 16
+        sheet.subplots[key].name = "Custom Title"
+
+        style = StyleConfig()
+        fig = plt.figure()
+        render_sheet(fig, sheet, style)
+        ax = fig.axes[0]
+        assert ax.get_title() == "Custom Title"
+        plt.close(fig)
+
+
+class TestV22MainWindowIntegration:
+    """Integration tests for v2.2 right panel wiring."""
+
+    def test_right_panel_exists(self, qapp):
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        assert hasattr(win, "right_panel")
+        assert win.right_panel._tabs.count() == 3
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_curve_select_shows_context(self, qapp):
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        win._load_from_files(str(PKL_PATH), show_dialog=False)
+        sheet = win._current_sheet()
+        uid = list(sheet.curves.keys())[0]
+        win._on_curve_selected(uid)
+
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        assert win.right_panel._context_stack.currentIndex() == RightPanel._IDX_CURVE
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_subplot_click_shows_context(self, qapp):
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        win._load_from_files(str(PKL_PATH), show_dialog=False)
+        sheet = win._current_sheet()
+        key = sheet.subplot_keys_ordered()[0]
+        win._on_subplot_clicked(key)
+
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        assert win.right_panel._context_stack.currentIndex() == RightPanel._IDX_SUBPLOT

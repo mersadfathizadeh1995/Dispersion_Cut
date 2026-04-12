@@ -15,13 +15,10 @@ class DataHandlersMixin:
         canvas = self.sheet_tabs.current_canvas()
         if canvas:
             canvas.set_selected(uid)
-        # Update properties panel
-        if hasattr(self, "properties") and uid in sheet.curves:
+        # Update right panel context
+        if hasattr(self, "right_panel") and uid in sheet.curves:
             curve = sheet.curves[uid]
-            self.properties.show_curve(curve)
-            # Also show subplot settings for the curve's subplot
-            if curve.subplot_key in sheet.subplots:
-                self.properties.show_subplot(sheet.subplots[curve.subplot_key])
+            self.right_panel.show_curve(curve)
         self._render_current()
 
     def _on_curve_visibility_changed(self, uid: str, visible: bool):
@@ -58,8 +55,8 @@ class DataHandlersMixin:
         sheet.remove_curve(uid)
         if hasattr(self, "data_tree"):
             self.data_tree.populate(sheet)
-        if hasattr(self, "properties"):
-            self.properties.clear_curve()
+        if hasattr(self, "right_panel"):
+            self.right_panel.show_empty()
         self._selected_uid = None
         self._render_current()
 
@@ -92,8 +89,8 @@ class DataHandlersMixin:
         if not sheet or key not in sheet.subplots:
             return
         sp = sheet.subplots[key]
-        if hasattr(self, "properties"):
-            self.properties.show_subplot(sp)
+        if hasattr(self, "right_panel"):
+            self.right_panel.show_subplot(sp)
         self.statusBar().showMessage(f"Subplot: {sp.display_name}")
 
     def _on_curves_selected(self, uids: list):
@@ -102,8 +99,8 @@ class DataHandlersMixin:
         if not sheet:
             return
         curves = [sheet.curves[u] for u in uids if u in sheet.curves]
-        if curves and hasattr(self, "properties"):
-            self.properties.show_curves_batch(uids, curves)
+        if curves and hasattr(self, "right_panel"):
+            self.right_panel.curve_panel.show_curves_batch(uids, curves)
 
     def _on_curve_style_updated(self, uid: str, **kwargs):
         """Update curve style properties (color, line_width, etc.)."""

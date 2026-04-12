@@ -25,6 +25,7 @@ def render_sheet(
     state: "SheetState",
     style: Optional[StyleConfig] = None,
     selected_uid: str = "",
+    quality: str = "draft",
 ) -> Dict[str, "Axes"]:
     """
     Render a complete sheet onto *fig*.
@@ -39,6 +40,8 @@ def render_sheet(
         Rendering style. Uses defaults if not given.
     selected_uid : str
         UID of the currently selected curve (drawn highlighted).
+    quality : str
+        "draft" (fast canvas) or "high" (export quality).
 
     Returns
     -------
@@ -57,7 +60,7 @@ def render_sheet(
 
     # Render each subplot
     for key, ax in axes.items():
-        _render_subplot(ax, key, state, style, selected_uid)
+        _render_subplot(ax, key, state, style, selected_uid, quality)
 
     # Apply layout
     try:
@@ -80,6 +83,7 @@ def _render_subplot(
     state: "SheetState",
     style: StyleConfig,
     selected_uid: str,
+    quality: str = "draft",
 ):
     """Render one subplot: spectrum backgrounds + dispersion curves + axes."""
     sp = state.subplots.get(subplot_key)
@@ -95,7 +99,10 @@ def _render_subplot(
         if curve.spectrum_uid and curve.spectrum_visible:
             spec = state.spectra.get(curve.spectrum_uid)
             if spec and spec.has_data:
-                spectrum_drawer.draw(ax, spec, x_domain, style)
+                spectrum_drawer.draw(
+                    ax, spec, x_domain, style,
+                    curve=curve, quality=quality,
+                )
 
     # 2. Draw dispersion curves
     for curve in curves:
@@ -121,14 +128,40 @@ def _render_subplot(
 
     # 5. Title
     if sp.display_name:
-        ax.set_title(sp.display_name, fontsize=style.title_size)
+        title_size = sp.title_font_size if sp.title_font_size > 0 else style.title_size
+        title_font = sp.font_family if sp.font_family else style.font_family
+        ax.set_title(sp.display_name, fontsize=title_size, fontfamily=title_font)
 
 
 def _configure_axes(ax, sp, style: StyleConfig, x_domain: str, curves=None):
-    """Set axis labels, limits, and styling."""
-    ax.set_xlabel(style.get_x_label(x_domain), fontsize=style.axis_label_size)
-    ax.set_ylabel(style.get_y_label(), fontsize=style.axis_label_size)
-    style.apply_to_axes(ax)
+    """Set axis labels, limits, scales, tick formats, and styling."""
+    import matplotlib.ticker as ticker
+
+    # Per-subplot font overrides
+    label_size = sp.axis_label_font_size if sp.axis_label_font_size > 0 else style.axis_label_size
+    tick_size = sp.tick_label_font_size if sp.tick_label_font_size > 0 else style.tick_label_size
+    font = sp.font_family if sp.font_family else style.font_family
+
+    # Labels (per-subplot override > default)
+    x_label = sp.x_label if sp.x_label else style.get_x_label(x_domain)
+    y_label = sp.y_label if sp.y_label else style.get_y_label()
+    ax.set_xlabel(x_label, fontsize=label_size, fontfamily=font)
+    ax.set_ylabel(y_label, fontsize=label_size, fontfamily=font)
+
+    # Axis scales
+    ax.set_xscale(sp.x_scale)
+    ax.set_yscale(sp.y_scale)
+
+    # Tick label formatting
+    _apply_tick_format(ax.xaxis, sp.x_tick_format)
+    _apply_tick_format(ax.yaxis, sp.y_tick_format)
+
+    # Common styling
+    ax.tick_params(labelsize=tick_size)
+    ax.grid(style.grid_visible, alpha=style.grid_alpha, linestyle=style.grid_style)
+    for spine in ax.spines.values():
+        spine.set_linewidth(style.spine_width)
+    ax.set_facecolor(style.subplot_facecolor)
 
     # Auto-range based on curve data extents (not spectra)
     if curves and (sp.auto_x or sp.auto_y):
@@ -160,3 +193,14 @@ def _configure_axes(ax, sp, style: StyleConfig, x_domain: str, curves=None):
         ax.set_xlim(sp.x_range)
     if not sp.auto_y and sp.y_range:
         ax.set_ylim(sp.y_range)
+
+
+def _apply_tick_format(axis, fmt: str):
+    """Apply tick label format: plain, sci, or eng."""
+    import matplotlib.ticker as ticker
+    if fmt == "sci":
+        axis.set_major_formatter(ticker.ScalarFormatter(useMathText=True))
+        axis.get_major_formatter().set_scientific(True)
+    elif fmt == "eng":
+        axis.set_major_formatter(ticker.EngFormatter())
+    # "plain" — use default

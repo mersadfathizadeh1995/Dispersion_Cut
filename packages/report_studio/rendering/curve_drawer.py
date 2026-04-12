@@ -44,6 +44,10 @@ def draw(
 
     lw = curve.line_width
     ms = curve.marker_size
+    ls = getattr(curve, "line_style", "-")
+    marker = getattr(curve, "marker_style", "o")
+    if marker == "none":
+        marker = ""
     if highlight:
         lw *= 2.0
         ms *= 1.5
@@ -52,7 +56,8 @@ def draw(
         x, y,
         color=curve.color,
         linewidth=lw,
-        marker="o",
+        linestyle=ls,
+        marker=marker,
         markersize=ms,
         markeredgecolor=curve.color,
         markerfacecolor=curve.color,

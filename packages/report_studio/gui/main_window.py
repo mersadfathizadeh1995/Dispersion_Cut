@@ -18,8 +18,7 @@ from ..core.models import SheetState, OffsetCurve, SpectrumData
 from .canvas.plot_canvas import PlotCanvas
 from .canvas.sheet_tabs import SheetTabs
 from .panels.data_tree import DataTreePanel
-from .panels.properties_panel import PropertiesPanel
-from .panels.sheet_panel import SheetPanel
+from .panels.right_panel import RightPanel
 
 from .main_window_modules.menu_setup import MenuSetupMixin
 from .main_window_modules.file_actions import FileActionsMixin
@@ -76,27 +75,10 @@ class ReportStudioWindow(
         left_dock.setWidget(self.data_tree)
         self.addDockWidget(LeftDockWidgetArea, left_dock)
 
-        # Right dock: properties + sheet panel (stacked vertically)
-        right_widget = QtWidgets.QWidget()
-        right_layout = QtWidgets.QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(0)
-
-        self.properties = PropertiesPanel()
-        self.sheet_panel = SheetPanel()
-
-        right_scroll = QtWidgets.QScrollArea()
-        right_scroll.setWidgetResizable(True)
-        right_inner = QtWidgets.QWidget()
-        ri_layout = QtWidgets.QVBoxLayout(right_inner)
-        ri_layout.setContentsMargins(0, 0, 0, 0)
-        ri_layout.addWidget(self.properties)
-        ri_layout.addWidget(self.sheet_panel)
-        ri_layout.addStretch(1)
-        right_scroll.setWidget(right_inner)
-
-        right_dock = QtWidgets.QDockWidget("Properties", self)
-        right_dock.setWidget(right_scroll)
+        # Right dock: 3-tab right panel (Context / Global / Export)
+        self.right_panel = RightPanel()
+        right_dock = QtWidgets.QDockWidget("Settings", self)
+        right_dock.setWidget(self.right_panel)
         self.addDockWidget(RightDockWidgetArea, right_dock)
 
         # Status bar
@@ -128,17 +110,30 @@ class ReportStudioWindow(
         self.data_tree.remove_curve_requested.connect(self._on_curve_removed)
         self.data_tree.add_data_requested.connect(self._on_open_data)
 
-        # Properties panel
-        self.properties.style_changed.connect(self._on_style_changed)
-        self.properties.subplot_setting_changed.connect(
+        # Right panel — Context tab (subplot / curve / spectrum settings)
+        self.right_panel.subplot_setting_changed.connect(
             self._on_subplot_setting_changed
         )
+        self.right_panel.curve_style_changed.connect(
+            self._on_style_changed
+        )
+        self.right_panel.spectrum_style_changed.connect(
+            self._on_style_changed
+        )
 
-        # Sheet panel
-        self.sheet_panel.grid_changed.connect(self._on_grid_changed)
-        self.sheet_panel.layout_changed.connect(self._on_layout_changed)
-        self.sheet_panel.legend_changed.connect(self._on_legend_changed)
-        self.sheet_panel.typography_changed.connect(self._on_typography_changed)
+        # Right panel — Global tab
+        self.right_panel.grid_changed.connect(self._on_grid_changed)
+        self.right_panel.layout_changed.connect(self._on_layout_changed)
+        self.right_panel.legend_changed.connect(self._on_legend_changed)
+        self.right_panel.typography_changed.connect(self._on_typography_changed)
+
+        # Right panel — Export tab
+        self.right_panel.export_figure_requested.connect(
+            self._on_export_figure)
+        self.right_panel.export_subplots_requested.connect(
+            self._on_export_subplots)
+        self.right_panel.export_data_requested.connect(
+            self._on_export_data)
 
     # ── Sheet management ───────────────────────────────────────────────
 
@@ -162,13 +157,14 @@ class ReportStudioWindow(
         return None
 
     def _on_sheet_changed(self, index: int):
-        """Tab changed — sync tree + properties + sheet panel to new sheet."""
+        """Tab changed — sync tree + right panel to new sheet."""
         sheet = self._current_sheet()
         if sheet:
             self.data_tree.populate(sheet)
-            self.sheet_panel.populate(sheet)
+            self.right_panel.populate_global(sheet)
+            self.right_panel.update_subplot_list(sheet.subplot_keys_ordered())
             self._selected_uid = None
-            self.properties.clear_curve()
+            self.right_panel.show_empty()
         self.statusBar().showMessage(f"Sheet: {sheet.name}" if sheet else "")
 
     # ── Data population ────────────────────────────────────────────────
@@ -241,7 +237,8 @@ class ReportStudioWindow(
                     break
 
         self.data_tree.populate(sheet)
-        self.sheet_panel.populate(sheet)
+        self.right_panel.populate_global(sheet)
+        self.right_panel.update_subplot_list(sheet.subplot_keys_ordered())
         self._render_current()
 
         n = len(curves)
