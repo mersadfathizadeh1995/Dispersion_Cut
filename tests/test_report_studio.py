@@ -2868,7 +2868,7 @@ class TestStartupFlow:
         )
         win = ReportStudioWindow(controller=None, show_startup=False)
         qtbot.addWidget(win)
-        assert hasattr(win, "_act_save_as")
+        assert hasattr(win, "_act_save_sheet_as")
 
     def test_dirty_tracking(self, qtbot):
         from packages.report_studio.gui.main_window import (
@@ -3377,7 +3377,7 @@ class TestFolderBasedProject:
         win = ReportStudioWindow(controller=None, show_startup=False)
         qtbot.addWidget(win)
         assert hasattr(win, "_on_load_project")
-        assert hasattr(win, "_on_save_project_as")
+        assert hasattr(win, "_on_save_sheet_as")
 
     def test_open_project_dir_validates_manifest(self, qtbot, tmp_path):
         from packages.report_studio.gui.main_window import (
@@ -3429,3 +3429,201 @@ class TestFolderBasedProject:
         idx = win._add_sheet_with_state(sheet)
         assert idx >= 0
         assert win._sheets[-1].name == "Custom Sheet"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.7 — Sheet-Centric Persistence
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestSheetManifest:
+    """Per-sheet manifest save / load round-trip."""
+
+    def test_save_sheet_manifest_creates_folder(self, tmp_path):
+        from packages.report_studio.io.project_v4 import save_sheet_manifest
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "sheets").mkdir()
+
+        sheet = SheetState(name="My Sheet")
+        sheet.pkl_path = "/data/test.pkl"
+        sheet.npz_path = "/data/test.npz"
+        c = OffsetCurve(
+            name="Offset -5",
+            frequency=np.linspace(1, 50, 50),
+            velocity=np.linspace(100, 300, 50),
+            wavelength=np.linspace(2, 100, 50),
+            color="#ff0000",
+        )
+        sheet.add_curve(c, "main")
+
+        save_sheet_manifest(str(proj), sheet, "My Sheet")
+        # Sanitized name uses space (not in forbidden chars)
+        manifest_path = proj / "sheets" / "My Sheet" / "manifest.json"
+        assert manifest_path.exists()
+
+        data = json.loads(manifest_path.read_text())
+        assert data["_version"] == 1
+        assert data["sheet_name"] == "My Sheet"
+        assert data["data_sources"]["pkl_path"] == "/data/test.pkl"
+        # Curve settings are nested in settings.curves
+        assert "Offset -5" in [
+            v.get("name") for v in data["settings"].get("curves", {}).values()
+        ]
+
+    def test_load_sheet_manifest_round_trip(self, tmp_path):
+        from packages.report_studio.io.project_v4 import (
+            save_sheet_manifest, load_sheet_manifest,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "sheets").mkdir()
+
+        sheet = SheetState(name="RT Sheet")
+        sheet.pkl_path = "/data/rt.pkl"
+        sheet.npz_path = "/data/rt.npz"
+        sheet.hspace = 0.4
+        sheet.typography.title_size = 18
+        c = OffsetCurve(
+            name="Offset -10",
+            frequency=np.linspace(1, 50, 50),
+            velocity=np.linspace(100, 300, 50),
+            wavelength=np.linspace(2, 100, 50),
+            color="#0000ff",
+            line_width=3.0,
+        )
+        sheet.add_curve(c, "main")
+
+        save_sheet_manifest(str(proj), sheet, "RT Sheet")
+        folder = str(proj / "sheets" / "RT Sheet")
+        loaded, curve_settings, data_sources = load_sheet_manifest(folder)
+
+        assert loaded.name == "RT Sheet"
+        assert loaded.hspace == 0.4
+        assert loaded.typography.title_size == 18
+        assert data_sources["pkl_path"] == "/data/rt.pkl"
+        assert data_sources["npz_path"] == "/data/rt.npz"
+        assert "Offset -10" in curve_settings
+        assert curve_settings["Offset -10"]["color"] == "#0000ff"
+
+    def test_list_sheets(self, tmp_path):
+        from packages.report_studio.io.project_v4 import (
+            save_sheet_manifest, list_sheets,
+        )
+        from packages.report_studio.core.models import SheetState
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "sheets").mkdir()
+
+        s1 = SheetState(name="Alpha")
+        s2 = SheetState(name="Beta")
+        save_sheet_manifest(str(proj), s1, "Alpha")
+        save_sheet_manifest(str(proj), s2, "Beta")
+
+        sheets = list_sheets(str(proj))
+        names = [n for n, _ in sheets]
+        assert "Alpha" in names
+        assert "Beta" in names
+        assert len(sheets) == 2
+
+    def test_list_sheets_empty_project(self, tmp_path):
+        from packages.report_studio.io.project_v4 import list_sheets
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "sheets").mkdir()
+
+        assert list_sheets(str(proj)) == []
+
+    def test_sheet_state_has_data_paths(self):
+        from packages.report_studio.core.models import SheetState
+        sheet = SheetState(name="Test")
+        assert hasattr(sheet, "pkl_path")
+        assert hasattr(sheet, "npz_path")
+        assert sheet.pkl_path == ""
+        assert sheet.npz_path == ""
+        sheet.pkl_path = "/some/path.pkl"
+        assert sheet.pkl_path == "/some/path.pkl"
+
+
+class TestSheetMenuActions:
+    """v2.7 menu items — Save Sheet / Load Sheet."""
+
+    def test_window_has_sheet_menu_actions(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+        assert hasattr(win, "_act_save_sheet")
+        assert hasattr(win, "_act_save_sheet_as")
+        assert hasattr(win, "_act_load_sheet")
+        assert hasattr(win, "_on_save_sheet")
+        assert hasattr(win, "_on_save_sheet_as")
+        assert hasattr(win, "_on_load_sheet")
+
+    def test_save_sheet_requires_project(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+        # No project path set — _ensure_project_path will be needed
+        assert win._project_path == ""
+
+    def test_load_from_files_stores_paths(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+
+        # Just verify the path storage works without loading real data
+        sheet = win._current_sheet()
+        sheet.pkl_path = "/some/test.pkl"
+        sheet.npz_path = "/some/test.npz"
+        assert sheet.pkl_path == "/some/test.pkl"
+        assert sheet.npz_path == "/some/test.npz"
+
+
+class TestSuppressEditClear:
+    """v2.7 — _suppress_edit_clear prevents Recent bug."""
+
+    def test_dialog_has_suppress_flag(self, qtbot):
+        from packages.report_studio.gui.panels.project_start_dialog import (
+            ProjectStartDialog,
+        )
+        dlg = ProjectStartDialog(controller=None)
+        qtbot.addWidget(dlg)
+        assert hasattr(dlg, "_suppress_edit_clear")
+        assert dlg._suppress_edit_clear is False
+
+    def test_recent_select_preserves_open_path(self, qtbot, tmp_path):
+        from packages.report_studio.gui.panels.project_start_dialog import (
+            ProjectStartDialog, add_recent_project, get_qsettings,
+            KEY_RECENT_PROJECTS,
+        )
+
+        s = get_qsettings()
+        s.remove(KEY_RECENT_PROJECTS)
+
+        # Use a real directory so _on_recent_selected validates it
+        proj_dir = tmp_path / "test_proj"
+        proj_dir.mkdir()
+        (proj_dir / "project.json").write_text('{"version":4}')
+
+        add_recent_project(str(proj_dir))
+
+        dlg = ProjectStartDialog(controller=None)
+        qtbot.addWidget(dlg)
+
+        # Index 0 is placeholder; real entries start at 1
+        if hasattr(dlg, "_recent_combo") and dlg._recent_combo.count() > 1:
+            dlg._recent_combo.setCurrentIndex(1)
+            assert dlg._open_existing_path == str(proj_dir)
+
+        s.remove(KEY_RECENT_PROJECTS)

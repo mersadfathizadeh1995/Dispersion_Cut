@@ -182,6 +182,8 @@ def _sheet_to_dict(sheet: SheetState) -> Dict[str, Any]:
         "figure_width": sheet.figure_width,
         "figure_height": sheet.figure_height,
         "canvas_dpi": sheet.canvas_dpi,
+        "pkl_path": sheet.pkl_path,
+        "npz_path": sheet.npz_path,
         "legend": {
             "visible": sheet.legend.visible,
             "position": sheet.legend.position,
@@ -217,6 +219,8 @@ def _dict_to_sheet_skeleton(d: Dict) -> SheetState:
     sheet.figure_width = d.get("figure_width", 10.0)
     sheet.figure_height = d.get("figure_height", 7.0)
     sheet.canvas_dpi = d.get("canvas_dpi", 72)
+    sheet.pkl_path = d.get("pkl_path", "")
+    sheet.npz_path = d.get("npz_path", "")
 
     leg_d = d.get("legend", {})
     sheet.legend = LegendConfig(
@@ -464,3 +468,115 @@ def load_session_manifest(
     with open(manifest_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     return data.get("sheets", [])
+
+
+# ── Sheet-centric persistence (v2.7) ────────────────────────────────────
+
+SHEET_MANIFEST_VERSION = 1
+
+
+def save_sheet_manifest(
+    project_dir: str | Path,
+    sheet: SheetState,
+    sheet_name: str = "",
+) -> Path:
+    """Save a single sheet to ``{project}/sheets/{name}/manifest.json``.
+
+    Stores all settings, curve styles, and data source references (pkl/npz).
+    The sheet folder can also hold generated data in the future.
+    """
+    project_dir = Path(project_dir)
+    sheets_dir = project_dir / "sheets"
+    sheets_dir.mkdir(parents=True, exist_ok=True)
+
+    name = sheet_name or sheet.name
+    # Sanitize for filesystem
+    import re
+    safe = re.sub(r'[<>:"/\\|?*]', '_', name).strip() or "sheet"
+    sheet_dir = sheets_dir / safe
+
+    # Remove old version if exists
+    import shutil
+    if sheet_dir.is_dir():
+        shutil.rmtree(sheet_dir)
+    sheet_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build fingerprint from current curves
+    curves_list = list(sheet.curves.values())
+    fp = compute_fingerprint(curves_list) if curves_list else ""
+
+    manifest = {
+        "_version": SHEET_MANIFEST_VERSION,
+        "sheet_name": name,
+        "data_sources": {
+            "pkl_path": sheet.pkl_path,
+            "npz_path": sheet.npz_path,
+            "fingerprint": fp,
+        },
+        "settings": _sheet_to_dict(sheet),
+    }
+
+    manifest_path = sheet_dir / "manifest.json"
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+    return sheet_dir
+
+
+def load_sheet_manifest(
+    sheet_folder: str | Path,
+) -> Tuple[SheetState, Dict[str, Dict], Dict[str, str]]:
+    """Load a sheet from ``{sheet_folder}/manifest.json``.
+
+    Returns (sheet_skeleton, curve_settings_map, data_sources).
+    - sheet_skeleton: SheetState with layout/config but no array data
+    - curve_settings_map: {curve_name: settings_dict} for matching
+    - data_sources: {"pkl_path": ..., "npz_path": ..., "fingerprint": ...}
+    """
+    sheet_folder = Path(sheet_folder)
+    manifest_path = sheet_folder / "manifest.json"
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    settings = manifest.get("settings", {})
+    data_sources = manifest.get("data_sources", {})
+    sheet_name = manifest.get("sheet_name", sheet_folder.name)
+
+    # Override name in settings dict
+    settings["name"] = sheet_name
+
+    sheet = _dict_to_sheet_skeleton(settings)
+
+    # Build name→settings map for matching reloaded curves
+    curve_settings: Dict[str, Dict] = {}
+    for uid, cd in settings.get("curves", {}).items():
+        name = cd.get("name", "")
+        curve_settings[name] = cd
+
+    return sheet, curve_settings, data_sources
+
+
+def list_sheets(project_dir: str | Path) -> List[Tuple[str, str]]:
+    """Return ``[(sheet_name, folder_path), ...]`` for saved sheets.
+
+    Scans ``{project_dir}/sheets/`` for folders containing ``manifest.json``.
+    """
+    project_dir = Path(project_dir)
+    sheets_dir = project_dir / "sheets"
+    if not sheets_dir.is_dir():
+        return []
+
+    results = []
+    for entry in sorted(sheets_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        manifest = entry / "manifest.json"
+        if manifest.is_file():
+            try:
+                with open(manifest, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                name = data.get("sheet_name", entry.name)
+            except Exception:
+                name = entry.name
+            results.append((name, str(entry)))
+    return results

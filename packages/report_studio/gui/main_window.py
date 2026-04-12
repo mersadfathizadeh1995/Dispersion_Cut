@@ -370,24 +370,41 @@ class ReportStudioWindow(
         elif dlg.use_controller and self._controller is not None:
             self._load_from_controller(self._controller)
             if project_dir:
-                self._save_to_path(project_dir)
+                self._on_save_sheet()
         else:
             pkl = dlg.pkl_path
             npz = dlg.npz_path
             if pkl:
                 self._load_from_files(pkl, npz, show_dialog=True)
                 if project_dir:
-                    self._save_to_path(project_dir)
+                    self._on_save_sheet()
 
     def _open_project_dir(self, project_dir: str):
-        """Open a v4 project from its directory."""
-        import json
+        """Open a v4 project from its directory — then offer to load sheets."""
         import os
 
+        # Check for saved sheets first
+        from ..io.project_v4 import list_sheets
+        saved = list_sheets(project_dir)
+        if saved:
+            # Offer to load a saved sheet
+            from ..qt_compat import QtWidgets
+            names = [n for n, _ in saved]
+            choice, ok = QtWidgets.QInputDialog.getItem(
+                self, "Load Sheet",
+                f"Project has {len(saved)} saved sheet(s). Select one to load:",
+                names, editable=False,
+            )
+            if ok:
+                for n, folder in saved:
+                    if n == choice:
+                        self._load_sheet_from_folder(folder)
+                        return
+        # No saved sheets — fall back to project-level data
+        import json
         pj_path = os.path.join(project_dir, "project.json")
         if not os.path.isfile(pj_path):
             return
-
         try:
             with open(pj_path, "r", encoding="utf-8") as f:
                 manifest = json.load(f)
@@ -400,11 +417,8 @@ class ReportStudioWindow(
         else:
             self._load_project_legacy(pj_path)
 
-        # Try session restore after loading project
-        QtCore.QTimer.singleShot(400, lambda: self._try_restore_session(project_dir))
-
     def _try_restore_session(self, project_dir: str):
-        """Check for auto-saved session and offer to restore."""
+        """Check for auto-saved session and offer to restore (with data reload)."""
         from ..io.project_v4 import load_session_manifest
 
         entries = load_session_manifest(project_dir)
@@ -422,10 +436,11 @@ class ReportStudioWindow(
         if reply != QtWidgets.QMessageBox.StandardButton.Yes:
             return
 
-        # Session sheets override whatever was loaded from project.json
         import os
         import json
-        from ..io.project_v4 import _dict_to_sheet_skeleton
+        from ..io.project_v4 import _dict_to_sheet_skeleton, reload_and_apply
+        from ..io.pkl_reader import read_pkl
+        from ..io.spectrum_reader import read_spectrum_npz
         session_dir = os.path.join(project_dir, "session")
 
         restored = []
@@ -437,6 +452,31 @@ class ReportStudioWindow(
                 with open(fpath, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 sheet = _dict_to_sheet_skeleton(data)
+
+                # Re-read data from per-sheet paths
+                pkl = getattr(sheet, "pkl_path", "") or ""
+                npz = getattr(sheet, "npz_path", "") or ""
+                curves, spectra = [], []
+                if pkl and os.path.isfile(pkl):
+                    try:
+                        curves = read_pkl(pkl)
+                    except Exception:
+                        pass
+                if npz and os.path.isfile(npz):
+                    try:
+                        spectra = read_spectrum_npz(npz)
+                    except Exception:
+                        pass
+
+                # Apply curve settings from session
+                curve_settings = {}
+                for cdict in data.get("curves", {}).values():
+                    cname = cdict.get("name", "")
+                    if cname:
+                        curve_settings[cname] = cdict
+                if curves:
+                    reload_and_apply(sheet, curve_settings, curves, spectra)
+
                 restored.append(sheet)
             except Exception:
                 continue
@@ -451,6 +491,12 @@ class ReportStudioWindow(
             self._add_sheet_with_state(sheet)
 
         self.sheet_tabs.setCurrentIndex(0)
+        if self._sheets:
+            self.data_tree.populate(self._sheets[0])
+            if hasattr(self, "right_panel"):
+                self.right_panel.populate_global(self._sheets[0])
+                pkeys, pnames = self._sheets[0].populated_subplot_info()
+                self.right_panel.update_subplot_list(pkeys, pnames)
         self._render_current()
 
     def _initial_load(self, controller):
@@ -475,7 +521,7 @@ class ReportStudioWindow(
                 | QtWidgets.QMessageBox.StandardButton.Cancel,
             )
             if btn == QtWidgets.QMessageBox.StandardButton.Save:
-                self._on_save_project()
+                self._on_save_sheet()
                 event.accept()
             elif btn == QtWidgets.QMessageBox.StandardButton.Discard:
                 event.accept()

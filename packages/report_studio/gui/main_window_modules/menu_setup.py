@@ -14,12 +14,12 @@ class MenuSetupMixin:
         self._act_open = file_menu.addAction("&Open Data...")
         self._act_open.setShortcut("Ctrl+O")
         file_menu.addSeparator()
-        self._act_save_project = file_menu.addAction("&Save Project")
-        self._act_save_project.setShortcut("Ctrl+S")
-        self._act_save_as = file_menu.addAction("Save Project &As...")
-        self._act_save_as.setShortcut("Ctrl+Shift+S")
-        self._act_load_project = file_menu.addAction("&Load Project...")
-        self._act_load_project.setShortcut("Ctrl+Shift+O")
+        self._act_save_sheet = file_menu.addAction("&Save Sheet")
+        self._act_save_sheet.setShortcut("Ctrl+S")
+        self._act_save_sheet_as = file_menu.addAction("Save Sheet &As...")
+        self._act_save_sheet_as.setShortcut("Ctrl+Shift+S")
+        self._act_load_sheet = file_menu.addAction("&Load Sheet...")
+        self._act_load_sheet.setShortcut("Ctrl+Shift+O")
 
         # Recent Projects submenu
         self._recent_menu = file_menu.addMenu("Recent Pro&jects")
@@ -42,9 +42,9 @@ class MenuSetupMixin:
 
     def _connect_menu_signals(self):
         self._act_close.triggered.connect(self.close)
-        self._act_save_project.triggered.connect(self._on_save_project)
-        self._act_save_as.triggered.connect(self._on_save_project_as)
-        self._act_load_project.triggered.connect(self._on_load_project)
+        self._act_save_sheet.triggered.connect(self._on_save_sheet)
+        self._act_save_sheet_as.triggered.connect(self._on_save_sheet_as)
+        self._act_load_sheet.triggered.connect(self._on_load_sheet)
 
     def _refresh_recent_menu(self):
         """Populate the Recent Projects submenu from QSettings."""

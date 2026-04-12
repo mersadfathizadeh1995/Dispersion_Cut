@@ -238,6 +238,10 @@ class SheetState:
     # Canvas rendering quality (DPI for interactive display)
     canvas_dpi: int = 72
 
+    # Data source paths (for sheet-level persistence)
+    pkl_path: str = ""
+    npz_path: str = ""
+
     # Legend
     legend: LegendConfig = field(default_factory=LegendConfig)
 

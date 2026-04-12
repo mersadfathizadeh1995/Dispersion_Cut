@@ -62,6 +62,7 @@ class ProjectStartDialog(QDialog):
 
         # Result state
         self._open_existing_path: str = ""
+        self._suppress_edit_clear: bool = False
 
         self.setWindowTitle("Report Studio — Project Setup")
         self.setMinimumWidth(560)
@@ -282,25 +283,31 @@ class ProjectStartDialog(QDialog):
         if not text or text.startswith("—"):
             return
         # Recent entries stored as absolute project paths
-        if os.path.isdir(text):
-            pj = os.path.join(text, "project.json")
-            if os.path.isfile(pj):
-                self._open_existing_path = text
-                self._open_path_label.setText(text)
-                self._name_edit.clear()
-                self._base_dir_edit.clear()
-                self._resolved_label.setText("")
-                return
-        # Fallback: try "name — base" format
-        if " — " in text:
-            name, base = text.split(" — ", 1)
-            self._name_edit.setText(name.strip())
-            self._base_dir_edit.setText(base.strip())
-            self._open_existing_path = ""
-            self._open_path_label.setText("")
+        self._suppress_edit_clear = True
+        try:
+            if os.path.isdir(text):
+                pj = os.path.join(text, "project.json")
+                if os.path.isfile(pj):
+                    self._open_existing_path = text
+                    self._open_path_label.setText(text)
+                    self._name_edit.clear()
+                    self._base_dir_edit.clear()
+                    self._resolved_label.setText("")
+                    return
+            # Fallback: try "name — base" format
+            if " — " in text:
+                name, base = text.split(" — ", 1)
+                self._name_edit.setText(name.strip())
+                self._base_dir_edit.setText(base.strip())
+                self._open_existing_path = ""
+                self._open_path_label.setText("")
+        finally:
+            self._suppress_edit_clear = False
 
     def _on_new_project_edited(self) -> None:
         """User typed in new-project fields — clear open-existing selection."""
+        if self._suppress_edit_clear:
+            return
         if self._name_edit.text().strip() or self._base_dir_edit.text().strip():
             self._open_existing_path = ""
             self._open_path_label.setText("")
@@ -401,14 +408,18 @@ class ProjectStartDialog(QDialog):
         last_pkl = s.value(KEY_LAST_PKL, "")
         last_npz = s.value(KEY_LAST_NPZ, "")
 
-        if last_base:
-            self._base_dir_edit.setText(str(last_base))
-        if last_name:
-            self._name_edit.setText(str(last_name))
-        if last_pkl:
-            self._pkl_edit.setText(str(last_pkl))
-        if last_npz:
-            self._npz_edit.setText(str(last_npz))
+        self._suppress_edit_clear = True
+        try:
+            if last_base:
+                self._base_dir_edit.setText(str(last_base))
+            if last_name:
+                self._name_edit.setText(str(last_name))
+            if last_pkl:
+                self._pkl_edit.setText(str(last_pkl))
+            if last_npz:
+                self._npz_edit.setText(str(last_npz))
+        finally:
+            self._suppress_edit_clear = False
 
         # Populate recent projects
         recent = s.value(KEY_RECENT_PROJECTS, [])

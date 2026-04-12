@@ -40,7 +40,11 @@ class FileActionsMixin:
         if not pkl_path:
             return
 
-        # Store paths for v4 project save + QSettings
+        # Store paths on current sheet + QSettings
+        sheet = self._current_sheet()
+        if sheet:
+            sheet.pkl_path = pkl_path
+            sheet.npz_path = npz_path
         self._pkl_path = pkl_path
         self._npz_path = npz_path
         from ..panels.project_start_dialog import save_data_paths
@@ -121,77 +125,191 @@ class FileActionsMixin:
             canvas.export_image(dlg.path, dpi=dlg.dpi)
             self.statusBar().showMessage(f"Exported to {dlg.path}")
 
-    def _on_save_project(self):
-        """Save all sheets — reuse existing path or prompt."""
-        if self._project_path:
-            self._save_to_path(self._project_path)
-        else:
-            self._on_save_project_as()
+    # ── Sheet Save / Load ─────────────────────────────────────────────
 
-    def _on_save_project_as(self):
-        """Save all sheets to a new project directory (v4 format)."""
+    def _ensure_project_path(self) -> str:
+        """Ensure we have a project directory. Prompt if needed."""
+        if self._project_path:
+            return self._project_path
         from ...qt_compat import QtWidgets
-        # Ask for base directory
         base = QtWidgets.QFileDialog.getExistingDirectory(
-            self, "Choose Base Directory for Project",
+            self, "Choose Project Directory",
         )
         if not base:
-            return
-        # Ask for project name
+            return ""
         name, ok = QtWidgets.QInputDialog.getText(
             self, "Project Name", "Enter project name:",
         )
         if not ok or not name.strip():
-            return
+            return ""
         import os
         project_dir = os.path.join(base, name.strip())
         os.makedirs(os.path.join(project_dir, "sheets"), exist_ok=True)
         os.makedirs(os.path.join(project_dir, "session"), exist_ok=True)
-        self._save_to_path(project_dir)
 
-        # Add to recent projects
+        # Create minimal project.json
+        from ...io.project_v4 import create_project
+        pkl = getattr(self, "_pkl_path", "")
+        npz = getattr(self, "_npz_path", "")
+        create_project(project_dir, name.strip(), pkl, npz)
+
+        self._project_path = project_dir
+
         from ..panels.project_start_dialog import add_recent_project
         add_recent_project(project_dir)
+        if hasattr(self, "_refresh_recent_menu"):
+            self._refresh_recent_menu()
+        return project_dir
 
-    def _save_to_path(self, path: str):
+    def _on_save_sheet(self):
+        """Save current sheet (reuse existing name or prompt)."""
+        sheet = self._current_sheet()
+        if not sheet:
+            return
+        project_dir = self._ensure_project_path()
+        if not project_dir:
+            return
+        self._save_sheet_to_project(project_dir, sheet, sheet.name)
+
+    def _on_save_sheet_as(self):
+        """Save current sheet with a new name."""
         from ...qt_compat import QtWidgets
-        import os
+        sheet = self._current_sheet()
+        if not sheet:
+            return
+        project_dir = self._ensure_project_path()
+        if not project_dir:
+            return
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "Save Sheet As", "Sheet name:", text=sheet.name,
+        )
+        if not ok or not name.strip():
+            return
+        self._save_sheet_to_project(project_dir, sheet, name.strip())
 
+    def _save_sheet_to_project(self, project_dir: str, sheet, name: str):
+        """Save a sheet to the project directory."""
+        from ...qt_compat import QtWidgets
         try:
-            # Detect if path is a directory (v4) or file (legacy v3)
-            if os.path.isfile(path) and path.endswith(".json"):
-                # Legacy save to single JSON file
-                from ...io.project import save_project
-                save_project(self._sheets, path)
-            else:
-                # New v4 directory-based save
-                from ...io.project_v4 import save_project, compute_fingerprint
-                from ...core.models import OffsetCurve
-
-                pkl = getattr(self, "_pkl_path", "")
-                npz = getattr(self, "_npz_path", "")
-                all_curves = []
-                for s in self._sheets:
-                    all_curves.extend(s.curves.values())
-                fp = compute_fingerprint(all_curves)
-
-                save_project(path, self._sheets,
-                             pkl_path=pkl, npz_path=npz,
-                             fingerprint=fp)
-
-            self._project_path = path
+            from ...io.project_v4 import save_sheet_manifest
+            save_sheet_manifest(project_dir, sheet, sheet_name=name)
             self._mark_clean()
-            self.statusBar().showMessage(f"Project saved to {path}")
-
-            # Update recent projects
-            from ..panels.project_start_dialog import add_recent_project
-            add_recent_project(path)
-            if hasattr(self, "_refresh_recent_menu"):
-                self._refresh_recent_menu()
+            self.statusBar().showMessage(f"Sheet saved: {name}")
         except Exception as e:
             QtWidgets.QMessageBox.warning(
-                self, "Save Error", f"Failed to save project:\n{e}"
+                self, "Save Error", f"Failed to save sheet:\n{e}"
             )
+
+    def _on_load_sheet(self):
+        """Load a sheet from the project's sheets/ directory."""
+        from ...qt_compat import QtWidgets
+
+        project_dir = self._project_path
+        if not project_dir:
+            # Let user pick a project folder
+            d = QtWidgets.QFileDialog.getExistingDirectory(
+                self, "Select Project Directory",
+            )
+            if not d:
+                return
+            import os
+            if not os.path.isfile(os.path.join(d, "project.json")):
+                QtWidgets.QMessageBox.warning(
+                    self, "Not a Project",
+                    f"No project.json found in:\n{d}",
+                )
+                return
+            project_dir = d
+            self._project_path = d
+
+        from ...io.project_v4 import list_sheets
+        sheets = list_sheets(project_dir)
+        if not sheets:
+            QtWidgets.QMessageBox.information(
+                self, "Load Sheet", "No saved sheets found in this project.",
+            )
+            return
+
+        names = [n for n, _ in sheets]
+        choice, ok = QtWidgets.QInputDialog.getItem(
+            self, "Load Sheet", "Select sheet:", names, editable=False,
+        )
+        if not ok:
+            return
+
+        for n, folder in sheets:
+            if n == choice:
+                self._load_sheet_from_folder(folder)
+                break
+
+    def _load_sheet_from_folder(self, sheet_folder: str):
+        """Load a sheet from its manifest folder, re-reading data."""
+        from ...qt_compat import QtWidgets
+        from ...io.project_v4 import (
+            load_sheet_manifest, reload_and_apply, compute_fingerprint,
+        )
+        from ...io.pkl_reader import read_pkl
+        from ...io.spectrum_reader import read_spectrum_npz
+
+        try:
+            sheet, curve_settings, data_sources = load_sheet_manifest(sheet_folder)
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self, "Load Error", f"Failed to read sheet:\n{e}",
+            )
+            return
+
+        pkl_path = data_sources.get("pkl_path", "")
+        npz_path = data_sources.get("npz_path", "")
+        saved_fp = data_sources.get("fingerprint", "")
+
+        curves, spectra = [], []
+        if pkl_path:
+            try:
+                curves = read_pkl(pkl_path)
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(
+                    self, "Data Warning",
+                    f"Could not reload session file:\n{pkl_path}\n{e}",
+                )
+        if npz_path:
+            try:
+                spectra = read_spectrum_npz(npz_path)
+            except Exception:
+                pass
+
+        # Validate fingerprint
+        if saved_fp and curves:
+            current_fp = compute_fingerprint(curves)
+            if current_fp != saved_fp:
+                QtWidgets.QMessageBox.information(
+                    self, "Data Changed",
+                    "Source data files appear to have changed since "
+                    "the sheet was saved. Settings will be applied "
+                    "but results may differ.",
+                )
+
+        # Apply data to sheet skeleton
+        if curves:
+            reload_and_apply(sheet, curve_settings, curves, spectra)
+
+        # Store paths on sheet
+        sheet.pkl_path = pkl_path
+        sheet.npz_path = npz_path
+
+        # Add as new tab
+        from ..canvas.plot_canvas import PlotCanvas
+        idx = self._add_sheet_with_state(sheet)
+        self.sheet_tabs.setCurrentIndex(idx)
+        self.data_tree.populate(sheet)
+        if hasattr(self, "right_panel"):
+            self.right_panel.populate_global(sheet)
+            pkeys, pnames = sheet.populated_subplot_info()
+            self.right_panel.update_subplot_list(pkeys, pnames)
+        self._render_current()
+        self.statusBar().showMessage(f"Sheet loaded: {sheet.name}")
+
+    # ── Legacy project load (kept for backward compat) ────────────────
 
     def _on_load_project(self):
         """Load a project — browse for a project directory."""
@@ -305,6 +423,8 @@ class FileActionsMixin:
         from ..canvas.plot_canvas import PlotCanvas
         for sheet, curve_settings in sheet_skeletons:
             reload_and_apply(sheet, curve_settings, curves, spectra)
+            sheet.pkl_path = pkl_path
+            sheet.npz_path = npz_path
             self._sheets.append(sheet)
             canvas = PlotCanvas()
             canvas.curve_clicked.connect(self._on_curve_selected)
