@@ -1,6 +1,7 @@
 """Subplot properties panel -- per-subplot axis, grid, scale, spectrum background.
 
-Shown in the right panel when a subplot is selected in the DataTree.
+Shown in the context zone (top of the right panel) when a subplot is selected.
+Includes "Apply to All Subplots" and "Reset to Global" buttons.
 """
 from __future__ import annotations
 
@@ -8,6 +9,7 @@ from ..qt_compat import QtWidgets, Signal
 
 QWidget = QtWidgets.QWidget
 QVBoxLayout = QtWidgets.QVBoxLayout
+QHBoxLayout = QtWidgets.QHBoxLayout
 QFormLayout = QtWidgets.QFormLayout
 QGroupBox = QtWidgets.QGroupBox
 QLineEdit = QtWidgets.QLineEdit
@@ -15,6 +17,7 @@ QDoubleSpinBox = QtWidgets.QDoubleSpinBox
 QSpinBox = QtWidgets.QSpinBox
 QCheckBox = QtWidgets.QCheckBox
 QComboBox = QtWidgets.QComboBox
+QPushButton = QtWidgets.QPushButton
 
 from ..figure_model import SubplotModel
 
@@ -23,6 +26,8 @@ class SubplotPropsPanel(QWidget):
     """Per-subplot properties: axis limits, scale, labels, grid, spectrum background."""
 
     changed = Signal()
+    apply_all_requested = Signal()
+    reset_to_global_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -30,6 +35,26 @@ class SubplotPropsPanel(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
+
+        # -- Action buttons --
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
+
+        self._apply_all_btn = QPushButton("Apply to All Subplots")
+        self._apply_all_btn.setToolTip(
+            "Copy this subplot's settings to every other subplot"
+        )
+        self._apply_all_btn.clicked.connect(self.apply_all_requested)
+        btn_row.addWidget(self._apply_all_btn)
+
+        self._reset_btn = QPushButton("Reset to Global")
+        self._reset_btn.setToolTip(
+            "Reset axis/legend settings to match global defaults"
+        )
+        self._reset_btn.clicked.connect(self.reset_to_global_requested)
+        btn_row.addWidget(self._reset_btn)
+
+        layout.addLayout(btn_row)
 
         # -- Title --
         title_group = QGroupBox("Subplot")

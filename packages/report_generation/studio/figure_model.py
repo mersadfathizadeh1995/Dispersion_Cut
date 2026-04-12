@@ -4,12 +4,38 @@ Hierarchical model: FigureModel -> SubplotModel -> DataSeries.
 This replaces the flat "pick one plot type" approach with a composable
 figure where users can assign data series to subplots, move them around,
 and control per-series and per-subplot styling independently.
+
+Sub-layers: each DataSeries can optionally have a SpectrumLayer and/or
+NearFieldLayer that control per-offset spectrum background and NF markers.
 """
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional, List
+
+
+@dataclass
+class SpectrumLayer:
+    """Per-series spectrum background configuration."""
+    visible: bool = False
+    colormap: str = "viridis"
+    render_mode: str = "imshow"
+    alpha: float = 0.8
+    levels: int = 30
+    show_colorbar: bool = False
+    colorbar_orientation: str = "vertical"
+
+
+@dataclass
+class NearFieldLayer:
+    """Per-series near-field effect overlay configuration."""
+    visible: bool = False
+    style: str = "faded"
+    alpha: float = 0.4
+    nacd_threshold: float = 1.0
+    farfield_color: str = "blue"
+    nearfield_color: str = "red"
 
 
 @dataclass
@@ -29,6 +55,9 @@ class DataSeries:
     marker_size: Optional[float] = None
     alpha: float = 1.0
     legend_label: Optional[str] = None
+    # Sub-layers
+    spectrum: SpectrumLayer = field(default_factory=SpectrumLayer)
+    near_field: NearFieldLayer = field(default_factory=NearFieldLayer)
 
     def __post_init__(self):
         if not self.uid:
@@ -131,3 +160,20 @@ class FigureModel:
                 self.subplots.pop(i)
                 return True
         return False
+
+    def resize_grid(self, new_rows: int, new_cols: int) -> None:
+        """Resize the subplot grid, creating missing slots and removing overflow."""
+        self.layout_rows = max(new_rows, 1)
+        self.layout_cols = max(new_cols, 1)
+        # Create missing subplot slots
+        for r in range(self.layout_rows):
+            for c in range(self.layout_cols):
+                if not any(sp.row == r and sp.col == c for sp in self.subplots):
+                    self.add_subplot(title=f"({r+1},{c+1})", row=r, col=c)
+        # Remove out-of-bounds subplots and their data
+        overflow = [
+            sp for sp in self.subplots
+            if sp.row >= self.layout_rows or sp.col >= self.layout_cols
+        ]
+        for sp in overflow:
+            self.remove_subplot(sp.key)

@@ -15,7 +15,7 @@ from .qt_compat import (
     QtWidgets, QtCore,
     Horizontal, ScrollBarAlwaysOff,
     QAction, QKeySequence,
-    MsgBoxYes, MsgBoxNo,
+    MsgBoxYes, MsgBoxNo, DialogAccepted,
 )
 
 QMainWindow = QtWidgets.QMainWindow
@@ -45,6 +45,7 @@ from .preset_builder import build_from_preset
 from .canvas_view import CanvasView
 from .renderer import StudioRenderer
 from .composable_renderer import ComposableRenderer
+from .project_dialog import StudioProjectDialog
 from .panels.plot_selector import PlotSelector
 from .panels.data_tree import DataTree
 from .panels.properties_router import PropertiesRouter
@@ -55,6 +56,8 @@ from .panels.legend_panel import LegendPanel
 from .panels.layers_panel import LayersPanel
 from .panels.export_panel import ExportPanel
 from .panels.spectrum_theme_panel import SpectrumThemePanel
+from .panels.style_panel import StylePanel
+from .panels.axis_legend_panel import AxisLegendPanel
 from .panels.plot_settings.frequency_settings import FrequencySettings
 from .panels.plot_settings.wavelength_settings import WavelengthSettings
 from .panels.plot_settings.nearfield_settings import NearFieldSettings
@@ -87,10 +90,36 @@ class ReportStudioWindow(QMainWindow):
         super().__init__(parent)
         self._controller = controller
         self._settings = ReportStudioSettings()
-        self._generator = ReportGenerator.from_controller(controller)
+        self._project_dir = ""
+
+        # Show project dialog before initializing
+        dlg = StudioProjectDialog(controller=controller, parent=parent)
+        if dlg.exec() != DialogAccepted:
+            # User cancelled; schedule close after event loop starts
+            QTimer.singleShot(0, self.close)
+            self._generator = None
+            self._renderer = None
+            self._composable_renderer = None
+            return
+
+        # Determine data source
+        if dlg.use_controller:
+            self._generator = ReportGenerator.from_controller(controller)
+        else:
+            self._generator = self._load_generator_from_files(
+                dlg.pkl_path, dlg.npz_path,
+            )
+            if self._generator is None:
+                QTimer.singleShot(0, self.close)
+                self._renderer = None
+                self._composable_renderer = None
+                return
+
         self._renderer = StudioRenderer(self._generator)
         self._composable_renderer = ComposableRenderer(self._generator)
-        self._project_dir = ""
+
+        # Store project dir to apply after UI build
+        self._pending_project_dir = dlg.project_dir or ""
 
         self._render_timer = QTimer(self)
         self._render_timer.setSingleShot(True)
@@ -106,8 +135,84 @@ class ReportStudioWindow(QMainWindow):
         self._register_plot_settings()
         self._init_panels()
 
+        # Apply project directory now that UI is ready
+        if self._pending_project_dir:
+            self._set_project_dir(self._pending_project_dir)
+        del self._pending_project_dir
+
         QTimer.singleShot(200, self._do_render)
-        QTimer.singleShot(400, self._prompt_project_dir)
+        # Try restoring previous session sheets
+        QTimer.singleShot(400, self._try_restore_session_quiet)
+
+    def _try_restore_session_quiet(self) -> None:
+        """Attempt session restore without prompting if no sheets found."""
+        try:
+            self._try_restore_session()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _load_generator_from_files(
+        pkl_path: str, npz_path: str = "",
+    ) -> "ReportGenerator | None":
+        """Load a ReportGenerator from saved session (.pkl) and optional .npz.
+
+        Returns None on failure.
+        """
+        import numpy as np
+        from dc_cut.core.io.state import load_session
+
+        try:
+            state = load_session(pkl_path)
+        except Exception as e:
+            QMessageBox.critical(
+                None, "Load Error",
+                f"Failed to load session file:\n{e}",
+            )
+            return None
+
+        vel = [np.asarray(a, float) for a in state.get("velocity_arrays", [])]
+        freq = [np.asarray(a, float) for a in state.get("frequency_arrays", [])]
+        wave = [np.asarray(a, float) for a in state.get("wavelength_arrays", [])]
+        labels = list(state.get("set_leg", [f"Layer {i+1}" for i in range(len(vel))]))
+
+        if not vel:
+            QMessageBox.critical(
+                None, "Load Error",
+                "Session file contains no data arrays.",
+            )
+            return None
+
+        # Load spectrum if provided
+        spectrum_data_list = None
+        if npz_path and os.path.isfile(npz_path):
+            try:
+                from dc_cut.core.io.spectrum import load_combined_spectrum_npz
+                spec_dict = load_combined_spectrum_npz(npz_path)
+                # Convert offset-keyed dict to ordered list matching labels
+                spectrum_data_list = []
+                for lbl in labels[:len(vel)]:
+                    matched = spec_dict.get(lbl)
+                    if matched is None:
+                        # Try matching without 'm' suffix, etc.
+                        for k, v in spec_dict.items():
+                            if k.strip("m ") == lbl.strip("m "):
+                                matched = v
+                                break
+                    spectrum_data_list.append(matched)
+            except Exception:
+                spectrum_data_list = None
+
+        gen = ReportGenerator.from_arrays(
+            velocity_arrays=vel,
+            frequency_arrays=freq,
+            wavelength_arrays=wave,
+            layer_labels=labels[:len(vel)],
+        )
+        if spectrum_data_list:
+            gen.spectrum_data_list = spectrum_data_list
+            gen.spectrum_visible_flags = [s is not None for s in spectrum_data_list]
+        return gen
 
     # ── UI construction ───────────────────────────────────────────
 
@@ -178,13 +283,14 @@ class ReportStudioWindow(QMainWindow):
         self._layers_panel = LayersPanel()
         self._export_panel = ExportPanel()
 
+        # Merged composite panels
+        self._style_panel = StylePanel(self._typography_panel, self._spectrum_panel)
+        self._axis_legend_panel = AxisLegendPanel(self._axis_panel, self._legend_panel)
+
         for panel, label in [
             (self._figure_panel, "Figure"),
-            (self._typography_panel, "Typography"),
-            (self._axis_panel, "Axis"),
-            (self._legend_panel, "Legend"),
-            (self._spectrum_panel, "Spectrum"),
-            (self._layers_panel, "Layers"),
+            (self._style_panel, "Style"),
+            (self._axis_legend_panel, "Axis && Legend"),
             (self._export_panel, "Export"),
         ]:
             scroll = QScrollArea()
@@ -212,11 +318,9 @@ class ReportStudioWindow(QMainWindow):
 
         # Connect shared panel signals
         self._figure_panel.changed.connect(self._schedule_render)
-        self._typography_panel.changed.connect(self._schedule_render)
-        self._typography_panel.preset_requested.connect(self._apply_preset)
-        self._axis_panel.changed.connect(self._schedule_render)
-        self._legend_panel.changed.connect(self._schedule_render)
-        self._spectrum_panel.changed.connect(self._schedule_render)
+        self._style_panel.changed.connect(self._schedule_render)
+        self._style_panel.preset_requested.connect(self._apply_preset)
+        self._axis_legend_panel.changed.connect(self._schedule_render)
         self._layers_panel.visibility_changed.connect(self._on_layers_changed)
         self._export_panel.export_requested.connect(self._do_export)
         self._export_panel.batch_requested.connect(self._do_batch_export)
@@ -253,6 +357,12 @@ class ReportStudioWindow(QMainWindow):
         export_act.setShortcut(QKeySequence("Ctrl+E"))
         export_act.triggered.connect(self._show_export_tab)
         file_menu.addAction(export_act)
+
+        file_menu.addSeparator()
+
+        chg_project_act = QAction("Change Project Directory...", self)
+        chg_project_act.triggered.connect(self._prompt_project_dir)
+        file_menu.addAction(chg_project_act)
 
         file_menu.addSeparator()
 
@@ -353,6 +463,11 @@ class ReportStudioWindow(QMainWindow):
             model = self._settings.figure_model
             if self._settings.committed and isinstance(model, FigureModel):
                 self._composable_renderer.render(model, self._settings, fig)
+            elif self._should_use_live_grid_preview():
+                temp_model = self._build_live_grid_model()
+                self._composable_renderer.render(
+                    temp_model, self._settings, fig,
+                )
             else:
                 extra_kw = self._build_extra_kwargs()
                 self._renderer.render(
@@ -415,6 +530,31 @@ class ReportStudioWindow(QMainWindow):
             return self._nf_settings.offset_index
         return 0
 
+    def _should_use_live_grid_preview(self) -> bool:
+        """Check if the offset settings configure a multi-offset grid."""
+        key = self._settings.active_plot_type
+        if key not in _OFFSET_KEYS:
+            return False
+        selected = self._offset_settings.get_selected_indices()
+        if len(selected) < 2:
+            return False
+        rows = self._offset_settings.grid_rows
+        cols = self._offset_settings.grid_cols
+        return (rows is not None and rows > 1) or (cols is not None and cols > 1)
+
+    def _build_live_grid_model(self) -> FigureModel:
+        """Build a temporary FigureModel from offset settings for live preview."""
+        plot_type = self._settings.active_plot_type
+        return build_from_preset(
+            plot_type,
+            self._generator,
+            self._settings,
+            offset_indices=self._offset_settings.get_selected_indices() or [0],
+            grid_rows=self._offset_settings.grid_rows,
+            grid_cols=self._offset_settings.grid_cols,
+            assignment_map=self._offset_settings.get_assignment_map(),
+        )
+
     # ── Slots ─────────────────────────────────────────────────────
 
     def _show_export_tab(self) -> None:
@@ -442,6 +582,7 @@ class ReportStudioWindow(QMainWindow):
             extra["offset_indices"] = self._offset_settings.get_selected_indices() or [0]
             extra["grid_rows"] = self._offset_settings.grid_rows
             extra["grid_cols"] = self._offset_settings.grid_cols
+            extra["assignment_map"] = self._offset_settings.get_assignment_map()
         elif plot_type in {"offset_grid", "nacd_grid"}:
             extra["offset_indices"] = self._grid_settings.get_selected_indices()
             extra["grid_rows"] = self._grid_settings.grid_rows
@@ -453,6 +594,12 @@ class ReportStudioWindow(QMainWindow):
         self._settings.figure_model = model
         self._properties_router.set_model(model)
         self._data_tree.populate(model)
+        # Set spectrum availability based on generator data
+        if hasattr(self._generator, "spectrum_data_list"):
+            flags = [
+                d is not None for d in self._generator.spectrum_data_list
+            ]
+            self._data_tree.set_spectrum_availability(flags)
         self._left_stack.setCurrentIndex(1)
         self._schedule_render()
         self._status.showMessage(f"Committed: {plot_type}", 3000)
@@ -639,21 +786,13 @@ class ReportStudioWindow(QMainWindow):
     # ── Project directory ───────────────────────────────────────
 
     def _prompt_project_dir(self) -> None:
-        """Ask the user for a project directory if none is set."""
-        if self._project_dir:
-            return
-        reply = QMessageBox.question(
-            self, "Report Studio",
-            "Would you like to select a project directory?\n\n"
-            "This enables auto-save, sheet persistence, and organized output.",
-            MsgBoxYes | MsgBoxNo,
+        """Allow user to change the project directory via file dialog."""
+        d = QFileDialog.getExistingDirectory(
+            self, "Select Project Directory",
+            self._project_dir or "",
         )
-        if reply == MsgBoxYes:
-            d = QFileDialog.getExistingDirectory(
-                self, "Select Project Directory",
-            )
-            if d:
-                self._set_project_dir(d)
+        if d:
+            self._set_project_dir(d)
 
     def _set_project_dir(self, path: str) -> None:
         self._project_dir = path
@@ -723,7 +862,8 @@ class ReportStudioWindow(QMainWindow):
             return False
 
     def closeEvent(self, event) -> None:
-        self._auto_save_session()
+        if self._generator is not None:
+            self._auto_save_session()
         super().closeEvent(event)
 
     # ── Config persistence ────────────────────────────────────────

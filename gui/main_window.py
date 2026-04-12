@@ -492,15 +492,14 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open preferences:\n{e}")
 
     def _show_report_dialog(self):
-        """Open the Report Studio window."""
+        """Open the Report Studio v2 window."""
         try:
-            from dc_cut.packages.report_generation.studio import ReportStudioWindow
-            win = ReportStudioWindow(self.controller, parent=self)
+            from dc_cut.packages.report_studio.app import launch_studio
+            win = launch_studio(controller=self.controller, parent=self)
             try:
                 win.setAttribute(QtCore.Qt.WA_DeleteOnClose)
             except AttributeError:
                 win.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
-            win.show()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open Report Studio:\n{e}")
 

@@ -3,6 +3,9 @@
 Unlike the preset StudioRenderer that calls monolithic generator methods,
 this renderer iterates over the FigureModel's subplots and data series,
 drawing each individually with full per-series style control.
+
+Spectrum and near-field layers are controlled per-DataSeries via
+``ds.spectrum`` and ``ds.near_field`` layer objects.
 """
 from __future__ import annotations
 
@@ -18,7 +21,13 @@ from ..styling import (
     get_color_palette,
     apply_legend,
 )
-from .figure_model import FigureModel, SubplotModel, DataSeries
+from .figure_model import (
+    FigureModel,
+    SubplotModel,
+    DataSeries,
+    SpectrumLayer,
+    NearFieldLayer,
+)
 from .models import ReportStudioSettings
 
 
@@ -58,7 +67,31 @@ class ComposableRenderer:
             series = model.series_for_subplot(sp.key)
             visible_series = [ds for ds in series if ds.visible]
 
-            if sp.show_spectrum:
+            if not visible_series and not sp.show_spectrum:
+                ax.set_xticks([])
+                ax.set_yticks([])
+                ax.text(
+                    0.5, 0.5,
+                    f"{sp.title or sp.key}\n(no data)",
+                    ha="center", va="center", transform=ax.transAxes,
+                    fontsize=11, color="#aaaaaa",
+                )
+                continue
+
+            # Per-series spectrum backgrounds (drawn first, below data)
+            for ds in visible_series:
+                if ds.spectrum.visible:
+                    self._draw_series_spectrum(ax, ds)
+
+            # Per-series near-field overlays
+            for ds in visible_series:
+                if ds.near_field.visible:
+                    self._draw_series_nearfield(ax, ds)
+
+            # Legacy: subplot-level spectrum (keep for backward compat)
+            if sp.show_spectrum and not any(
+                ds.spectrum.visible for ds in visible_series
+            ):
                 self._draw_spectrum_background(ax, sp, settings)
 
             palette = get_color_palette(config, max(len(visible_series), 1))
@@ -82,12 +115,20 @@ class ComposableRenderer:
                     except AttributeError:
                         pass
 
-        # Hide unused axes
+        # Show unused grid positions as labeled placeholders
+        occupied = {(sp.row, sp.col) for sp in model.subplots}
         for r in range(rows):
             for c in range(cols):
-                used = any(sp.row == r and sp.col == c for sp in model.subplots)
-                if not used:
-                    axes[r][c].set_visible(False)
+                if (r, c) not in occupied:
+                    ax = axes[r][c]
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+                    ax.text(
+                        0.5, 0.5,
+                        f"({r+1}, {c+1})\nEmpty",
+                        ha="center", va="center", transform=ax.transAxes,
+                        fontsize=11, color="#aaaaaa",
+                    )
 
         if settings.figure.tight_layout:
             try:
@@ -141,6 +182,116 @@ class ComposableRenderer:
                 alpha=alpha, label=label,
                 zorder=5,
             )
+
+    # ── Per-series spectrum ──────────────────────────────────────
+
+    def _draw_series_spectrum(self, ax, ds: DataSeries) -> None:
+        """Draw spectrum background for a single DataSeries."""
+        gen = self._gen
+        idx = ds.offset_index
+        if idx >= len(gen.spectrum_data_list):
+            return
+        spec_data = gen.spectrum_data_list[idx]
+        if spec_data is None:
+            return
+
+        spec_freqs = spec_data.get("frequencies", spec_data.get("freq"))
+        spec_vels = spec_data.get("velocities", spec_data.get("vel"))
+        spec_power = spec_data.get("power", spec_data.get("spectrum"))
+        if spec_freqs is None or spec_vels is None or spec_power is None:
+            return
+
+        sl = ds.spectrum
+        if sl.render_mode == "contour":
+            cf = ax.contourf(
+                spec_freqs, spec_vels, spec_power,
+                levels=sl.levels,
+                cmap=sl.colormap,
+                alpha=sl.alpha,
+                zorder=1,
+            )
+            if sl.show_colorbar:
+                try:
+                    ax.figure.colorbar(
+                        cf, ax=ax,
+                        orientation=sl.colorbar_orientation,
+                        label="Power",
+                        shrink=0.8,
+                    )
+                except Exception:
+                    pass
+        else:
+            extent = [
+                float(spec_freqs.min()), float(spec_freqs.max()),
+                float(spec_vels.min()), float(spec_vels.max()),
+            ]
+            im = ax.imshow(
+                spec_power, aspect="auto", origin="lower",
+                extent=extent,
+                cmap=sl.colormap,
+                alpha=sl.alpha,
+                zorder=1,
+            )
+            if sl.show_colorbar:
+                try:
+                    ax.figure.colorbar(
+                        im, ax=ax,
+                        orientation=sl.colorbar_orientation,
+                        label="Power",
+                        shrink=0.8,
+                    )
+                except Exception:
+                    pass
+
+    # ── Per-series near-field ────────────────────────────────────
+
+    def _draw_series_nearfield(self, ax, ds: DataSeries) -> None:
+        """Draw near-field effect overlay for a single DataSeries."""
+        gen = self._gen
+        idx = ds.offset_index
+        if idx >= len(gen.frequency_arrays) or idx >= len(gen.velocity_arrays):
+            return
+
+        freq = gen.frequency_arrays[idx].copy()
+        vel = gen.velocity_arrays[idx].copy()
+
+        if ds.point_mask is not None:
+            mask = np.array(ds.point_mask[:len(freq)])
+            freq = np.where(mask, freq, np.nan)
+            vel = np.where(mask, vel, np.nan)
+
+        nf = ds.near_field
+        wl = vel / np.where(freq > 0, freq, np.nan)
+        offset_m = ds.offset_index  # placeholder
+        nacd = wl / max(offset_m, 0.001)
+
+        ff_mask = nacd >= nf.nacd_threshold
+        nf_mask = ~ff_mask
+
+        if nf.style == "colored":
+            ax.scatter(freq[ff_mask], vel[ff_mask],
+                       color=nf.farfield_color, alpha=nf.alpha,
+                       s=10, zorder=3, edgecolors="none")
+            ax.scatter(freq[nf_mask], vel[nf_mask],
+                       color=nf.nearfield_color, alpha=nf.alpha,
+                       s=10, zorder=3, edgecolors="none")
+        elif nf.style == "faded":
+            ax.scatter(freq[ff_mask], vel[ff_mask],
+                       color=nf.farfield_color, alpha=nf.alpha,
+                       s=10, zorder=3, edgecolors="none")
+            ax.scatter(freq[nf_mask], vel[nf_mask],
+                       color=nf.nearfield_color, alpha=nf.alpha * 0.3,
+                       s=10, zorder=3, edgecolors="none")
+        elif nf.style == "markers":
+            ax.scatter(freq[nf_mask], vel[nf_mask],
+                       color=nf.nearfield_color, alpha=nf.alpha,
+                       s=40, marker="x", zorder=6, linewidths=1.0)
+        elif nf.style == "dashed":
+            ax.plot(freq[nf_mask], vel[nf_mask],
+                    color=nf.nearfield_color, linestyle="--",
+                    alpha=nf.alpha, linewidth=1.0, zorder=3)
+
+    # ── Legacy subplot-level spectrum (backward compat) ──────────
 
     def _draw_spectrum_background(
         self,

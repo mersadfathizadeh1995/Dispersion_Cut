@@ -142,3 +142,29 @@ try:
     MsgBoxNo = _QMB.No
 except AttributeError:
     MsgBoxNo = _QMB.StandardButton.No
+
+# QDialog result codes
+_QDlg = QtWidgets.QDialog
+try:
+    DialogAccepted = _QDlg.Accepted
+except AttributeError:
+    DialogAccepted = _QDlg.DialogCode.Accepted
+
+# QEvent types for canvas_view wheel zoom
+_QEv = QtCore.QEvent
+try:
+    WheelEvent = _QEv.Wheel
+except AttributeError:
+    WheelEvent = _QEv.Type.Wheel
+
+# SizePolicy for layout
+_QSP = QtWidgets.QSizePolicy
+try:
+    PolicyMinimum = _QSP.Minimum
+except AttributeError:
+    PolicyMinimum = _QSP.Policy.Minimum
+
+try:
+    PolicyPreferred = _QSP.Preferred
+except AttributeError:
+    PolicyPreferred = _QSP.Policy.Preferred

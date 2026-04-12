@@ -22,6 +22,7 @@ def build_from_preset(
     offset_indices: Optional[List[int]] = None,
     grid_rows: Optional[int] = None,
     grid_cols: Optional[int] = None,
+    assignment_map: Optional[dict] = None,
 ) -> FigureModel:
     """Convert a plot type key into a FigureModel.
 
@@ -64,11 +65,13 @@ def build_from_preset(
     elif plot_type in ("offset_curve_only", "offset_with_spectrum", "offset_spectrum_only"):
         indices = offset_indices or [0]
         return _multi_offset(plot_type, indices, labels, generator,
-                             grid_rows=grid_rows, grid_cols=grid_cols)
+                             grid_rows=grid_rows, grid_cols=grid_cols,
+                             assignment_map=assignment_map)
     elif plot_type == "offset_grid":
         indices = offset_indices or settings.grid_offset_indices or active_indices
         return _offset_grid(indices, labels, generator,
-                            grid_rows=grid_rows, grid_cols=grid_cols)
+                            grid_rows=grid_rows, grid_cols=grid_cols,
+                            assignment_map=assignment_map)
     elif plot_type in ("nacd_curve",):
         return _single_subplot_all_active(
             plot_type, labels, active_indices, title="NACD Curve",
@@ -196,6 +199,7 @@ def _multi_offset(
     *,
     grid_rows: Optional[int] = None,
     grid_cols: Optional[int] = None,
+    assignment_map: Optional[dict] = None,
 ) -> FigureModel:
     """Handle offset plot types with one or many selected offsets.
 
@@ -212,7 +216,7 @@ def _multi_offset(
     if n > 1 and want_grid:
         return _offset_grid(indices, labels, generator,
                             grid_rows=grid_rows, grid_cols=grid_cols,
-                            preset=plot_type)
+                            preset=plot_type, assignment_map=assignment_map)
 
     # Single subplot with all selected offsets as separate series
     model = FigureModel(layout_rows=1, layout_cols=1, preset_origin=plot_type)
@@ -244,6 +248,7 @@ def _offset_grid(
     grid_rows: Optional[int] = None,
     grid_cols: Optional[int] = None,
     preset: str = "offset_grid",
+    assignment_map: Optional[dict] = None,
 ) -> FigureModel:
     n = len(indices)
     if grid_cols and grid_cols > 0:
@@ -255,17 +260,41 @@ def _offset_grid(
     else:
         rows = math.ceil(n / cols) if cols else 1
     model = FigureModel(layout_rows=rows, layout_cols=cols, preset_origin=preset)
+
+    # Pre-create all subplot positions
+    subplot_map: dict = {}  # (row, col) -> SubplotModel
+    for r in range(rows):
+        for c in range(cols):
+            sp = model.add_subplot(title="", row=r, col=c)
+            subplot_map[(r, c)] = sp
+
     for i, idx in enumerate(indices):
-        r, c = divmod(i, cols)
-        if r >= rows:
-            break
         lbl = labels[idx] if idx < len(labels) else f"Offset {idx}"
         title = f"{title_prefix} {lbl}".strip() if title_prefix else lbl
-        sp = model.add_subplot(title=title, row=r, col=c)
+
+        # Determine target position from assignment map or sequential
+        if assignment_map and idx in assignment_map:
+            r, c = assignment_map[idx]
+        else:
+            r, c = divmod(i, cols)
+        if r >= rows or c >= cols:
+            continue
+
+        sp = subplot_map.get((r, c))
+        if sp is None:
+            continue
+
+        # Append to subplot title if multiple offsets share it
+        if sp.title and sp.title != title:
+            sp.title += f", {lbl}"
+        else:
+            sp.title = title
+
         has_spec = (idx < len(generator.spectrum_data_list)
                     and generator.spectrum_data_list[idx] is not None)
         if has_spec:
             sp.show_spectrum = True
             sp.spectrum_offset_index = idx
         model.add_data_series(sp.key, idx, lbl)
+
     return model
