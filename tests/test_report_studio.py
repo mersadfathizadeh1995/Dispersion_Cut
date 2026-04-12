@@ -2478,3 +2478,430 @@ class TestV23SubplotDefaultValues:
             SubplotSettingsPanel)
         panel = SubplotSettingsPanel()
         assert panel._spin_legend_size.value() == 8
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.4 — Figure Type Registry
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestFigureTypeRegistry:
+    def test_registry_singleton(self):
+        from packages.report_studio.core.figure_types import registry
+        assert registry is not None
+
+    def test_register_and_get(self):
+        from packages.report_studio.core.figure_types import (
+            FigureTypeRegistry,
+        )
+
+        class DummyPlugin:
+            @property
+            def type_id(self):
+                return "dummy"
+            @property
+            def display_name(self):
+                return "Dummy"
+            @property
+            def accepted_subplot_types(self):
+                return ("combined",)
+            def load_data(self, **kwargs):
+                return {"curves": [], "spectra": []}
+            def settings_fields(self):
+                return []
+
+        reg = FigureTypeRegistry()
+        p = DummyPlugin()
+        reg.register(p)
+        assert reg.get("dummy") is p
+        assert reg.get("nonexistent") is None
+        assert "dummy" in reg.type_ids()
+        assert reg.display_names()["dummy"] == "Dummy"
+
+    def test_all_types(self):
+        from packages.report_studio.core.figure_types import (
+            FigureTypeRegistry,
+        )
+        reg = FigureTypeRegistry()
+        assert reg.all_types() == []
+
+
+class TestSourceOffsetPlugin:
+    def test_auto_registered(self):
+        from packages.report_studio.core.plugins import source_offset  # noqa: F401
+        from packages.report_studio.core.figure_types import registry
+        assert registry.get("source_offset") is not None
+
+    def test_plugin_properties(self):
+        from packages.report_studio.core.plugins.source_offset import (
+            SourceOffsetPlugin,
+        )
+        p = SourceOffsetPlugin()
+        assert p.type_id == "source_offset"
+        assert p.display_name == "Source Offset Curves"
+        assert "combined" in p.accepted_subplot_types
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="No test PKL")
+    def test_load_data_all_offsets(self):
+        from packages.report_studio.core.plugins.source_offset import (
+            SourceOffsetPlugin,
+        )
+        p = SourceOffsetPlugin()
+        result = p.load_data(pkl_path=str(PKL_PATH))
+        assert len(result["curves"]) > 0
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="No test PKL")
+    def test_load_data_selected_offsets(self):
+        from packages.report_studio.core.plugins.source_offset import (
+            SourceOffsetPlugin,
+        )
+        from packages.report_studio.io.pkl_reader import read_pkl_metadata
+        meta = read_pkl_metadata(PKL_PATH)
+        labels = meta["labels"]
+        p = SourceOffsetPlugin()
+        result = p.load_data(
+            pkl_path=str(PKL_PATH),
+            selected_offsets=labels[:2],
+        )
+        assert len(result["curves"]) == 2
+
+    @pytest.mark.skipif(
+        not (PKL_PATH.exists() and NPZ_PATH.exists()),
+        reason="No test data",
+    )
+    def test_load_data_with_spectra(self):
+        from packages.report_studio.core.plugins.source_offset import (
+            SourceOffsetPlugin,
+        )
+        p = SourceOffsetPlugin()
+        result = p.load_data(
+            pkl_path=str(PKL_PATH),
+            npz_path=str(NPZ_PATH),
+        )
+        assert len(result["spectra"]) > 0
+
+    def test_settings_fields(self):
+        from packages.report_studio.core.plugins.source_offset import (
+            SourceOffsetPlugin,
+        )
+        p = SourceOffsetPlugin()
+        fields = p.settings_fields()
+        assert isinstance(fields, list)
+        assert any(f["key"] == "x_domain" for f in fields)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.4 — Project Persistence v3
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestProjectV3:
+    def test_round_trip_v3_curve_fields(self):
+        """All v2.3 curve fields survive save → load."""
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+        from packages.report_studio.io.project import (
+            save_project, load_project,
+        )
+        sheet = SheetState(name="V3Test")
+        c = OffsetCurve(
+            name="test",
+            frequency=np.array([1.0, 2.0]),
+            velocity=np.array([100.0, 200.0]),
+            wavelength=np.array([100.0, 100.0]),
+            line_visible=False,
+            marker_visible=False,
+            peak_color="#FF0000",
+            peak_outline=True,
+            peak_outline_color="#00FF00",
+            peak_outline_width=2.5,
+            spectrum_cmap="viridis",
+            spectrum_alpha=0.5,
+            spectrum_colorbar=True,
+            spectrum_colorbar_orient="horizontal",
+            spectrum_colorbar_position="bottom",
+            spectrum_colorbar_label="Power",
+            line_style="--",
+            marker_style="s",
+        )
+        sheet.add_curve(c)
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w"
+        ) as f:
+            path = f.name
+
+        try:
+            save_project([sheet], path)
+            loaded = load_project(path)
+            assert len(loaded) == 1
+            lc = list(loaded[0].curves.values())[0]
+            assert lc.line_visible is False
+            assert lc.marker_visible is False
+            assert lc.peak_color == "#FF0000"
+            assert lc.peak_outline is True
+            assert lc.peak_outline_color == "#00FF00"
+            assert lc.peak_outline_width == 2.5
+            assert lc.spectrum_cmap == "viridis"
+            assert lc.spectrum_alpha == 0.5
+            assert lc.spectrum_colorbar is True
+            assert lc.spectrum_colorbar_orient == "horizontal"
+            assert lc.spectrum_colorbar_position == "bottom"
+            assert lc.spectrum_colorbar_label == "Power"
+            assert lc.line_style == "--"
+            assert lc.marker_style == "s"
+        finally:
+            os.unlink(path)
+
+    def test_round_trip_v3_subplot_fields(self):
+        """All subplot fields survive save → load."""
+        from packages.report_studio.core.models import (
+            SheetState, SubplotState,
+        )
+        from packages.report_studio.io.project import (
+            save_project, load_project,
+        )
+        sheet = SheetState(name="SubTest")
+        sp = sheet.subplots["main"]
+        sp.x_scale = "log"
+        sp.y_scale = "log"
+        sp.font_family = "Arial"
+        sp.title_font_size = 14
+        sp.axis_label_font_size = 11
+        sp.tick_label_font_size = 10
+        sp.x_tick_format = "sci"
+        sp.y_tick_format = "eng"
+        sp.x_label = "Freq"
+        sp.y_label = "Vel"
+        sp.legend_visible = False
+        sp.legend_position = "upper right"
+        sp.legend_font_size = 7
+        sp.legend_frame_on = False
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w"
+        ) as f:
+            path = f.name
+
+        try:
+            save_project([sheet], path)
+            loaded = load_project(path)
+            lsp = loaded[0].subplots["main"]
+            assert lsp.x_scale == "log"
+            assert lsp.y_scale == "log"
+            assert lsp.font_family == "Arial"
+            assert lsp.title_font_size == 14
+            assert lsp.x_tick_format == "sci"
+            assert lsp.x_label == "Freq"
+            assert lsp.legend_visible is False
+            assert lsp.legend_position == "upper right"
+        finally:
+            os.unlink(path)
+
+    def test_backward_compat_v2(self):
+        """A version-2 project loads fine (missing fields get defaults)."""
+        from packages.report_studio.io.project import load_project
+        v2_data = {
+            "version": 2,
+            "sheets": [{
+                "name": "OldSheet",
+                "curves": {},
+                "spectra": {},
+                "subplots": {
+                    "main": {
+                        "key": "main",
+                        "name": "Main",
+                        "stype": "unset",
+                        "curve_uids": [],
+                        "x_domain": "frequency",
+                        "x_range": None,
+                        "y_range": None,
+                        "auto_x": True,
+                        "auto_y": True,
+                    }
+                },
+                "grid_rows": 1,
+                "grid_cols": 1,
+                "col_ratios": [1.0],
+                "row_ratios": [1.0],
+                "hspace": 0.3,
+                "wspace": 0.3,
+                "figure_width": 10.0,
+                "figure_height": 7.0,
+                "legend": {"visible": True, "position": "best",
+                           "font_size": 9, "frame_on": True, "alpha": 0.8},
+                "typography": {"title_size": 12, "axis_label_size": 10,
+                               "tick_label_size": 9,
+                               "font_family": "sans-serif"},
+            }],
+        }
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w"
+        ) as f:
+            json.dump(v2_data, f)
+            path = f.name
+
+        try:
+            sheets = load_project(path)
+            assert len(sheets) == 1
+            sp = sheets[0].subplots["main"]
+            # New fields should have defaults
+            assert sp.x_scale == "linear"
+            assert sp.font_family == ""
+            assert sp.legend_visible is None
+        finally:
+            os.unlink(path)
+
+    def test_version_3_header(self):
+        """Saved files have version 3."""
+        from packages.report_studio.core.models import SheetState
+        from packages.report_studio.io.project import save_project
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w"
+        ) as f:
+            path = f.name
+
+        try:
+            save_project([SheetState()], path)
+            with open(path) as f:
+                data = json.load(f)
+            assert data["version"] == 3
+        finally:
+            os.unlink(path)
+
+    def test_canvas_dpi_round_trip(self):
+        from packages.report_studio.core.models import SheetState
+        from packages.report_studio.io.project import (
+            save_project, load_project,
+        )
+        sheet = SheetState(name="DPI Test")
+        sheet.canvas_dpi = 150
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w"
+        ) as f:
+            path = f.name
+
+        try:
+            save_project([sheet], path)
+            loaded = load_project(path)
+            assert loaded[0].canvas_dpi == 150
+        finally:
+            os.unlink(path)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.4 — AddDataDialog
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestAddDataDialog:
+    def test_dialog_creates(self, qtbot):
+        from packages.report_studio.gui.panels.add_data_dialog import (
+            AddDataDialog,
+        )
+        dlg = AddDataDialog(subplot_key="cell_0_0")
+        qtbot.addWidget(dlg)
+        assert dlg.subplot_key == "cell_0_0"
+        assert dlg.selected_type_id == "source_offset"
+
+    def test_type_combo_has_source_offset(self, qtbot):
+        from packages.report_studio.gui.panels.add_data_dialog import (
+            AddDataDialog,
+        )
+        dlg = AddDataDialog()
+        qtbot.addWidget(dlg)
+        combo = dlg._type_combo
+        found = False
+        for i in range(combo.count()):
+            if combo.itemData(i) == "source_offset":
+                found = True
+                break
+        assert found
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="No test PKL")
+    def test_offset_list_populated(self, qtbot):
+        from packages.report_studio.gui.panels.add_data_dialog import (
+            AddDataDialog,
+        )
+        dlg = AddDataDialog()
+        qtbot.addWidget(dlg)
+        dlg._load_offset_list(str(PKL_PATH))
+        assert dlg._offset_list.count() > 0
+        # All checked by default
+        assert len(dlg.selected_offsets) == dlg._offset_list.count()
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="No test PKL")
+    def test_select_none_then_all(self, qtbot):
+        from packages.report_studio.gui.panels.add_data_dialog import (
+            AddDataDialog,
+        )
+        dlg = AddDataDialog()
+        qtbot.addWidget(dlg)
+        dlg._load_offset_list(str(PKL_PATH))
+        dlg._select_none()
+        assert len(dlg.selected_offsets) == 0
+        dlg._select_all()
+        assert len(dlg.selected_offsets) == dlg._offset_list.count()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.4 — Startup Flow (no forced dialog)
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestStartupFlow:
+    def test_window_opens_without_controller(self, qtbot):
+        """Studio opens to empty sheet — no dialog forced."""
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None)
+        qtbot.addWidget(win)
+        sheet = win._current_sheet()
+        assert sheet is not None
+        assert sheet.name == "Sheet 1"
+        assert len(sheet.curves) == 0
+
+    def test_window_has_save_as(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None)
+        qtbot.addWidget(win)
+        assert hasattr(win, "_act_save_as")
+
+    def test_dirty_tracking(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None)
+        qtbot.addWidget(win)
+        assert not win._dirty
+        win._mark_dirty()
+        assert win._dirty
+        assert win.windowTitle().endswith(" •")
+        win._mark_clean()
+        assert not win._dirty
+        assert not win.windowTitle().endswith(" •")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.4 — Data Tree add-data signal carries subplot key
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestDataTreeAddSignal:
+    def test_add_signal_emits_subplot_key(self, qtbot):
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel,
+        )
+        from packages.report_studio.core.models import SheetState
+        panel = DataTreePanel()
+        qtbot.addWidget(panel)
+        sheet = SheetState()
+        panel.populate(sheet)
+
+        received = []
+        panel.add_data_requested.connect(lambda k: received.append(k))
+        panel._on_add_clicked()
+        assert len(received) == 1
+        assert received[0] == "main"

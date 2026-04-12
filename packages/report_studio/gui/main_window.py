@@ -118,7 +118,7 @@ class ReportStudioWindow(
         )
         self.data_tree.curve_moved.connect(self._on_curve_moved)
         self.data_tree.remove_curve_requested.connect(self._on_curve_removed)
-        self.data_tree.add_data_requested.connect(self._on_open_data)
+        self.data_tree.add_data_requested.connect(self._on_add_data_to_subplot)
 
         # Right panel — Context tab (subplot / curve / spectrum settings)
         self.right_panel.subplot_setting_changed.connect(
@@ -258,10 +258,54 @@ class ReportStudioWindow(
         ns = len(spectra)
         self.statusBar().showMessage(f"Loaded {n} curves, {ns} spectra")
 
+    # ── Per-subplot data addition ────────────────────────────────────────
+
+    def _on_add_data_to_subplot(self, subplot_key: str):
+        """Open AddDataDialog and insert selected curves into a subplot."""
+        from .panels.add_data_dialog import AddDataDialog
+        from ..qt_compat import DialogAccepted
+
+        sheet = self._current_sheet()
+        if not sheet:
+            return
+        # Validate subplot key
+        if subplot_key not in sheet.subplots:
+            subplot_key = sheet.subplot_keys_ordered()[0] if sheet.subplots else "main"
+
+        dlg = AddDataDialog(parent=self, subplot_key=subplot_key)
+        if dlg.exec() != DialogAccepted:
+            return
+
+        # Use the plugin to load data
+        from ..core.figure_types import registry
+        plugin = registry.get(dlg.selected_type_id)
+        if not plugin:
+            return
+
+        result = plugin.load_data(
+            pkl_path=dlg.pkl_path,
+            npz_path=dlg.npz_path,
+            selected_offsets=dlg.selected_offsets,
+        )
+
+        curves = result.get("curves", [])
+        spectra = result.get("spectra", [])
+
+        if not curves:
+            return
+
+        # Add curves to the target subplot
+        for curve in curves:
+            sheet.add_curve(curve, subplot_key)
+
+        self._finalize_sheet(sheet, curves, spectra)
+
     # ── Rendering ──────────────────────────────────────────────────────
 
     def _render_current(self):
         """Schedule a debounced re-render (50 ms coalescing window)."""
+        if hasattr(self, '_mark_dirty'):
+            self._mark_dirty()
         if hasattr(self, '_render_timer'):
             self._render_timer.start()
         else:
@@ -298,16 +342,31 @@ class ReportStudioWindow(
     # ── Initial load ───────────────────────────────────────────────────
 
     def _initial_load(self, controller):
-        """Show project dialog on startup."""
+        """Load data on startup — no dialog when no controller."""
         if controller is not None:
             self._load_from_controller(controller)
-        else:
-            from .panels.project_dialog import ProjectDialog
-            from ..qt_compat import DialogAccepted
+        # Otherwise start with an empty studio — user adds data per-subplot
 
-            dlg = ProjectDialog(parent=self, controller=controller)
-            if dlg.exec() == DialogAccepted:
-                if dlg.use_controller and controller:
-                    self._load_from_controller(controller)
-                else:
-                    self._load_from_files(dlg.pkl_path, dlg.npz_path)
+    # ── Close event ────────────────────────────────────────────────────
+
+    def closeEvent(self, event):
+        """Prompt to save if dirty before closing."""
+        if getattr(self, "_dirty", False):
+            from ..qt_compat import QtWidgets
+            btn = QtWidgets.QMessageBox.question(
+                self,
+                "Unsaved Changes",
+                "You have unsaved changes. Save before closing?",
+                QtWidgets.QMessageBox.StandardButton.Save
+                | QtWidgets.QMessageBox.StandardButton.Discard
+                | QtWidgets.QMessageBox.StandardButton.Cancel,
+            )
+            if btn == QtWidgets.QMessageBox.StandardButton.Save:
+                self._on_save_project()
+                event.accept()
+            elif btn == QtWidgets.QMessageBox.StandardButton.Discard:
+                event.accept()
+            else:
+                event.ignore()
+                return
+        super().closeEvent(event)

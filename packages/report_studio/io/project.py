@@ -22,7 +22,7 @@ from ..core.models import (
 def save_project(sheets: List[SheetState], path: str | Path) -> None:
     """Serialize a list of SheetState objects to a JSON file."""
     path = Path(path)
-    data = {"version": 2, "sheets": [_sheet_to_dict(s) for s in sheets]}
+    data = {"version": 3, "sheets": [_sheet_to_dict(s) for s in sheets]}
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, default=str)
 
@@ -37,7 +37,7 @@ def load_project(path: str | Path) -> List[SheetState]:
         data = json.load(f)
 
     version = data.get("version", 1)
-    if version != 2:
+    if version not in (2, 3):
         raise ValueError(f"Unsupported project version: {version}")
 
     return [_dict_to_sheet(sd) for sd in data.get("sheets", [])]
@@ -76,10 +76,24 @@ def _curve_to_dict(c: OffsetCurve) -> Dict[str, Any]:
         "color": c.color,
         "line_width": c.line_width,
         "marker_size": c.marker_size,
+        "line_style": c.line_style,
+        "marker_style": c.marker_style,
+        "line_visible": c.line_visible,
+        "marker_visible": c.marker_visible,
+        "peak_color": c.peak_color,
+        "peak_outline": c.peak_outline,
+        "peak_outline_color": c.peak_outline_color,
+        "peak_outline_width": c.peak_outline_width,
         "subplot_key": c.subplot_key,
         "point_mask": _ndarray_to_json(c.point_mask),
         "spectrum_uid": c.spectrum_uid,
         "spectrum_visible": c.spectrum_visible,
+        "spectrum_cmap": c.spectrum_cmap,
+        "spectrum_alpha": c.spectrum_alpha,
+        "spectrum_colorbar": c.spectrum_colorbar,
+        "spectrum_colorbar_orient": c.spectrum_colorbar_orient,
+        "spectrum_colorbar_position": c.spectrum_colorbar_position,
+        "spectrum_colorbar_label": c.spectrum_colorbar_label,
     }
 
 
@@ -101,10 +115,24 @@ def _dict_to_curve(d: Dict) -> OffsetCurve:
         color=d.get("color", "#2196F3"),
         line_width=d.get("line_width", 1.5),
         marker_size=d.get("marker_size", 4.0),
+        line_style=d.get("line_style", "-"),
+        marker_style=d.get("marker_style", "o"),
+        line_visible=d.get("line_visible", True),
+        marker_visible=d.get("marker_visible", True),
+        peak_color=d.get("peak_color", ""),
+        peak_outline=d.get("peak_outline", False),
+        peak_outline_color=d.get("peak_outline_color", "#000000"),
+        peak_outline_width=d.get("peak_outline_width", 1.0),
         subplot_key=d.get("subplot_key", "main"),
         point_mask=_json_to_ndarray(d.get("point_mask")),
         spectrum_uid=d.get("spectrum_uid", ""),
         spectrum_visible=d.get("spectrum_visible", False),
+        spectrum_cmap=d.get("spectrum_cmap", "jet"),
+        spectrum_alpha=d.get("spectrum_alpha", 0.85),
+        spectrum_colorbar=d.get("spectrum_colorbar", False),
+        spectrum_colorbar_orient=d.get("spectrum_colorbar_orient", "vertical"),
+        spectrum_colorbar_position=d.get("spectrum_colorbar_position", "right"),
+        spectrum_colorbar_label=d.get("spectrum_colorbar_label", ""),
     )
 
 
@@ -141,6 +169,20 @@ def _subplot_to_dict(sp: SubplotState) -> Dict[str, Any]:
         "y_range": list(sp.y_range) if sp.y_range else None,
         "auto_x": sp.auto_x,
         "auto_y": sp.auto_y,
+        "x_scale": sp.x_scale,
+        "y_scale": sp.y_scale,
+        "font_family": sp.font_family,
+        "title_font_size": sp.title_font_size,
+        "axis_label_font_size": sp.axis_label_font_size,
+        "tick_label_font_size": sp.tick_label_font_size,
+        "x_tick_format": sp.x_tick_format,
+        "y_tick_format": sp.y_tick_format,
+        "x_label": sp.x_label,
+        "y_label": sp.y_label,
+        "legend_visible": sp.legend_visible,
+        "legend_position": sp.legend_position,
+        "legend_font_size": sp.legend_font_size,
+        "legend_frame_on": sp.legend_frame_on,
     }
 
 
@@ -157,6 +199,20 @@ def _dict_to_subplot(d: Dict) -> SubplotState:
         y_range=y_range,
         auto_x=d.get("auto_x", True),
         auto_y=d.get("auto_y", True),
+        x_scale=d.get("x_scale", "linear"),
+        y_scale=d.get("y_scale", "linear"),
+        font_family=d.get("font_family", ""),
+        title_font_size=d.get("title_font_size", 0),
+        axis_label_font_size=d.get("axis_label_font_size", 0),
+        tick_label_font_size=d.get("tick_label_font_size", 0),
+        x_tick_format=d.get("x_tick_format", "plain"),
+        y_tick_format=d.get("y_tick_format", "plain"),
+        x_label=d.get("x_label", ""),
+        y_label=d.get("y_label", ""),
+        legend_visible=d.get("legend_visible"),
+        legend_position=d.get("legend_position", ""),
+        legend_font_size=d.get("legend_font_size", 0),
+        legend_frame_on=d.get("legend_frame_on"),
     )
 
 
@@ -174,6 +230,7 @@ def _sheet_to_dict(sheet: SheetState) -> Dict[str, Any]:
         "wspace": sheet.wspace,
         "figure_width": sheet.figure_width,
         "figure_height": sheet.figure_height,
+        "canvas_dpi": sheet.canvas_dpi,
         "legend": {
             "visible": sheet.legend.visible,
             "position": sheet.legend.position,
@@ -204,6 +261,7 @@ def _dict_to_sheet(d: Dict) -> SheetState:
     sheet.wspace = d.get("wspace", 0.3)
     sheet.figure_width = d.get("figure_width", 10.0)
     sheet.figure_height = d.get("figure_height", 7.0)
+    sheet.canvas_dpi = d.get("canvas_dpi", 72)
 
     leg_d = d.get("legend", {})
     sheet.legend = LegendConfig(

@@ -138,7 +138,7 @@ class DataTreePanel(QtWidgets.QWidget):
     spectrum_visibility_changed = Signal(str, bool)
     curve_moved = Signal(str, str)
     remove_curve_requested = Signal(str)
-    add_data_requested = Signal()
+    add_data_requested = Signal(str)  # subplot_key
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -151,8 +151,8 @@ class DataTreePanel(QtWidgets.QWidget):
         header.addWidget(QtWidgets.QLabel("Data"))
         add_btn = QtWidgets.QToolButton()
         add_btn.setText("+")
-        add_btn.setToolTip("Load data")
-        add_btn.clicked.connect(self.add_data_requested.emit)
+        add_btn.setToolTip("Add data to selected subplot")
+        add_btn.clicked.connect(self._on_add_clicked)
         header.addStretch()
         header.addWidget(add_btn)
         layout.addLayout(header)
@@ -344,6 +344,24 @@ class DataTreePanel(QtWidgets.QWidget):
             if uid:
                 self.spectrum_visibility_changed.emit(uid, checked)
 
+    def _on_add_clicked(self):
+        """Determine target subplot and emit add_data_requested(subplot_key)."""
+        # Use currently selected subplot, or the first one
+        item = self._tree.currentItem()
+        key = ""
+        if item:
+            itype = item.data(0, _ITEM_TYPE_ROLE)
+            if itype == _TYPE_SUBPLOT:
+                key = item.data(0, _KEY_ROLE) or ""
+            elif item.parent():
+                parent = item.parent()
+                if parent.data(0, _ITEM_TYPE_ROLE) == _TYPE_SUBPLOT:
+                    key = parent.data(0, _KEY_ROLE) or ""
+        # Fallback to first subplot
+        if not key and self._subplot_items:
+            key = next(iter(self._subplot_items))
+        self.add_data_requested.emit(key or "main")
+
     def _on_context_menu(self, pos):
         item = self._tree.itemAt(pos)
         if not item:
@@ -351,6 +369,12 @@ class DataTreePanel(QtWidgets.QWidget):
 
         menu = QtWidgets.QMenu(self)
         item_type = item.data(0, _ITEM_TYPE_ROLE)
+
+        if item_type == _TYPE_SUBPLOT:
+            key = item.data(0, _KEY_ROLE)
+            act_add = menu.addAction("Add data...")
+            act_add.triggered.connect(
+                lambda: self.add_data_requested.emit(key or "main"))
 
         if item_type == _TYPE_CURVE:
             uid = item.data(0, _UID_ROLE)

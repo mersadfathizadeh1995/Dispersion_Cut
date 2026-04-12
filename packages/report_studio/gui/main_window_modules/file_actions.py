@@ -6,16 +6,30 @@ from __future__ import annotations
 class FileActionsMixin:
     """Handles file open, save, and export operations."""
 
+    _project_path: str = ""
+    _dirty: bool = False
+
+    def _mark_dirty(self):
+        """Mark the project as having unsaved changes."""
+        self._dirty = True
+        title = self.windowTitle()
+        if not title.endswith(" •"):
+            self.setWindowTitle(title + " •")
+
+    def _mark_clean(self):
+        """Clear the dirty flag."""
+        self._dirty = False
+        title = self.windowTitle()
+        if title.endswith(" •"):
+            self.setWindowTitle(title[:-2])
+
     def _on_open_data(self):
-        """Open data files (PKL + NPZ) and load into current sheet."""
-        from ..panels.project_dialog import ProjectDialog
-        from ...qt_compat import DialogAccepted
-
-        dlg = ProjectDialog(parent=self)
-        if dlg.exec() != DialogAccepted:
+        """Open data files (PKL + NPZ) via AddDataDialog into the first subplot."""
+        sheet = self._current_sheet()
+        if not sheet:
             return
-
-        self._load_from_files(dlg.pkl_path, dlg.npz_path)
+        first_key = sheet.subplot_keys_ordered()[0] if sheet.subplots else "main"
+        self._on_add_data_to_subplot(first_key)
 
     def _load_from_files(self, pkl_path: str, npz_path: str = "",
                          show_dialog: bool = True):
@@ -102,23 +116,36 @@ class FileActionsMixin:
             self.statusBar().showMessage(f"Exported to {dlg.path}")
 
     def _on_save_project(self):
-        """Save all sheets to a JSON project file."""
-        from ...qt_compat import QtWidgets
-        from ...io.project import save_project
+        """Save all sheets — reuse existing path or prompt."""
+        if self._project_path:
+            self._save_to_path(self._project_path)
+        else:
+            self._on_save_project_as()
 
+    def _on_save_project_as(self):
+        """Save all sheets to a new JSON project file."""
+        from ...qt_compat import QtWidgets
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Save Project",
+            self, "Save Project As",
             "report_project.json",
             "JSON Files (*.json);;All Files (*)",
         )
         if path:
-            try:
-                save_project(self._sheets, path)
-                self.statusBar().showMessage(f"Project saved to {path}")
-            except Exception as e:
-                QtWidgets.QMessageBox.warning(
-                    self, "Save Error", f"Failed to save project:\n{e}"
-                )
+            self._save_to_path(path)
+
+    def _save_to_path(self, path: str):
+        from ...qt_compat import QtWidgets
+        from ...io.project import save_project
+
+        try:
+            save_project(self._sheets, path)
+            self._project_path = path
+            self._mark_clean()
+            self.statusBar().showMessage(f"Project saved to {path}")
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self, "Save Error", f"Failed to save project:\n{e}"
+            )
 
     def _on_load_project(self):
         """Load sheets from a JSON project file."""
@@ -171,6 +198,8 @@ class FileActionsMixin:
         self.statusBar().showMessage(
             f"Loaded project with {len(sheets)} sheets"
         )
+        self._project_path = path
+        self._mark_clean()
 
     # ── Export panel handlers ─────────────────────────────────────────
 
