@@ -274,6 +274,10 @@ class ReportStudioWindow(
         if not sheet or not canvas:
             return
 
+        # Keep export panel in sync with current sheet dimensions
+        if hasattr(self, 'right_panel'):
+            self.right_panel.set_export_sheet(sheet)
+
         from ..rendering.renderer import render_sheet
         from ..rendering.style import StyleConfig
 

@@ -2265,3 +2265,216 @@ class TestSpectrumCache:
         get_downsampled(arr, max_px=200)
         info2 = _cached_downsample.cache_info()
         assert info2.hits == info1.hits + 1
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.3 Tests — Panel polish & curve display enhancements
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestV23ModelDefaults:
+    """Test new OffsetCurve fields added in v2.3."""
+
+    def test_line_visible_default(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(frequency=np.array([1.0]), velocity=np.array([100.0]))
+        assert c.line_visible is True
+
+    def test_marker_visible_default(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(frequency=np.array([1.0]), velocity=np.array([100.0]))
+        assert c.marker_visible is True
+
+    def test_peak_color_default_empty(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(frequency=np.array([1.0]), velocity=np.array([100.0]))
+        assert c.peak_color == ""
+
+    def test_peak_outline_default_false(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(frequency=np.array([1.0]), velocity=np.array([100.0]))
+        assert c.peak_outline is False
+
+    def test_peak_outline_color_default(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(frequency=np.array([1.0]), velocity=np.array([100.0]))
+        assert c.peak_outline_color == "#000000"
+
+    def test_peak_outline_width_default(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(frequency=np.array([1.0]), velocity=np.array([100.0]))
+        assert c.peak_outline_width == 1.0
+
+
+class TestV23CurveDrawerVisibility:
+    """Test curve drawer line/marker visibility toggles."""
+
+    def test_line_hidden_uses_none_linestyle(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import OffsetCurve
+        from packages.report_studio.rendering import curve_drawer
+
+        c = OffsetCurve(
+            frequency=np.array([1.0, 2.0, 3.0]),
+            velocity=np.array([100.0, 200.0, 300.0]),
+            line_visible=False,
+        )
+        fig, ax = plt.subplots()
+        curve_drawer.draw(ax, c, "frequency")
+        lines = ax.get_lines()
+        assert len(lines) >= 1
+        assert lines[0].get_linestyle() == "None"
+        plt.close(fig)
+
+    def test_markers_hidden(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import OffsetCurve
+        from packages.report_studio.rendering import curve_drawer
+
+        c = OffsetCurve(
+            frequency=np.array([1.0, 2.0, 3.0]),
+            velocity=np.array([100.0, 200.0, 300.0]),
+            marker_visible=False,
+        )
+        fig, ax = plt.subplots()
+        curve_drawer.draw(ax, c, "frequency")
+        lines = ax.get_lines()
+        assert len(lines) >= 1
+        # marker should be empty string or "None"
+        mk = lines[0].get_marker()
+        assert mk in ("", "None", "none", None)
+        plt.close(fig)
+
+    def test_outline_draws_extra_layer(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import OffsetCurve
+        from packages.report_studio.rendering import curve_drawer
+
+        c = OffsetCurve(
+            frequency=np.array([1.0, 2.0, 3.0]),
+            velocity=np.array([100.0, 200.0, 300.0]),
+            peak_outline=True,
+            peak_outline_color="#FF0000",
+        )
+        fig, ax = plt.subplots()
+        curve_drawer.draw(ax, c, "frequency")
+        lines = ax.get_lines()
+        # Should have 2 lines: outline behind + main curve
+        assert len(lines) == 2
+        # Outline (zorder 9) should be first drawn
+        assert lines[0].get_zorder() == 9
+        assert lines[1].get_zorder() == 10
+        plt.close(fig)
+
+    def test_peak_color_overrides_curve_color(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import OffsetCurve
+        from packages.report_studio.rendering import curve_drawer
+
+        c = OffsetCurve(
+            frequency=np.array([1.0, 2.0]),
+            velocity=np.array([100.0, 200.0]),
+            color="#0000FF",
+            peak_color="#FF0000",
+        )
+        fig, ax = plt.subplots()
+        curve_drawer.draw(ax, c, "frequency")
+        lines = ax.get_lines()
+        # Main line should use peak_color
+        assert lines[0].get_color() == "#FF0000"
+        plt.close(fig)
+
+
+class TestV23LegendFontSync:
+    """Test legend font syncs to subplot font family."""
+
+    def test_legend_uses_subplot_font(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import (
+            OffsetCurve, SubplotState, SheetState)
+        from packages.report_studio.rendering.renderer import render_sheet
+        from packages.report_studio.rendering.style import StyleConfig
+
+        curve = OffsetCurve(
+            frequency=np.array([1.0, 2.0, 3.0]),
+            velocity=np.array([100.0, 200.0, 300.0]),
+            subplot_key="main",
+        )
+        sp = SubplotState(key="main", legend_visible=True,
+                          font_family="Times New Roman")
+        sp.curve_uids = [curve.uid]
+        sheet = SheetState()
+        sheet.subplots = {"main": sp}
+        sheet.curves = [curve]
+        style = StyleConfig(legend_visible=True)
+
+        fig = plt.figure()
+        render_sheet(fig, sheet, style)
+        ax = fig.axes[0] if fig.axes else None
+        assert ax is not None
+        legend = ax.get_legend()
+        if legend:
+            # Check legend text uses the specified font
+            for text in legend.get_texts():
+                assert text.get_fontfamily()[0] == "Times New Roman"
+        plt.close(fig)
+
+
+class TestV23ExportPanelNoSize:
+    """Export panel should not have width/height spinboxes."""
+
+    def test_no_width_height_spinboxes(self):
+        from packages.report_studio.gui.panels.export_panel import ExportPanel
+        panel = ExportPanel()
+        assert not hasattr(panel, "_spin_exp_w")
+        assert not hasattr(panel, "_spin_exp_h")
+
+    def test_set_sheet_stores_reference(self):
+        from packages.report_studio.gui.panels.export_panel import ExportPanel
+        from packages.report_studio.core.models import SheetState
+        panel = ExportPanel()
+        sheet = SheetState()
+        sheet.figure_width = 12.0
+        sheet.figure_height = 8.0
+        panel.set_sheet(sheet)
+        assert panel._sheet is sheet
+        assert panel._sheet.figure_width == 12.0
+
+
+class TestV23SubplotDefaultValues:
+    """Spinboxes should show real defaults instead of 'Default' text."""
+
+    def test_title_size_shows_12(self):
+        from packages.report_studio.gui.panels.subplot_settings import (
+            SubplotSettingsPanel)
+        panel = SubplotSettingsPanel()
+        assert panel._spin_title_size.value() == 12
+        assert panel._spin_title_size.minimum() == 4
+
+    def test_label_size_shows_10(self):
+        from packages.report_studio.gui.panels.subplot_settings import (
+            SubplotSettingsPanel)
+        panel = SubplotSettingsPanel()
+        assert panel._spin_label_size.value() == 10
+
+    def test_tick_size_shows_9(self):
+        from packages.report_studio.gui.panels.subplot_settings import (
+            SubplotSettingsPanel)
+        panel = SubplotSettingsPanel()
+        assert panel._spin_tick_size.value() == 9
+
+    def test_legend_size_shows_8(self):
+        from packages.report_studio.gui.panels.subplot_settings import (
+            SubplotSettingsPanel)
+        panel = SubplotSettingsPanel()
+        assert panel._spin_legend_size.value() == 8

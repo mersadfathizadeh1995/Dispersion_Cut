@@ -74,22 +74,22 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
         tl.addRow("Font:", self._combo_font)
 
         self._spin_title_size = QtWidgets.QSpinBox()
-        self._spin_title_size.setRange(0, 36)
-        self._spin_title_size.setSpecialValueText("Default")
+        self._spin_title_size.setRange(4, 36)
+        self._spin_title_size.setValue(12)
         self._spin_title_size.valueChanged.connect(
             lambda v: self._emit("title_font_size", v))
         tl.addRow("Title size:", self._spin_title_size)
 
         self._spin_label_size = QtWidgets.QSpinBox()
-        self._spin_label_size.setRange(0, 30)
-        self._spin_label_size.setSpecialValueText("Default")
+        self._spin_label_size.setRange(4, 30)
+        self._spin_label_size.setValue(10)
         self._spin_label_size.valueChanged.connect(
             lambda v: self._emit("axis_label_font_size", v))
         tl.addRow("Label size:", self._spin_label_size)
 
         self._spin_tick_size = QtWidgets.QSpinBox()
-        self._spin_tick_size.setRange(0, 24)
-        self._spin_tick_size.setSpecialValueText("Default")
+        self._spin_tick_size.setRange(4, 24)
+        self._spin_tick_size.setValue(9)
         self._spin_tick_size.valueChanged.connect(
             lambda v: self._emit("tick_label_font_size", v))
         tl.addRow("Tick size:", self._spin_tick_size)
@@ -221,8 +221,8 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
         ll.addRow("Position:", self._combo_legend_pos)
 
         self._spin_legend_size = QtWidgets.QSpinBox()
-        self._spin_legend_size.setRange(0, 24)
-        self._spin_legend_size.setSpecialValueText("Default")
+        self._spin_legend_size.setRange(4, 24)
+        self._spin_legend_size.setValue(8)
         self._spin_legend_size.valueChanged.connect(
             lambda v: self._emit("legend_font_size", v))
         ll.addRow("Font size:", self._spin_legend_size)
@@ -253,9 +253,9 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
         idx = self._combo_font.findText(font)
         if idx >= 0:
             self._combo_font.setCurrentIndex(idx)
-        self._spin_title_size.setValue(sp.title_font_size)
-        self._spin_label_size.setValue(sp.axis_label_font_size)
-        self._spin_tick_size.setValue(sp.tick_label_font_size)
+        self._spin_title_size.setValue(sp.title_font_size if sp.title_font_size > 0 else 12)
+        self._spin_label_size.setValue(sp.axis_label_font_size if sp.axis_label_font_size > 0 else 10)
+        self._spin_tick_size.setValue(sp.tick_label_font_size if sp.tick_label_font_size > 0 else 9)
 
         # X axis
         idx = self._combo_domain.findText(sp.x_domain)
@@ -294,7 +294,8 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
         idx = self._combo_legend_pos.findText(legend_pos)
         if idx >= 0:
             self._combo_legend_pos.setCurrentIndex(idx)
-        self._spin_legend_size.setValue(getattr(sp, "legend_font_size", 0))
+        leg_size = getattr(sp, "legend_font_size", 0)
+        self._spin_legend_size.setValue(leg_size if leg_size > 0 else 8)
         legend_frame = getattr(sp, "legend_frame_on", None)
         self._chk_legend_frame.setChecked(
             legend_frame if legend_frame is not None else True)

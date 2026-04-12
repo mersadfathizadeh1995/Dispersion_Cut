@@ -43,7 +43,14 @@ class ExportPanel(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._subplot_checks: Dict[str, QtWidgets.QCheckBox] = {}
+        self._sheet: Optional["SheetState"] = None
         self._build_ui()
+
+    # ── Public API ────────────────────────────────────────────────────
+
+    def set_sheet(self, sheet: "SheetState"):
+        """Keep a reference to the current sheet for export dimensions."""
+        self._sheet = sheet
 
     def _build_ui(self):
         layout = QtWidgets.QVBoxLayout(self)
@@ -74,22 +81,6 @@ class ExportPanel(QtWidgets.QWidget):
         self._spin_fig_dpi.setSingleStep(50)
         self._spin_fig_dpi.setValue(300)
         fl.addRow("DPI:", self._spin_fig_dpi)
-
-        self._spin_exp_w = QtWidgets.QDoubleSpinBox()
-        self._spin_exp_w.setRange(2.0, 40.0)
-        self._spin_exp_w.setSingleStep(0.5)
-        self._spin_exp_w.setDecimals(1)
-        self._spin_exp_w.setValue(10.0)
-        self._spin_exp_w.setSuffix(" in")
-        fl.addRow("Width:", self._spin_exp_w)
-
-        self._spin_exp_h = QtWidgets.QDoubleSpinBox()
-        self._spin_exp_h.setRange(2.0, 30.0)
-        self._spin_exp_h.setSingleStep(0.5)
-        self._spin_exp_h.setDecimals(1)
-        self._spin_exp_h.setValue(7.0)
-        self._spin_exp_h.setSuffix(" in")
-        fl.addRow("Height:", self._spin_exp_h)
 
         self._btn_export_fig = QtWidgets.QPushButton("Export Figure")
         self._btn_export_fig.clicked.connect(self._on_export_figure)
@@ -128,8 +119,6 @@ class ExportPanel(QtWidgets.QWidget):
 
         layout.addStretch(1)
 
-    # ── Public API ────────────────────────────────────────────────────
-
     def update_subplots(self, keys: List[str]):
         """Update the subplot checkboxes list."""
         for chk in self._subplot_checks.values():
@@ -161,12 +150,15 @@ class ExportPanel(QtWidgets.QWidget):
         if not path:
             return
         fmt = self._combo_fig_fmt.currentText().lower()
+        # Use figure dimensions from the current sheet (global settings)
+        width = self._sheet.figure_width if self._sheet else 10.0
+        height = self._sheet.figure_height if self._sheet else 7.0
         self.export_figure_requested.emit({
             "path": os.path.join(path, f"figure.{fmt}"),
             "format": fmt,
             "dpi": self._spin_fig_dpi.value(),
-            "width": self._spin_exp_w.value(),
-            "height": self._spin_exp_h.value(),
+            "width": width,
+            "height": height,
         })
 
     def _on_export_subplots(self):

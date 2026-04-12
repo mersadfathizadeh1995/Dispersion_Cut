@@ -128,11 +128,13 @@ def _render_subplot(
             leg_pos = sp.legend_position if sp.legend_position else style.legend_position
             leg_size = sp.legend_font_size if sp.legend_font_size > 0 else style.legend_font_size
             leg_frame = sp.legend_frame_on if sp.legend_frame_on is not None else style.legend_frame_on
+            leg_font = sp.font_family if sp.font_family else style.font_family
             ax.legend(
                 fontsize=leg_size,
                 loc=leg_pos,
                 frameon=leg_frame,
                 framealpha=style.legend_alpha,
+                prop={"family": leg_font, "size": leg_size},
             )
 
     # 5. Colorbar (for last drawn spectrum that requests it)

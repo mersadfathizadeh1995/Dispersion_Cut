@@ -57,6 +57,14 @@ class OffsetCurve:
     marker_size: float = 4.0
     line_style: str = "-"       # "-", "--", "-.", ":"
     marker_style: str = "o"     # "o", "s", "^", "D", "none"
+    line_visible: bool = True
+    marker_visible: bool = True
+
+    # Peak display style
+    peak_color: str = ""              # "" = use curve color
+    peak_outline: bool = False
+    peak_outline_color: str = "#000000"
+    peak_outline_width: float = 1.0
 
     # Subplot assignment
     subplot_key: str = "main"

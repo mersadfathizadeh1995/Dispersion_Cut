@@ -170,6 +170,10 @@ class RightPanel(QtWidgets.QWidget):
         """Refresh the export panel subplot checkboxes."""
         self.export_panel.update_subplots(keys)
 
+    def set_export_sheet(self, sheet: "SheetState"):
+        """Pass the current sheet to the export panel for dimension sync."""
+        self.export_panel.set_sheet(sheet)
+
 
 def _make_scroll(widget: QtWidgets.QWidget) -> QtWidgets.QScrollArea:
     """Wrap a widget in a scroll area."""

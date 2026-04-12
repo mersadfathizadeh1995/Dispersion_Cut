@@ -48,19 +48,49 @@ def draw(
     marker = getattr(curve, "marker_style", "o")
     if marker == "none":
         marker = ""
+
+    # Visibility toggles
+    line_vis = getattr(curve, "line_visible", True)
+    marker_vis = getattr(curve, "marker_visible", True)
+    if not line_vis:
+        ls = "none"
+    if not marker_vis:
+        marker = ""
+
     if highlight:
         lw *= 2.0
         ms *= 1.5
 
+    # Resolve display color (peak_color overrides curve.color when set)
+    display_color = getattr(curve, "peak_color", "") or curve.color
+
+    # Outline layer (drawn behind the main curve for emphasis)
+    use_outline = getattr(curve, "peak_outline", False)
+    if use_outline:
+        outline_color = getattr(curve, "peak_outline_color", "#000000")
+        outline_w = getattr(curve, "peak_outline_width", 1.0)
+        ax.plot(
+            x, y,
+            color=outline_color,
+            linewidth=lw + outline_w * 2,
+            linestyle=ls,
+            marker=marker,
+            markersize=ms + outline_w * 2,
+            markeredgecolor=outline_color,
+            markerfacecolor=outline_color,
+            alpha=0.9,
+            zorder=9,
+        )
+
     ax.plot(
         x, y,
-        color=curve.color,
+        color=display_color,
         linewidth=lw,
         linestyle=ls,
         marker=marker,
         markersize=ms,
-        markeredgecolor=curve.color,
-        markerfacecolor=curve.color,
+        markeredgecolor=display_color,
+        markerfacecolor=display_color,
         alpha=0.9,
         label=curve.display_name,
         zorder=10,
