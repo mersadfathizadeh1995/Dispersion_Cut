@@ -96,7 +96,7 @@ class FileActionsMixin:
                     )
                     spectra.append(spec)
 
-        self._populate_sheet(curves, spectra)
+        self._populate_sheet_direct(curves, spectra)
 
     def _on_export_image(self):
         """Export the current canvas via export dialog."""
