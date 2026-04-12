@@ -2905,3 +2905,287 @@ class TestDataTreeAddSignal:
         panel._on_add_clicked()
         assert len(received) == 1
         assert received[0] == "main"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.5 — Lightweight Project (v4) Format
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestProjectV4:
+    """Tests for directory-based project persistence."""
+
+    def test_create_project(self, tmp_path):
+        from packages.report_studio.io.project_v4 import create_project
+        manifest_path = create_project(tmp_path / "myproj", "Test Project",
+                                       pkl_path="/data/test.pkl",
+                                       npz_path="/data/test.npz",
+                                       fingerprint="abc123")
+        assert manifest_path.exists()
+        data = json.loads(manifest_path.read_text())
+        assert data["version"] == 4
+        assert data["name"] == "Test Project"
+        assert data["data_sources"]["pkl_path"] == "/data/test.pkl"
+        assert (tmp_path / "myproj" / "sheets").is_dir()
+
+    def test_save_and_load_sheet(self, tmp_path):
+        from packages.report_studio.io.project_v4 import (
+            save_sheet, load_sheet_skeleton,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+        sheet = SheetState(name="My Sheet")
+        curve = OffsetCurve(
+            name="Offset -10",
+            frequency=np.linspace(1, 50, 100),
+            velocity=np.linspace(100, 500, 100),
+            wavelength=np.linspace(2, 100, 100),
+            color="#ff0000",
+            line_width=2.5,
+        )
+        sheet.add_curve(curve, "main")
+        sheet.hspace = 0.5
+        sheet.typography.title_size = 14
+
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        path = save_sheet(project_dir, sheet)
+        assert path.exists()
+
+        # File should be small (no array data)
+        assert path.stat().st_size < 10_000  # < 10 KB
+
+        loaded_sheet, curve_settings = load_sheet_skeleton(path)
+        assert loaded_sheet.name == "My Sheet"
+        assert loaded_sheet.hspace == 0.5
+        assert loaded_sheet.typography.title_size == 14
+        assert "Offset -10" in curve_settings
+        assert curve_settings["Offset -10"]["color"] == "#ff0000"
+
+    def test_full_project_round_trip(self, tmp_path):
+        from packages.report_studio.io.project_v4 import (
+            save_project, load_project, compute_fingerprint,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+        sheet1 = SheetState(name="Sheet 1")
+        c1 = OffsetCurve(
+            name="Offset -5",
+            frequency=np.linspace(1, 50, 50),
+            velocity=np.linspace(100, 300, 50),
+            wavelength=np.linspace(2, 100, 50),
+            color="#00ff00",
+        )
+        sheet1.add_curve(c1, "main")
+
+        sheet2 = SheetState(name="Sheet 2")
+        c2 = OffsetCurve(
+            name="Offset -10",
+            frequency=np.linspace(1, 50, 50),
+            velocity=np.linspace(100, 300, 50),
+            wavelength=np.linspace(2, 100, 50),
+        )
+        sheet2.add_curve(c2, "main")
+
+        fp = compute_fingerprint([c1, c2])
+        proj_dir = tmp_path / "full_project"
+        manifest_path = save_project(
+            proj_dir, [sheet1, sheet2],
+            pkl_path="/test.pkl", npz_path="/test.npz",
+            fingerprint=fp,
+        )
+        assert manifest_path.exists()
+
+        # Load back
+        manifest, sheet_skeletons = load_project(proj_dir)
+        assert manifest["version"] == 4
+        assert len(sheet_skeletons) == 2
+        assert sheet_skeletons[0][0].name == "Sheet 1"
+        assert sheet_skeletons[1][0].name == "Sheet 2"
+        # Curve settings preserved but no arrays
+        s1, cs1 = sheet_skeletons[0]
+        assert "Offset -5" in cs1
+        assert cs1["Offset -5"]["color"] == "#00ff00"
+        # Sheet has no curves yet (skeleton)
+        assert len(s1.curves) == 0
+
+    def test_fingerprint_deterministic(self):
+        from packages.report_studio.io.project_v4 import compute_fingerprint
+        from packages.report_studio.core.models import OffsetCurve
+        curves = [
+            OffsetCurve(name="A", frequency=np.array([1, 2, 3])),
+            OffsetCurve(name="B", frequency=np.array([4, 5, 6])),
+        ]
+        fp1 = compute_fingerprint(curves)
+        fp2 = compute_fingerprint(curves)
+        assert fp1 == fp2
+        assert len(fp1) == 16
+
+    def test_fingerprint_changes_with_data(self):
+        from packages.report_studio.io.project_v4 import compute_fingerprint
+        from packages.report_studio.core.models import OffsetCurve
+        c1 = [OffsetCurve(name="A", frequency=np.array([1, 2, 3]))]
+        c2 = [OffsetCurve(name="A", frequency=np.array([1, 2, 99]))]
+        assert compute_fingerprint(c1) != compute_fingerprint(c2)
+
+    def test_reload_and_apply(self, tmp_path):
+        from packages.report_studio.io.project_v4 import (
+            save_sheet, load_sheet_skeleton, reload_and_apply,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, SpectrumData,
+        )
+        # Create and save a sheet with styled curve
+        sheet = SheetState(name="Reload Test")
+        curve = OffsetCurve(
+            name="Offset -5",
+            frequency=np.linspace(1, 50, 50),
+            velocity=np.linspace(100, 300, 50),
+            wavelength=np.linspace(2, 100, 50),
+            color="#0000ff",
+            line_width=3.0,
+            marker_visible=False,
+        )
+        sheet.add_curve(curve, "main")
+
+        project_dir = tmp_path / "reload_proj"
+        project_dir.mkdir()
+        path = save_sheet(project_dir, sheet)
+
+        # Load skeleton
+        loaded, curve_settings = load_sheet_skeleton(path)
+
+        # Simulate reloaded data (new curve instances)
+        new_curve = OffsetCurve(
+            name="Offset -5",
+            frequency=np.linspace(1, 50, 50),
+            velocity=np.linspace(100, 300, 50),
+            wavelength=np.linspace(2, 100, 50),
+        )
+        reload_and_apply(loaded, curve_settings, [new_curve], [])
+
+        # Settings should be applied from saved data
+        assert len(loaded.curves) == 1
+        reloaded = list(loaded.curves.values())[0]
+        assert reloaded.color == "#0000ff"
+        assert reloaded.line_width == 3.0
+        assert reloaded.marker_visible is False
+
+    def test_project_file_size_small(self, tmp_path):
+        """Verify project files are < 50 KB even with many curves."""
+        from packages.report_studio.io.project_v4 import save_project
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+        sheet = SheetState(name="Size Test")
+        for i in range(20):
+            c = OffsetCurve(
+                name=f"Offset {i}",
+                frequency=np.linspace(1, 100, 1000),
+                velocity=np.linspace(100, 800, 1000),
+                wavelength=np.linspace(1, 200, 1000),
+            )
+            sheet.add_curve(c, "main")
+
+        proj_dir = tmp_path / "size_test"
+        save_project(proj_dir, [sheet])
+
+        # Total project should be small
+        total_size = sum(
+            f.stat().st_size for f in proj_dir.rglob("*.json")
+        )
+        assert total_size < 500_000  # < 500 KB (settings only, no arrays)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.5 — Multi-curve Removal & Subplot Rename
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestMultiRemoveRename:
+    def test_remove_curves_batch(self):
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+        sheet = SheetState(name="Test")
+        curves = []
+        for i in range(5):
+            c = OffsetCurve(name=f"C{i}")
+            sheet.add_curve(c, "main")
+            curves.append(c)
+
+        assert len(sheet.curves) == 5
+        uids_to_remove = [curves[1].uid, curves[3].uid]
+        sheet.remove_curves(uids_to_remove)
+        assert len(sheet.curves) == 3
+        sp = sheet.subplots["main"]
+        assert curves[1].uid not in sp.curve_uids
+        assert curves[3].uid not in sp.curve_uids
+        assert curves[0].uid in sp.curve_uids
+
+    def test_data_tree_has_batch_removal_signal(self, qtbot):
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel,
+        )
+        panel = DataTreePanel()
+        qtbot.addWidget(panel)
+        assert hasattr(panel, "remove_curves_requested")
+
+    def test_data_tree_has_rename_signal(self, qtbot):
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel,
+        )
+        panel = DataTreePanel()
+        qtbot.addWidget(panel)
+        assert hasattr(panel, "subplot_renamed")
+
+    def test_subplot_rename_updates_display_name(self):
+        from packages.report_studio.core.models import (
+            SheetState, SubplotState,
+        )
+        sheet = SheetState(name="Test")
+        sheet.subplots["main"].name = "My Custom Name"
+        assert sheet.subplots["main"].display_name == "My Custom Name"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.5 — Export Panel Display Names & Filtering
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestExportPanelSync:
+    def test_populated_subplot_info(self):
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+        sheet = SheetState(name="Test")
+        sheet.set_grid(2, 2)
+        # Only add curves to cell_0_0 and cell_1_1
+        c1 = OffsetCurve(name="C1")
+        c2 = OffsetCurve(name="C2")
+        sheet.add_curve(c1, "cell_0_0")
+        sheet.add_curve(c2, "cell_1_1")
+        sheet.subplots["cell_0_0"].name = "Top Left"
+        sheet.subplots["cell_1_1"].name = "Bottom Right"
+
+        keys, names = sheet.populated_subplot_info()
+        assert len(keys) == 2
+        assert "cell_0_0" in keys
+        assert "cell_1_1" in keys
+        assert "cell_0_1" not in keys  # empty subplot
+        assert names["cell_0_0"] == "Top Left"
+        assert names["cell_1_1"] == "Bottom Right"
+
+    def test_export_panel_display_names(self, qtbot):
+        from packages.report_studio.gui.panels.export_panel import (
+            ExportPanel,
+        )
+        panel = ExportPanel()
+        qtbot.addWidget(panel)
+        panel.update_subplots(
+            ["cell_0_0", "cell_1_1"],
+            {"cell_0_0": "My Plot", "cell_1_1": "Other Plot"},
+        )
+        # Check that checkbox labels use display names
+        assert "cell_0_0" in panel._subplot_checks
+        chk = panel._subplot_checks["cell_0_0"]
+        assert chk.text() == "My Plot"

@@ -270,6 +270,14 @@ class SheetState:
             if uid in sp.curve_uids:
                 sp.curve_uids.remove(uid)
 
+    def remove_curves(self, uids: list):
+        """Remove multiple curves in one pass."""
+        uid_set = set(uids)
+        for uid in uids:
+            self.curves.pop(uid, None)
+        for sp in self.subplots.values():
+            sp.curve_uids = [u for u in sp.curve_uids if u not in uid_set]
+
     def move_curve(self, uid: str, new_subplot_key: str):
         """Move a curve from its current subplot to another."""
         if uid not in self.curves:
@@ -361,6 +369,17 @@ class SheetState:
                 if key in self.subplots:
                     keys.append(key)
         return keys
+
+    def populated_subplot_info(self) -> tuple:
+        """Return (keys, display_names) for subplots that have curves."""
+        keys = []
+        names = {}
+        for k in self.subplot_keys_ordered():
+            sp = self.subplots[k]
+            if sp.curve_uids:
+                keys.append(k)
+                names[k] = sp.display_name
+        return keys, names
 
     def get_curves_for_subplot(self, subplot_key: str) -> List[OffsetCurve]:
         """Return all curves assigned to a subplot, in order."""

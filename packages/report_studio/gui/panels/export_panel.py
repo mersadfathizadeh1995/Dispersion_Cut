@@ -119,15 +119,22 @@ class ExportPanel(QtWidgets.QWidget):
 
         layout.addStretch(1)
 
-    def update_subplots(self, keys: List[str]):
-        """Update the subplot checkboxes list."""
+    def update_subplots(self, keys: List[str],
+                        display_names: Optional[Dict[str, str]] = None):
+        """Update the subplot checkboxes list.
+
+        Args:
+            keys: subplot keys (only those with curves)
+            display_names: {key: display_name} for labels
+        """
         for chk in self._subplot_checks.values():
             self._sub_form.removeRow(chk)
         self._subplot_checks.clear()
 
         self._lbl_no_subplots.setVisible(not keys)
         for key in keys:
-            chk = QtWidgets.QCheckBox(key)
+            label = (display_names or {}).get(key, key)
+            chk = QtWidgets.QCheckBox(label)
             chk.setChecked(True)
             self._subplot_checks[key] = chk
             # Insert before the export button row

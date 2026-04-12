@@ -166,9 +166,9 @@ class RightPanel(QtWidgets.QWidget):
         """Populate the Global tab from a SheetState."""
         self.global_panel.populate(sheet)
 
-    def update_subplot_list(self, keys):
+    def update_subplot_list(self, keys, display_names=None):
         """Refresh the export panel subplot checkboxes."""
-        self.export_panel.update_subplots(keys)
+        self.export_panel.update_subplots(keys, display_names)
 
     def set_export_sheet(self, sheet: "SheetState"):
         """Pass the current sheet to the export panel for dimension sync."""

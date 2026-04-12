@@ -118,7 +118,9 @@ class ReportStudioWindow(
         )
         self.data_tree.curve_moved.connect(self._on_curve_moved)
         self.data_tree.remove_curve_requested.connect(self._on_curve_removed)
+        self.data_tree.remove_curves_requested.connect(self._on_curves_removed)
         self.data_tree.add_data_requested.connect(self._on_add_data_to_subplot)
+        self.data_tree.subplot_renamed.connect(self._on_subplot_renamed)
 
         # Right panel — Context tab (subplot / curve / spectrum settings)
         self.right_panel.subplot_setting_changed.connect(
@@ -171,7 +173,8 @@ class ReportStudioWindow(
         if sheet:
             self.data_tree.populate(sheet)
             self.right_panel.populate_global(sheet)
-            self.right_panel.update_subplot_list(sheet.subplot_keys_ordered())
+            pkeys, pnames = sheet.populated_subplot_info()
+            self.right_panel.update_subplot_list(pkeys, pnames)
             self._selected_uid = None
             self.right_panel.show_empty()
         self.statusBar().showMessage(f"Sheet: {sheet.name}" if sheet else "")
@@ -251,7 +254,8 @@ class ReportStudioWindow(
 
         self.data_tree.populate(sheet)
         self.right_panel.populate_global(sheet)
-        self.right_panel.update_subplot_list(sheet.subplot_keys_ordered())
+        pkeys, pnames = sheet.populated_subplot_info()
+        self.right_panel.update_subplot_list(pkeys, pnames)
         self._render_current()
 
         n = len(curves)

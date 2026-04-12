@@ -40,6 +40,10 @@ class FileActionsMixin:
         if not pkl_path:
             return
 
+        # Store paths for v4 project save
+        self._pkl_path = pkl_path
+        self._npz_path = npz_path
+
         curves = read_pkl(pkl_path)
         spectra = []
         if npz_path:
@@ -123,22 +127,40 @@ class FileActionsMixin:
             self._on_save_project_as()
 
     def _on_save_project_as(self):
-        """Save all sheets to a new JSON project file."""
+        """Save all sheets to a new project directory (v4 format)."""
         from ...qt_compat import QtWidgets
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Save Project As",
-            "report_project.json",
-            "JSON Files (*.json);;All Files (*)",
+        path = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Choose Project Directory",
         )
         if path:
             self._save_to_path(path)
 
     def _save_to_path(self, path: str):
         from ...qt_compat import QtWidgets
-        from ...io.project import save_project
+        import os
 
         try:
-            save_project(self._sheets, path)
+            # Detect if path is a directory (v4) or file (legacy v3)
+            if os.path.isfile(path) and path.endswith(".json"):
+                # Legacy save to single JSON file
+                from ...io.project import save_project
+                save_project(self._sheets, path)
+            else:
+                # New v4 directory-based save
+                from ...io.project_v4 import save_project, compute_fingerprint
+                from ...core.models import OffsetCurve
+
+                pkl = getattr(self, "_pkl_path", "")
+                npz = getattr(self, "_npz_path", "")
+                all_curves = []
+                for s in self._sheets:
+                    all_curves.extend(s.curves.values())
+                fp = compute_fingerprint(all_curves)
+
+                save_project(path, self._sheets,
+                             pkl_path=pkl, npz_path=npz,
+                             fingerprint=fp)
+
             self._project_path = path
             self._mark_clean()
             self.statusBar().showMessage(f"Project saved to {path}")
@@ -148,17 +170,124 @@ class FileActionsMixin:
             )
 
     def _on_load_project(self):
-        """Load sheets from a JSON project file."""
+        """Load a project — v4 directory or legacy v3 JSON."""
         from ...qt_compat import QtWidgets
-        from ...io.project import load_project
 
+        # Let user pick either a directory (v4) or file (v3)
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self, "Load Project",
             "",
-            "JSON Files (*.json);;All Files (*)",
+            "Project Files (project.json *.json);;All Files (*)",
         )
         if not path:
             return
+
+        import os
+        project_dir = os.path.dirname(path)
+
+        # Check if this is a v4 project
+        try:
+            import json
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            version = data.get("version", 0)
+        except Exception:
+            version = 0
+
+        if version >= 4 and "data_sources" in data:
+            self._load_project_v4(project_dir, data)
+        else:
+            self._load_project_legacy(path)
+
+    def _load_project_v4(self, project_dir: str, manifest: dict):
+        """Load a v4 directory-based project."""
+        from ...qt_compat import QtWidgets
+        from ...io.project_v4 import (
+            load_project, reload_and_apply, compute_fingerprint,
+        )
+        from ...io.pkl_reader import read_pkl
+        from ...io.spectrum_reader import read_spectrum_npz
+
+        try:
+            _, sheet_skeletons = load_project(project_dir)
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self, "Load Error", f"Failed to load project:\n{e}"
+            )
+            return
+
+        # Reload data from source files
+        ds = manifest.get("data_sources", {})
+        pkl_path = ds.get("pkl_path", "")
+        npz_path = ds.get("npz_path", "")
+        saved_fp = ds.get("fingerprint", "")
+
+        curves, spectra = [], []
+        if pkl_path:
+            try:
+                curves = read_pkl(pkl_path)
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(
+                    self, "Data Warning",
+                    f"Could not reload PKL file:\n{pkl_path}\n{e}"
+                )
+        if npz_path:
+            try:
+                spectra = read_spectrum_npz(npz_path)
+            except Exception:
+                pass
+
+        # Validate fingerprint
+        if saved_fp and curves:
+            current_fp = compute_fingerprint(curves)
+            if current_fp != saved_fp:
+                QtWidgets.QMessageBox.information(
+                    self, "Data Changed",
+                    "Source data files appear to have changed since "
+                    "the project was saved. Settings will be applied "
+                    "but results may differ."
+                )
+
+        # Store paths for future saves
+        self._pkl_path = pkl_path
+        self._npz_path = npz_path
+
+        # Replace current sheets
+        self._sheets.clear()
+        while self.sheet_tabs.count() > 0:
+            w = self.sheet_tabs.widget(0)
+            self.sheet_tabs.removeTab(0)
+            if w:
+                w.deleteLater()
+
+        from ..canvas.plot_canvas import PlotCanvas
+        for sheet, curve_settings in sheet_skeletons:
+            reload_and_apply(sheet, curve_settings, curves, spectra)
+            self._sheets.append(sheet)
+            canvas = PlotCanvas()
+            canvas.curve_clicked.connect(self._on_curve_selected)
+            canvas.subplot_clicked.connect(self._on_subplot_clicked)
+            self.sheet_tabs.add_tab(canvas, sheet.name)
+
+        if self._sheets:
+            self.sheet_tabs.setCurrentIndex(0)
+            self.data_tree.populate(self._sheets[0])
+            if hasattr(self, "right_panel"):
+                self.right_panel.populate_global(self._sheets[0])
+                pkeys, pnames = self._sheets[0].populated_subplot_info()
+                self.right_panel.update_subplot_list(pkeys, pnames)
+            self._render_current()
+
+        self.statusBar().showMessage(
+            f"Loaded v4 project with {len(sheet_skeletons)} sheets"
+        )
+        self._project_path = project_dir
+        self._mark_clean()
+
+    def _load_project_legacy(self, path: str):
+        """Load a legacy v3 single-file project."""
+        from ...qt_compat import QtWidgets
+        from ...io.project import load_project
 
         try:
             sheets = load_project(path)
@@ -168,35 +297,32 @@ class FileActionsMixin:
             )
             return
 
-        # Replace current sheets
         self._sheets.clear()
-        # Remove all existing tabs
         while self.sheet_tabs.count() > 0:
             w = self.sheet_tabs.widget(0)
             self.sheet_tabs.removeTab(0)
             if w:
                 w.deleteLater()
 
-        # Recreate tabs from loaded sheets
         from ..canvas.plot_canvas import PlotCanvas
         for sheet in sheets:
             self._sheets.append(sheet)
             canvas = PlotCanvas()
             canvas.curve_clicked.connect(self._on_curve_selected)
+            canvas.subplot_clicked.connect(self._on_subplot_clicked)
             self.sheet_tabs.add_tab(canvas, sheet.name)
 
-        # Render first sheet
         if self._sheets:
             self.sheet_tabs.setCurrentIndex(0)
             self.data_tree.populate(self._sheets[0])
             if hasattr(self, "right_panel"):
                 self.right_panel.populate_global(self._sheets[0])
-                self.right_panel.update_subplot_list(
-                    self._sheets[0].subplot_keys_ordered())
+                pkeys, pnames = self._sheets[0].populated_subplot_info()
+                self.right_panel.update_subplot_list(pkeys, pnames)
             self._render_current()
 
         self.statusBar().showMessage(
-            f"Loaded project with {len(sheets)} sheets"
+            f"Loaded legacy project with {len(sheets)} sheets"
         )
         self._project_path = path
         self._mark_clean()
@@ -281,7 +407,9 @@ class FileActionsMixin:
             fig = plt.figure()
             fig.set_size_inches(opts.get("width", 6), opts.get("height", 4))
             render_sheet(fig, single, style, quality="high")
-            safe = "".join(c if c.isalnum() or c in "._- " else "_" for c in key)
+            # Use display_name for filename
+            fname = sp_src.display_name
+            safe = "".join(c if c.isalnum() or c in "._- " else "_" for c in fname)
             fpath = os.path.join(out_dir, f"{safe}.{fmt}")
             fig.savefig(fpath, dpi=dpi, bbox_inches="tight")
             plt.close(fig)

@@ -138,7 +138,9 @@ class DataTreePanel(QtWidgets.QWidget):
     spectrum_visibility_changed = Signal(str, bool)
     curve_moved = Signal(str, str)
     remove_curve_requested = Signal(str)
+    remove_curves_requested = Signal(list)  # List[str] — batch removal
     add_data_requested = Signal(str)  # subplot_key
+    subplot_renamed = Signal(str, str)  # (key, new_name)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -375,11 +377,50 @@ class DataTreePanel(QtWidgets.QWidget):
             act_add = menu.addAction("Add data...")
             act_add.triggered.connect(
                 lambda: self.add_data_requested.emit(key or "main"))
+            act_rename = menu.addAction("Rename subplot")
+            act_rename.triggered.connect(lambda: self._begin_rename(item))
 
         if item_type == _TYPE_CURVE:
+            # Collect all selected curve UIDs
+            selected_uids = []
+            for sel in self._tree.selectedItems():
+                if sel.data(0, _ITEM_TYPE_ROLE) == _TYPE_CURVE:
+                    uid = sel.data(0, _UID_ROLE)
+                    if uid:
+                        selected_uids.append(uid)
+
             uid = item.data(0, _UID_ROLE)
-            act_remove = menu.addAction("Remove curve")
-            act_remove.triggered.connect(lambda: self.remove_curve_requested.emit(uid))
+            if len(selected_uids) > 1:
+                act_remove = menu.addAction(
+                    f"Remove {len(selected_uids)} curves")
+                act_remove.triggered.connect(
+                    lambda: self.remove_curves_requested.emit(selected_uids))
+            else:
+                act_remove = menu.addAction("Remove curve")
+                act_remove.triggered.connect(
+                    lambda: self.remove_curve_requested.emit(uid))
 
         if menu.actions():
             menu.exec(self._tree.viewport().mapToGlobal(pos))
+
+    def _begin_rename(self, item):
+        """Start inline editing of a subplot name."""
+        item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsEditable)
+        self._tree.editItem(item, 0)
+        # Connect once to capture the edit
+        self._tree.itemChanged.disconnect(self._on_item_changed)
+        self._tree.itemChanged.connect(self._on_rename_finished)
+
+    def _on_rename_finished(self, item, column):
+        """Handle subnet rename completion."""
+        # Reconnect normal handler
+        self._tree.itemChanged.disconnect(self._on_rename_finished)
+        self._tree.itemChanged.connect(self._on_item_changed)
+        # Remove editable flag
+        item.setFlags(item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEditable)
+
+        if item.data(0, _ITEM_TYPE_ROLE) == _TYPE_SUBPLOT:
+            key = item.data(0, _KEY_ROLE)
+            new_name = item.text(0).strip()
+            if key and new_name:
+                self.subplot_renamed.emit(key, new_name)

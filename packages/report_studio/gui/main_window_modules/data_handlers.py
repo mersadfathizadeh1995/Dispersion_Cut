@@ -98,6 +98,31 @@ class DataHandlersMixin:
         self._selected_uid = None
         self._render_current()
 
+    def _on_curves_removed(self, uids: list):
+        """Remove multiple curves at once."""
+        sheet = self._current_sheet()
+        if not sheet:
+            return
+        sheet.remove_curves(uids)
+        if hasattr(self, "data_tree"):
+            self.data_tree.populate(sheet)
+        if hasattr(self, "right_panel"):
+            self.right_panel.show_empty()
+        self._selected_uid = None
+        self._render_current()
+
+    def _on_subplot_renamed(self, key: str, new_name: str):
+        """User renamed a subplot via inline edit in data tree."""
+        sheet = self._current_sheet()
+        if not sheet or key not in sheet.subplots:
+            return
+        sheet.subplots[key].name = new_name
+        # Refresh export panel + re-render title
+        if hasattr(self, "right_panel"):
+            pkeys, pnames = sheet.populated_subplot_info()
+            self.right_panel.update_subplot_list(pkeys, pnames)
+        self._render_current()
+
     def _on_style_changed(self, uid: str, attr: str, value):
         """Curve style changed from properties panel."""
         sheet = self._current_sheet()
