@@ -303,14 +303,24 @@ class PlotCanvas(QtWidgets.QWidget):
     # ── Internal rendering ────────────────────────────────────────────
 
     def _update_pixmap(self):
-        """Render self._figure → QPixmap → scene."""
-        buf = io.BytesIO()
-        self._figure.savefig(buf, format="png", dpi=self._dpi,
-                             bbox_inches="tight", facecolor=self._figure.get_facecolor())
-        buf.seek(0)
-
-        pixmap = QtGui.QPixmap()
-        pixmap.loadFromData(buf.read())
+        """Render self._figure → QPixmap → scene using direct Agg buffer."""
+        try:
+            canvas = self._figure.canvas
+            canvas.draw()
+            buf = canvas.buffer_rgba()
+            w, h = canvas.get_width_height()
+            qimg = QtGui.QImage(bytes(buf), w, h, 4 * w,
+                                QtGui.QImage.Format.Format_RGBA8888)
+            pixmap = QtGui.QPixmap.fromImage(qimg)
+        except Exception:
+            # Fallback to PNG encoding if direct buffer fails
+            buf = io.BytesIO()
+            self._figure.savefig(buf, format="png", dpi=self._dpi,
+                                 bbox_inches="tight",
+                                 facecolor=self._figure.get_facecolor())
+            buf.seek(0)
+            pixmap = QtGui.QPixmap()
+            pixmap.loadFromData(buf.read())
 
         if self._pixmap_item is not None:
             self._scene.removeItem(self._pixmap_item)

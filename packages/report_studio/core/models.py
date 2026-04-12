@@ -70,6 +70,9 @@ class OffsetCurve:
     spectrum_cmap: str = "jet"
     spectrum_alpha: float = 0.85
     spectrum_colorbar: bool = False
+    spectrum_colorbar_orient: str = "vertical"   # "vertical" | "horizontal"
+    spectrum_colorbar_position: str = "right"     # "right", "left", "top", "bottom"
+    spectrum_colorbar_label: str = ""
 
     def __post_init__(self):
         if not self.uid:
@@ -162,6 +165,12 @@ class SubplotState:
     # Label overrides (empty = use default)
     x_label: str = ""
     y_label: str = ""
+
+    # Per-subplot legend (None/0/empty = use global defaults)
+    legend_visible: Optional[bool] = None
+    legend_position: str = ""
+    legend_font_size: int = 0
+    legend_frame_on: Optional[bool] = None
 
     @property
     def display_name(self) -> str:

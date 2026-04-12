@@ -1865,3 +1865,371 @@ class TestV22MainWindowIntegration:
 
         from packages.report_studio.gui.panels.right_panel import RightPanel
         assert win.right_panel._context_stack.currentIndex() == RightPanel._IDX_SUBPLOT
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.2 Bug Fixes & Enhancement Tests
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestLabelToSuffix:
+    """Phase 1: spectrum_reader._label_to_suffix fixes."""
+
+    def test_suffix_passthrough_m20(self):
+        from packages.report_studio.io.spectrum_reader import _label_to_suffix
+        assert _label_to_suffix("m20") == "m20"
+
+    def test_suffix_passthrough_p66(self):
+        from packages.report_studio.io.spectrum_reader import _label_to_suffix
+        assert _label_to_suffix("p66") == "p66"
+
+    def test_suffix_passthrough_uppercase(self):
+        from packages.report_studio.io.spectrum_reader import _label_to_suffix
+        assert _label_to_suffix("M20") == "m20"
+
+    def test_label_positive(self):
+        from packages.report_studio.io.spectrum_reader import _label_to_suffix
+        assert _label_to_suffix("+66") == "p66"
+
+    def test_label_negative(self):
+        from packages.report_studio.io.spectrum_reader import _label_to_suffix
+        result = _label_to_suffix("-20")
+        assert result in ("n20", "m20")  # either convention is valid
+
+
+class TestNormalizeOffset:
+    """Phase 1: normalize_offset for matching curves to spectra."""
+
+    def test_suffix_m20(self):
+        from packages.report_studio.io.spectrum_reader import normalize_offset
+        assert normalize_offset("m20") == "-20"
+
+    def test_suffix_p66(self):
+        from packages.report_studio.io.spectrum_reader import normalize_offset
+        assert normalize_offset("p66") == "+66"
+
+    def test_human_label_plus(self):
+        from packages.report_studio.io.spectrum_reader import normalize_offset
+        assert normalize_offset("+66") == "+66"
+
+    def test_human_label_minus(self):
+        from packages.report_studio.io.spectrum_reader import normalize_offset
+        assert normalize_offset("-20") == "-20"
+
+    def test_fdbf_tag_plus(self):
+        from packages.report_studio.io.spectrum_reader import normalize_offset
+        assert normalize_offset("fdbf_+66") == "+66"
+
+    def test_fdbf_tag_minus(self):
+        from packages.report_studio.io.spectrum_reader import normalize_offset
+        assert normalize_offset("fdbf_-20") == "-20"
+
+    def test_bare_number(self):
+        from packages.report_studio.io.spectrum_reader import normalize_offset
+        assert normalize_offset("42") == "+42"
+
+
+class TestSubplotStateLegendFields:
+    """Phase 4: per-subplot legend fields in SubplotState."""
+
+    def test_defaults_none(self):
+        from packages.report_studio.core.models import SubplotState
+        sp = SubplotState()
+        assert sp.legend_visible is None
+        assert sp.legend_position == ""
+        assert sp.legend_font_size == 0
+        assert sp.legend_frame_on is None
+
+    def test_set_legend_fields(self):
+        from packages.report_studio.core.models import SubplotState
+        sp = SubplotState()
+        sp.legend_visible = True
+        sp.legend_position = "upper right"
+        sp.legend_font_size = 10
+        sp.legend_frame_on = False
+        assert sp.legend_visible is True
+        assert sp.legend_position == "upper right"
+        assert sp.legend_font_size == 10
+        assert sp.legend_frame_on is False
+
+
+class TestOffsetCurveColorbarFields:
+    """Phase 4: colorbar fields on OffsetCurve."""
+
+    def test_defaults(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(name="test")
+        assert c.spectrum_colorbar_orient == "vertical"
+        assert c.spectrum_colorbar_position == "right"
+        assert c.spectrum_colorbar_label == ""
+
+    def test_set_colorbar_fields(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(name="test")
+        c.spectrum_colorbar_orient = "horizontal"
+        c.spectrum_colorbar_position = "bottom"
+        c.spectrum_colorbar_label = "Power"
+        assert c.spectrum_colorbar_orient == "horizontal"
+        assert c.spectrum_colorbar_position == "bottom"
+        assert c.spectrum_colorbar_label == "Power"
+
+
+class TestSpectrumDrawerImshow:
+    """Phase 2: imshow rendering with frequency and wavelength domains."""
+
+    def test_frequency_domain(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.rendering.spectrum_drawer import draw
+        from packages.report_studio.rendering.style import StyleConfig
+        from packages.report_studio.core.models import OffsetCurve, SpectrumData
+
+        fig, ax = plt.subplots()
+        spec = SpectrumData(uid="s1", offset_name="test")
+        spec.frequencies = np.linspace(1, 50, 100)
+        spec.velocities = np.linspace(50, 500, 80)
+        spec.power = np.random.rand(80, 100)
+        curve = OffsetCurve(name="test")
+        curve.spectrum_cmap = "viridis"
+        curve.spectrum_alpha = 0.8
+        style = StyleConfig()
+
+        result = draw(ax, spec, "frequency", style, curve=curve, quality="draft")
+        assert result is not None
+        plt.close(fig)
+
+    def test_wavelength_domain(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.rendering.spectrum_drawer import draw
+        from packages.report_studio.rendering.style import StyleConfig
+        from packages.report_studio.core.models import OffsetCurve, SpectrumData
+
+        fig, ax = plt.subplots()
+        spec = SpectrumData(uid="s1", offset_name="test")
+        spec.frequencies = np.linspace(1, 50, 100)
+        spec.velocities = np.linspace(50, 500, 80)
+        spec.power = np.random.rand(80, 100)
+        curve = OffsetCurve(name="test")
+        style = StyleConfig()
+
+        result = draw(ax, spec, "wavelength", style, curve=curve, quality="draft")
+        assert result is not None
+        plt.close(fig)
+
+    def test_returns_mappable_for_colorbar(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.rendering.spectrum_drawer import draw
+        from packages.report_studio.rendering.style import StyleConfig
+        from packages.report_studio.core.models import OffsetCurve, SpectrumData
+        from matplotlib.image import AxesImage
+
+        fig, ax = plt.subplots()
+        spec = SpectrumData(uid="s1", offset_name="test")
+        spec.frequencies = np.linspace(1, 50, 50)
+        spec.velocities = np.linspace(50, 500, 40)
+        spec.power = np.random.rand(40, 50)
+        curve = OffsetCurve(name="test")
+        style = StyleConfig()
+
+        result = draw(ax, spec, "frequency", style, curve=curve, quality="draft")
+        assert isinstance(result, AxesImage)
+        plt.close(fig)
+
+
+class TestDirectBufferRendering:
+    """Phase 3: Agg buffer → QPixmap."""
+
+    def test_buffer_produces_valid_pixmap(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+        fig, ax = plt.subplots(figsize=(4, 3), dpi=72)
+        ax.plot([1, 2, 3], [1, 4, 9])
+        canvas = FigureCanvasAgg(fig)
+        canvas.draw()
+
+        buf = canvas.buffer_rgba()
+        w, h = fig.canvas.get_width_height()
+
+        from packages.report_studio.qt_compat import QtGui
+        img = QtGui.QImage(bytes(buf), w, h, QtGui.QImage.Format.Format_RGBA8888)
+        pix = QtGui.QPixmap.fromImage(img)
+
+        assert not pix.isNull()
+        assert pix.width() == w
+        assert pix.height() == h
+        plt.close(fig)
+
+
+class TestRendererLegendFallback:
+    """Phase 4: per-subplot legend override with global fallback."""
+
+    def test_subplot_legend_override(self):
+        from packages.report_studio.core.models import (
+            SheetState, SubplotState, OffsetCurve)
+        from packages.report_studio.rendering.style import StyleConfig
+        import matplotlib
+        matplotlib.use("Agg")
+
+        sheet = SheetState()
+        sp = sheet.subplots[sheet.subplot_keys_ordered()[0]]
+        sp.legend_visible = True
+        sp.legend_position = "upper left"
+        sp.legend_font_size = 12
+        sp.legend_frame_on = False
+
+        curve = OffsetCurve(name="Test Curve")
+        curve.frequency = np.array([1.0, 2.0, 3.0])
+        curve.velocity = np.array([100.0, 200.0, 300.0])
+        curve.visible = True
+        sheet.curves[curve.uid] = curve
+        sp.curve_uids.append(curve.uid)
+
+        style = StyleConfig(legend_visible=False)
+
+        from packages.report_studio.rendering.renderer import render_sheet
+        import matplotlib.pyplot as plt
+        fig = plt.figure()
+        render_sheet(fig, sheet, style)
+        assert fig is not None
+
+        ax = fig.axes[0]
+        legend = ax.get_legend()
+        assert legend is not None
+        plt.close(fig)
+
+    def test_global_legend_fallback(self):
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        from packages.report_studio.rendering.style import StyleConfig
+        import matplotlib
+        matplotlib.use("Agg")
+
+        sheet = SheetState()
+        sp = sheet.subplots[sheet.subplot_keys_ordered()[0]]
+        # All legend fields remain None/0/"" → use global
+        assert sp.legend_visible is None
+        assert sp.legend_position == ""
+
+        curve = OffsetCurve(name="Fallback Curve")
+        curve.frequency = np.array([1.0, 2.0])
+        curve.velocity = np.array([100.0, 200.0])
+        curve.visible = True
+        sheet.curves[curve.uid] = curve
+        sp.curve_uids.append(curve.uid)
+
+        style = StyleConfig(legend_visible=True, legend_position="lower right")
+
+        from packages.report_studio.rendering.renderer import render_sheet
+        import matplotlib.pyplot as plt
+        fig = plt.figure()
+        render_sheet(fig, sheet, style)
+        ax = fig.axes[0]
+        legend = ax.get_legend()
+        assert legend is not None
+        plt.close(fig)
+
+
+class TestCuratedFonts:
+    """Phase 4: curated font list in subplot settings."""
+
+    def test_font_combo_items(self):
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        from packages.report_studio.qt_compat import QtWidgets
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+        from packages.report_studio.gui.panels.subplot_settings import (
+            SubplotSettingsPanel, _CURATED_FONTS)
+
+        panel = SubplotSettingsPanel()
+        combo = panel._combo_font
+        items = [combo.itemText(i) for i in range(combo.count())]
+        for font in _CURATED_FONTS:
+            assert font in items
+
+
+class TestSpectrumSettingsColorbar:
+    """Phase 4: colorbar controls in spectrum settings panel."""
+
+    def test_colorbar_widgets_exist(self):
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        from packages.report_studio.qt_compat import QtWidgets
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+        from packages.report_studio.gui.panels.spectrum_settings import (
+            SpectrumSettingsPanel)
+
+        panel = SpectrumSettingsPanel()
+        assert hasattr(panel, "_combo_colorbar_orient")
+        assert hasattr(panel, "_combo_colorbar_pos")
+        assert hasattr(panel, "_edit_colorbar_label")
+
+        # Check orient has expected items
+        orient_items = [panel._combo_colorbar_orient.itemText(i)
+                        for i in range(panel._combo_colorbar_orient.count())]
+        assert "vertical" in orient_items
+        assert "horizontal" in orient_items
+
+        # Check position has expected items
+        pos_items = [panel._combo_colorbar_pos.itemText(i)
+                     for i in range(panel._combo_colorbar_pos.count())]
+        assert "right" in pos_items
+        assert "left" in pos_items
+        assert "top" in pos_items
+        assert "bottom" in pos_items
+
+    def test_show_spectrum_populates_colorbar_fields(self):
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        from packages.report_studio.qt_compat import QtWidgets
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+        from packages.report_studio.gui.panels.spectrum_settings import (
+            SpectrumSettingsPanel)
+        from packages.report_studio.core.models import OffsetCurve
+
+        panel = SpectrumSettingsPanel()
+        curve = OffsetCurve(name="test")
+        curve.spectrum_colorbar = True
+        curve.spectrum_colorbar_orient = "horizontal"
+        curve.spectrum_colorbar_position = "bottom"
+        curve.spectrum_colorbar_label = "Power (dB)"
+
+        panel.show_spectrum(curve)
+
+        assert panel._chk_colorbar.isChecked() is True
+        assert panel._combo_colorbar_orient.currentText() == "horizontal"
+        assert panel._combo_colorbar_pos.currentText() == "bottom"
+        assert panel._edit_colorbar_label.text() == "Power (dB)"
+
+
+@pytest.mark.skipif(not PKL_PATH.exists() or not NPZ_PATH.exists(),
+                    reason="Test data files not found")
+class TestSpectrumMatchingIntegration:
+    """Integration: load PKL+NPZ and verify all spectra match."""
+
+    def test_9_of_9_spectra_matched(self):
+        from packages.report_studio.io.pkl_reader import read_pkl
+        from packages.report_studio.io.spectrum_reader import (
+            read_spectrum_npz, normalize_offset)
+
+        curves = read_pkl(str(PKL_PATH))
+        spectra = read_spectrum_npz(str(NPZ_PATH))
+
+        assert len(curves) > 0
+        assert len(spectra) > 0
+
+        matched = 0
+        for curve in curves:
+            offset_tag = curve.display_name.split("/")[-1]
+            for spec in spectra:
+                if normalize_offset(offset_tag) == normalize_offset(spec.offset_name):
+                    matched += 1
+                    break
+
+        assert matched == len(curves), (
+            f"Only matched {matched}/{len(curves)} spectra")

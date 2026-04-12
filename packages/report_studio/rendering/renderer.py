@@ -95,14 +95,19 @@ def _render_subplot(
     curves = state.get_curves_for_subplot(subplot_key)
 
     # 1. Draw spectrum backgrounds (behind curves)
+    _last_im = None
+    _last_curve_for_colorbar = None
     for curve in curves:
         if curve.spectrum_uid and curve.spectrum_visible:
             spec = state.spectra.get(curve.spectrum_uid)
             if spec and spec.has_data:
-                spectrum_drawer.draw(
+                im = spectrum_drawer.draw(
                     ax, spec, x_domain, style,
                     curve=curve, quality=quality,
                 )
+                if im is not None:
+                    _last_im = im
+                    _last_curve_for_colorbar = curve
 
     # 2. Draw dispersion curves
     for curve in curves:
@@ -115,16 +120,39 @@ def _render_subplot(
     # 3. Configure axes
     _configure_axes(ax, sp, style, x_domain, curves=curves)
 
-    # 4. Legend
-    if style.legend_visible and curves:
+    # 4. Legend (per-subplot override → global fallback)
+    leg_visible = sp.legend_visible if sp.legend_visible is not None else style.legend_visible
+    if leg_visible and curves:
         visible_curves = [c for c in curves if c.visible]
         if visible_curves:
+            leg_pos = sp.legend_position if sp.legend_position else style.legend_position
+            leg_size = sp.legend_font_size if sp.legend_font_size > 0 else style.legend_font_size
+            leg_frame = sp.legend_frame_on if sp.legend_frame_on is not None else style.legend_frame_on
             ax.legend(
-                fontsize=style.legend_font_size,
-                loc=style.legend_position,
-                frameon=style.legend_frame_on,
+                fontsize=leg_size,
+                loc=leg_pos,
+                frameon=leg_frame,
                 framealpha=style.legend_alpha,
             )
+
+    # 5. Colorbar (for last drawn spectrum that requests it)
+    if _last_im is not None and _last_curve_for_colorbar is not None:
+        cb_curve = _last_curve_for_colorbar
+        if cb_curve.spectrum_colorbar:
+            orient = getattr(cb_curve, "spectrum_colorbar_orient", "vertical")
+            position = getattr(cb_curve, "spectrum_colorbar_position", "right")
+            cb_label = getattr(cb_curve, "spectrum_colorbar_label", "")
+            try:
+                from mpl_toolkits.axes_grid1 import make_axes_locatable
+                divider = make_axes_locatable(ax)
+                size = "3%" if orient == "vertical" else "5%"
+                pad = 0.05
+                cax = divider.append_axes(position, size=size, pad=pad)
+                cb = ax.figure.colorbar(_last_im, cax=cax, orientation=orient)
+                if cb_label:
+                    cb.set_label(cb_label)
+            except Exception:
+                pass
 
     # 5. Title
     if sp.display_name:

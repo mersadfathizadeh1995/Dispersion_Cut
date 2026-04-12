@@ -1,5 +1,5 @@
 """
-Spectrum drawer — render power spectrum pcolormesh backgrounds on Axes.
+Spectrum drawer — render power spectrum backgrounds on Axes using imshow.
 """
 
 from __future__ import annotations
@@ -24,13 +24,6 @@ def _downsample_2d(arr: np.ndarray, max_rows: int, max_cols: int) -> np.ndarray:
     return arr[::rs, ::cs]
 
 
-def _downsample_1d(arr: np.ndarray, step: int) -> np.ndarray:
-    """Stride-based downsampling for 1D arrays."""
-    if step <= 1:
-        return arr
-    return arr[::step]
-
-
 def draw(
     ax: "Axes",
     spectrum: "SpectrumData",
@@ -40,7 +33,7 @@ def draw(
     quality: str = "draft",
 ):
     """
-    Draw a spectrum background as a pcolormesh on the given Axes.
+    Draw a spectrum background as an imshow heatmap on the given Axes.
 
     Parameters
     ----------
@@ -79,38 +72,31 @@ def draw(
         return
 
     # Downsample for draft quality (canvas rendering)
-    max_px = 200
     if quality == "draft":
-        r, c = power.shape
-        rs = max(1, r // max_px)
-        cs = max(1, c // max_px)
+        max_px = 200
         power = _downsample_2d(power, max_px, max_px)
-        freq = _downsample_1d(freq, cs) if freq.ndim == 1 else freq
-        vel = _downsample_1d(vel, rs) if vel.ndim == 1 else vel
 
-    if x_domain == "frequency":
-        x = freq
+    # Determine x-axis values based on domain
+    if x_domain == "wavelength" and freq is not None and vel is not None:
+        # wavelength = velocity / frequency (guard division by zero)
+        safe_freq = np.where(freq > 0, freq, np.nan)
+        x = vel.mean() / safe_freq if freq.ndim == 1 else freq
     else:
         x = freq
 
+    if x is None or vel is None or len(x) == 0 or len(vel) == 0:
+        return
+
+    # Use imshow with explicit extent for fast, aligned rendering
+    extent = [float(x.min()), float(x.max()),
+              float(vel.min()), float(vel.max())]
+
     try:
-        ax.pcolormesh(
-            x, vel, power,
-            cmap=cmap,
-            alpha=alpha,
-            shading="auto",
-            zorder=1,
-            rasterized=True,
+        im = ax.imshow(
+            power, extent=extent, aspect="auto", origin="lower",
+            cmap=cmap, alpha=alpha, interpolation="bilinear",
+            zorder=1, rasterized=True,
         )
+        return im
     except Exception:
-        try:
-            ax.pcolormesh(
-                x, vel, power.T,
-                cmap=cmap,
-                alpha=alpha,
-                shading="auto",
-                zorder=1,
-                rasterized=True,
-            )
-        except Exception:
-            pass
+        return None

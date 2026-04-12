@@ -93,6 +93,25 @@ class SpectrumSettingsPanel(QtWidgets.QWidget):
             lambda v: self._emit("spectrum_colorbar", v))
         bl.addRow(self._chk_colorbar)
 
+        self._combo_colorbar_orient = QtWidgets.QComboBox()
+        self._combo_colorbar_orient.addItems(["vertical", "horizontal"])
+        self._combo_colorbar_orient.currentTextChanged.connect(
+            lambda v: self._emit("spectrum_colorbar_orient", v))
+        bl.addRow("Orientation:", self._combo_colorbar_orient)
+
+        self._combo_colorbar_pos = QtWidgets.QComboBox()
+        self._combo_colorbar_pos.addItems(["right", "left", "top", "bottom"])
+        self._combo_colorbar_pos.currentTextChanged.connect(
+            lambda v: self._emit("spectrum_colorbar_position", v))
+        bl.addRow("Position:", self._combo_colorbar_pos)
+
+        self._edit_colorbar_label = QtWidgets.QLineEdit()
+        self._edit_colorbar_label.setPlaceholderText("Power")
+        self._edit_colorbar_label.editingFinished.connect(
+            lambda: self._emit("spectrum_colorbar_label",
+                               self._edit_colorbar_label.text()))
+        bl.addRow("Label:", self._edit_colorbar_label)
+
         layout.addWidget(bar_sec)
 
         layout.addStretch(1)
@@ -112,6 +131,18 @@ class SpectrumSettingsPanel(QtWidgets.QWidget):
             self._combo_cmap.setCurrentIndex(idx)
         self._spin_alpha.setValue(curve.spectrum_alpha)
         self._chk_colorbar.setChecked(curve.spectrum_colorbar)
+
+        # Colorbar details
+        orient = getattr(curve, "spectrum_colorbar_orient", "vertical")
+        idx = self._combo_colorbar_orient.findText(orient)
+        if idx >= 0:
+            self._combo_colorbar_orient.setCurrentIndex(idx)
+        pos = getattr(curve, "spectrum_colorbar_position", "right")
+        idx = self._combo_colorbar_pos.findText(pos)
+        if idx >= 0:
+            self._combo_colorbar_pos.setCurrentIndex(idx)
+        self._edit_colorbar_label.setText(
+            getattr(curve, "spectrum_colorbar_label", ""))
 
         self._updating = False
 

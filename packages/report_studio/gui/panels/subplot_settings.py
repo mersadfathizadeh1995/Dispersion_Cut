@@ -2,7 +2,7 @@
 Subplot settings panel — rich per-subplot configuration.
 
 Shown in the Context tab when a subplot is selected (via tree or canvas click).
-Sections: Title & Labels, X Axis, Y Axis.
+Sections: Title & Labels, X Axis, Y Axis, Legend.
 """
 
 from __future__ import annotations
@@ -17,6 +17,12 @@ from .collapsible import CollapsibleSection
 
 if TYPE_CHECKING:
     from ...core.models import SubplotState
+
+
+_CURATED_FONTS = [
+    "Arial", "Times New Roman", "Calibri",
+    "Helvetica", "Courier New", "Georgia",
+]
 
 
 class SubplotSettingsPanel(QtWidgets.QWidget):
@@ -61,28 +67,29 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
             lambda: self._emit("name", self._edit_name.text()))
         tl.addRow("Name:", self._edit_name)
 
-        self._combo_font = QtWidgets.QFontComboBox()
-        self._combo_font.currentFontChanged.connect(
-            lambda f: self._emit("font_family", f.family()))
+        self._combo_font = QtWidgets.QComboBox()
+        self._combo_font.addItems(_CURATED_FONTS)
+        self._combo_font.currentTextChanged.connect(
+            lambda f: self._emit("font_family", f))
         tl.addRow("Font:", self._combo_font)
 
         self._spin_title_size = QtWidgets.QSpinBox()
         self._spin_title_size.setRange(0, 36)
-        self._spin_title_size.setSpecialValueText("Global")
+        self._spin_title_size.setSpecialValueText("Default")
         self._spin_title_size.valueChanged.connect(
             lambda v: self._emit("title_font_size", v))
         tl.addRow("Title size:", self._spin_title_size)
 
         self._spin_label_size = QtWidgets.QSpinBox()
         self._spin_label_size.setRange(0, 30)
-        self._spin_label_size.setSpecialValueText("Global")
+        self._spin_label_size.setSpecialValueText("Default")
         self._spin_label_size.valueChanged.connect(
             lambda v: self._emit("axis_label_font_size", v))
         tl.addRow("Label size:", self._spin_label_size)
 
         self._spin_tick_size = QtWidgets.QSpinBox()
         self._spin_tick_size.setRange(0, 24)
-        self._spin_tick_size.setSpecialValueText("Global")
+        self._spin_tick_size.setSpecialValueText("Default")
         self._spin_tick_size.valueChanged.connect(
             lambda v: self._emit("tick_label_font_size", v))
         tl.addRow("Tick size:", self._spin_tick_size)
@@ -192,6 +199,42 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
 
         layout.addWidget(y_sec)
 
+        # ── Legend (per-subplot override) ─────────────────────────────
+        legend_sec = CollapsibleSection("Legend", expanded=False)
+        ll = legend_sec.form
+        ll.setSpacing(4)
+
+        self._chk_legend_visible = QtWidgets.QCheckBox("Show legend")
+        self._chk_legend_visible.setChecked(True)
+        self._chk_legend_visible.toggled.connect(
+            lambda v: self._emit("legend_visible", v))
+        ll.addRow(self._chk_legend_visible)
+
+        self._combo_legend_pos = QtWidgets.QComboBox()
+        self._combo_legend_pos.addItems([
+            "best", "upper right", "upper left", "lower left",
+            "lower right", "center left", "center right",
+            "lower center", "upper center", "center",
+        ])
+        self._combo_legend_pos.currentTextChanged.connect(
+            lambda v: self._emit("legend_position", v))
+        ll.addRow("Position:", self._combo_legend_pos)
+
+        self._spin_legend_size = QtWidgets.QSpinBox()
+        self._spin_legend_size.setRange(0, 24)
+        self._spin_legend_size.setSpecialValueText("Default")
+        self._spin_legend_size.valueChanged.connect(
+            lambda v: self._emit("legend_font_size", v))
+        ll.addRow("Font size:", self._spin_legend_size)
+
+        self._chk_legend_frame = QtWidgets.QCheckBox("Frame")
+        self._chk_legend_frame.setChecked(True)
+        self._chk_legend_frame.toggled.connect(
+            lambda v: self._emit("legend_frame_on", v))
+        ll.addRow(self._chk_legend_frame)
+
+        layout.addWidget(legend_sec)
+
         layout.addStretch(1)
 
     # ── Public API ────────────────────────────────────────────────────
@@ -205,9 +248,11 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
 
         self._edit_name.setText(sp.name)
 
-        # Font
-        if sp.font_family:
-            self._combo_font.setCurrentFont(QtGui.QFont(sp.font_family))
+        # Font — curated combo
+        font = sp.font_family or _CURATED_FONTS[0]
+        idx = self._combo_font.findText(font)
+        if idx >= 0:
+            self._combo_font.setCurrentIndex(idx)
         self._spin_title_size.setValue(sp.title_font_size)
         self._spin_label_size.setValue(sp.axis_label_font_size)
         self._spin_tick_size.setValue(sp.tick_label_font_size)
@@ -241,6 +286,19 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
             self._spin_ymax.setValue(sp.y_range[1])
         self._edit_ylabel.setText(sp.y_label)
 
+        # Legend
+        legend_vis = getattr(sp, "legend_visible", None)
+        self._chk_legend_visible.setChecked(
+            legend_vis if legend_vis is not None else True)
+        legend_pos = getattr(sp, "legend_position", "") or "best"
+        idx = self._combo_legend_pos.findText(legend_pos)
+        if idx >= 0:
+            self._combo_legend_pos.setCurrentIndex(idx)
+        self._spin_legend_size.setValue(getattr(sp, "legend_font_size", 0))
+        legend_frame = getattr(sp, "legend_frame_on", None)
+        self._chk_legend_frame.setChecked(
+            legend_frame if legend_frame is not None else True)
+
         self._updating = False
 
     def show_subplots_batch(self, keys: list, subplots: list):
@@ -257,8 +315,10 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
             sp = subplots[0]
             self._edit_name.setText("")
             self._edit_name.setPlaceholderText("(multiple)")
-            if sp.font_family:
-                self._combo_font.setCurrentFont(QtGui.QFont(sp.font_family))
+            font = sp.font_family or _CURATED_FONTS[0]
+            idx = self._combo_font.findText(font)
+            if idx >= 0:
+                self._combo_font.setCurrentIndex(idx)
             self._spin_title_size.setValue(sp.title_font_size)
             self._spin_label_size.setValue(sp.axis_label_font_size)
             self._spin_tick_size.setValue(sp.tick_label_font_size)

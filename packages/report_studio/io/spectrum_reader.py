@@ -6,6 +6,7 @@ Supports both single-offset and combined (multi-offset) NPZ formats.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import List
 
@@ -101,19 +102,61 @@ def _read_combined_by_pattern(data, keys: list) -> List[SpectrumData]:
     return results
 
 
+# ── Offset name helpers ───────────────────────────────────────────────────
+
+_SUFFIX_RE = re.compile(r"^[mpMP]\d+$")
+
+
 def _label_to_suffix(label: str) -> str:
-    """Convert offset label like '+66m' to NPZ key suffix like 'p66'."""
-    s = label.strip().lower()
-    s = s.replace(" ", "").replace("m", "")
+    """Convert offset label to NPZ key suffix.
+
+    Already-suffix inputs like 'm20' or 'p66' pass through unchanged.
+    Human labels like '+66m' or '-20m' are converted to 'p66' / 'n20'.
+    """
+    s = label.strip()
+    # Already in suffix format? (e.g. 'm20', 'p66')
+    if _SUFFIX_RE.match(s):
+        return s.lower()
+    # Human label: '+66m', '-20m' → 'p66', 'n20'
+    s = s.lower().replace(" ", "").rstrip("m")
     s = s.replace("+", "p").replace("-", "n")
     return s
 
 
 def _suffix_to_label(suffix: str) -> str:
-    """Convert NPZ key suffix like 'p66' back to label like '+66m'."""
+    """Convert NPZ key suffix like 'p66' back to label like '+66'."""
     s = suffix
     if s.startswith("p"):
-        return f"+{s[1:]}m"
-    elif s.startswith("n"):
-        return f"-{s[1:]}m"
+        return f"+{s[1:]}"
+    elif s.startswith("n") or s.startswith("m"):
+        return f"-{s[1:]}"
     return s
+
+
+_OFFSET_NUM_RE = re.compile(r"([+-])\s*(\d+)")
+_SUFFIX_NUM_RE = re.compile(r"(?<![a-zA-Z])([mpMPnN])(\d+)")
+
+
+def normalize_offset(name: str) -> str:
+    """Extract normalized ±N from any offset format.
+
+    Examples: 'fdbf_+66' → '+66', 'p66' → '+66', 'm20' → '-20',
+              '-20m' → '-20', 'Rayleigh/fdbf_-30' → '-30'.
+    """
+    # Try suffix format first: m20, p66, n10
+    m = _SUFFIX_NUM_RE.search(name)
+    if m:
+        prefix = m.group(1).lower()
+        num = m.group(2)
+        if prefix in ("m", "n"):
+            return f"-{num}"
+        return f"+{num}"
+    # Try human format: +66, -20
+    m = _OFFSET_NUM_RE.search(name)
+    if m:
+        return f"{m.group(1)}{m.group(2)}"
+    # Bare number
+    m = re.search(r"(\d+)", name)
+    if m:
+        return f"+{m.group(1)}"
+    return name

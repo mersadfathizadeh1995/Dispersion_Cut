@@ -52,6 +52,12 @@ class ReportStudioWindow(
         self._sheets: List[SheetState] = []
         self._selected_uid: Optional[str] = None
 
+        # Debounce timer for rapid setting changes
+        self._render_timer = QtCore.QTimer(self)
+        self._render_timer.setSingleShot(True)
+        self._render_timer.setInterval(50)  # 50 ms debounce
+        self._render_timer.timeout.connect(self._do_render)
+
         self._build_ui()
         self._setup_menubar()
         self._connect_signals()
@@ -230,12 +236,16 @@ class ReportStudioWindow(
                         curves: List[OffsetCurve],
                         spectra: List[SpectrumData]):
         """Link spectra, refresh panels, render."""
-        # Link spectra to curves by offset name
+        from ..io.spectrum_reader import normalize_offset
+
+        # Link spectra to curves by normalized offset (e.g. '+66', '-20')
         for spec in spectra:
             sheet.spectra[spec.uid] = spec
+            spec_norm = normalize_offset(spec.offset_name)
             for c in sheet.curves.values():
                 offset_tag = c.name.split("/")[-1].strip()
-                if offset_tag and spec.offset_name and offset_tag in spec.offset_name:
+                curve_norm = normalize_offset(offset_tag)
+                if curve_norm == spec_norm:
                     c.spectrum_uid = spec.uid
                     break
 
@@ -251,7 +261,14 @@ class ReportStudioWindow(
     # ── Rendering ──────────────────────────────────────────────────────
 
     def _render_current(self):
-        """Re-render the current sheet's canvas."""
+        """Schedule a debounced re-render (50 ms coalescing window)."""
+        if hasattr(self, '_render_timer'):
+            self._render_timer.start()
+        else:
+            self._do_render()
+
+    def _do_render(self):
+        """Actually re-render the current sheet's canvas."""
         sheet = self._current_sheet()
         canvas = self.sheet_tabs.current_canvas()
         if not sheet or not canvas:
