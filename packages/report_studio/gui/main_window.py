@@ -382,12 +382,32 @@ class ReportStudioWindow(
     def _open_project_dir(self, project_dir: str):
         """Open a v4 project from its directory — then offer to load sheets."""
         import os
+        import json
 
-        # Check for saved sheets first
+        # Try to read project-level data source paths (fallback for sheets)
+        pj_path = os.path.join(project_dir, "project.json")
+        proj_pkl, proj_npz = "", ""
+        if os.path.isfile(pj_path):
+            try:
+                with open(pj_path, "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+                ds = manifest.get("data_sources", {})
+                proj_pkl = ds.get("pkl_path", "")
+                proj_npz = ds.get("npz_path", "")
+            except Exception:
+                manifest = {}
+        else:
+            manifest = {}
+
+        # Store project-level paths so sheet loader can use them as fallback
+        if proj_pkl:
+            self._pkl_path = proj_pkl
+            self._npz_path = proj_npz
+
+        # Check for saved sheets
         from ..io.project_v4 import list_sheets
         saved = list_sheets(project_dir)
         if saved:
-            # Offer to load a saved sheet
             from ..qt_compat import QtWidgets
             names = [n for n, _ in saved]
             choice, ok = QtWidgets.QInputDialog.getItem(
@@ -400,21 +420,14 @@ class ReportStudioWindow(
                     if n == choice:
                         self._load_sheet_from_folder(folder)
                         return
-        # No saved sheets — fall back to project-level data
-        import json
-        pj_path = os.path.join(project_dir, "project.json")
-        if not os.path.isfile(pj_path):
-            return
-        try:
-            with open(pj_path, "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-        except Exception:
-            return
 
+        # No saved sheets — fall back to project-level data
+        if not manifest:
+            return
         version = manifest.get("version", 0)
         if version >= 4 and "data_sources" in manifest:
             self._load_project_v4(project_dir, manifest)
-        else:
+        elif os.path.isfile(pj_path):
             self._load_project_legacy(pj_path)
 
     def _try_restore_session(self, project_dir: str):

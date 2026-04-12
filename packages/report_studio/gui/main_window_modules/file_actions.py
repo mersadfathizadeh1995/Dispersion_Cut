@@ -263,20 +263,51 @@ class FileActionsMixin:
         npz_path = data_sources.get("npz_path", "")
         saved_fp = data_sources.get("fingerprint", "")
 
+        has_curves_in_manifest = bool(curve_settings)
+
+        # Fallback: if paths are empty but the sheet had curves, try
+        # the window-level paths, QSettings, or prompt the user.
+        if not pkl_path and has_curves_in_manifest:
+            pkl_path = getattr(self, "_pkl_path", "")
+            npz_path = getattr(self, "_npz_path", "") or npz_path
+        if not pkl_path and has_curves_in_manifest:
+            from ..panels.project_start_dialog import load_data_paths
+            pkl_path, npz_path = load_data_paths()
+        if not pkl_path and has_curves_in_manifest:
+            # Last resort: ask user to locate the PKL file
+            pkl_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self, "Locate Data File (PKL)",
+                "", "Pickle files (*.pkl);;All files (*)",
+            )
+            if pkl_path:
+                npz_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                    self, "Locate Spectrum File (NPZ, optional)",
+                    "", "NumPy files (*.npz);;All files (*)",
+                )
+
         curves, spectra = [], []
         if pkl_path:
-            try:
-                curves = read_pkl(pkl_path)
-            except Exception as e:
+            import os
+            if not os.path.isfile(pkl_path):
                 QtWidgets.QMessageBox.warning(
                     self, "Data Warning",
-                    f"Could not reload session file:\n{pkl_path}\n{e}",
+                    f"PKL file not found:\n{pkl_path}",
                 )
+            else:
+                try:
+                    curves = read_pkl(pkl_path)
+                except Exception as e:
+                    QtWidgets.QMessageBox.warning(
+                        self, "Data Warning",
+                        f"Could not reload data file:\n{pkl_path}\n{e}",
+                    )
         if npz_path:
-            try:
-                spectra = read_spectrum_npz(npz_path)
-            except Exception:
-                pass
+            import os
+            if os.path.isfile(npz_path):
+                try:
+                    spectra = read_spectrum_npz(npz_path)
+                except Exception:
+                    pass
 
         # Validate fingerprint
         if saved_fp and curves:
@@ -293,9 +324,14 @@ class FileActionsMixin:
         if curves:
             reload_and_apply(sheet, curve_settings, curves, spectra)
 
-        # Store paths on sheet
-        sheet.pkl_path = pkl_path
-        sheet.npz_path = npz_path
+        # Store paths on sheet (and globally for future saves)
+        sheet.pkl_path = pkl_path or ""
+        sheet.npz_path = npz_path or ""
+        if pkl_path:
+            self._pkl_path = pkl_path
+            self._npz_path = npz_path or ""
+            from ..panels.project_start_dialog import save_data_paths
+            save_data_paths(pkl_path, npz_path or "")
 
         # Add as new tab
         from ..canvas.plot_canvas import PlotCanvas
