@@ -2233,3 +2233,35 @@ class TestSpectrumMatchingIntegration:
 
         assert matched == len(curves), (
             f"Only matched {matched}/{len(curves)} spectra")
+
+
+class TestSpectrumCache:
+    """Phase 5: spectrum_cache downsample LRU."""
+
+    def test_small_array_passthrough(self):
+        from packages.report_studio.rendering.spectrum_cache import (
+            get_downsampled, clear_cache)
+        clear_cache()
+        arr = np.random.rand(50, 50)
+        result = get_downsampled(arr, max_px=200)
+        assert result is arr  # no copy
+
+    def test_large_array_downsampled(self):
+        from packages.report_studio.rendering.spectrum_cache import (
+            get_downsampled, clear_cache)
+        clear_cache()
+        arr = np.random.rand(1000, 800)
+        result = get_downsampled(arr, max_px=200)
+        assert result.shape[0] <= 200
+        assert result.shape[1] <= 200
+
+    def test_cache_hit(self):
+        from packages.report_studio.rendering.spectrum_cache import (
+            get_downsampled, _cached_downsample, clear_cache)
+        clear_cache()
+        arr = np.random.rand(600, 400)
+        get_downsampled(arr, max_px=200)
+        info1 = _cached_downsample.cache_info()
+        get_downsampled(arr, max_px=200)
+        info2 = _cached_downsample.cache_info()
+        assert info2.hits == info1.hits + 1

@@ -73,8 +73,9 @@ def draw(
 
     # Downsample for draft quality (canvas rendering)
     if quality == "draft":
-        max_px = 200
-        power = _downsample_2d(power, max_px, max_px)
+        from .spectrum_cache import get_downsampled
+        power = get_downsampled(power, max_px=200)
+    
 
     # Determine x-axis values based on domain
     if x_domain == "wavelength" and freq is not None and vel is not None:
