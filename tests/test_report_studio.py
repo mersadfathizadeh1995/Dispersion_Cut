@@ -623,6 +623,42 @@ class TestDataTree:
         c = OffsetCurve(name="X", frequency=np.array([1]), velocity=np.array([1]))
         assert c.spectrum_visible is False
 
+    def test_spectrum_selected_signal(self, qapp, qtbot):
+        """Clicking a spectrum sub-item should emit spectrum_selected, not curve_selected."""
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel, _TYPE_SPECTRUM, _ITEM_TYPE_ROLE, _UID_ROLE,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, SpectrumData,
+        )
+        tree = DataTreePanel()
+        sheet = SheetState()
+        spec = SpectrumData(
+            offset_name="test",
+            frequencies=np.linspace(5, 50, 10),
+            velocities=np.linspace(50, 500, 20),
+            power=np.random.rand(20, 10),
+            method="fdbf",
+        )
+        sheet.spectra[spec.uid] = spec
+        c = OffsetCurve(name="Test", frequency=np.array([1, 2]),
+                        velocity=np.array([10, 20]),
+                        spectrum_uid=spec.uid, spectrum_visible=False)
+        sheet.add_curve(c)
+        tree.populate(sheet)
+
+        # Find the spectrum item
+        main_item = tree._tree.topLevelItem(0)
+        curve_item = main_item.child(0)
+        spec_item = curve_item.child(1)  # spectrum sub-item
+        assert spec_item.data(0, _ITEM_TYPE_ROLE) == _TYPE_SPECTRUM
+
+        # Connect signals
+        with qtbot.waitSignal(tree.spectrum_selected, timeout=1000) as blocker:
+            tree._on_item_clicked(spec_item, 0)
+
+        assert blocker.args == [c.uid]
+
 
 class TestPropertiesPanel:
     def test_construction(self, qapp):
@@ -1379,26 +1415,32 @@ class TestSmokeEndToEnd:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-class TestCollapsibleGroupBox:
-    """Test the collapsible group box widget."""
+class TestCollapsibleSection:
+    """Test the arrow-based collapsible section widget."""
 
     def test_construction(self, qapp):
-        from packages.report_studio.gui.panels.collapsible import CollapsibleGroupBox
-        grp = CollapsibleGroupBox("Test Group")
-        assert grp.isCheckable()
-        assert grp.isChecked()
+        from packages.report_studio.gui.panels.collapsible import CollapsibleSection
+        sec = CollapsibleSection("Test Group")
+        assert sec is not None
+        assert sec.content is not None
+        assert sec.form is not None
 
-    def test_collapse(self, qapp):
-        from packages.report_studio.gui.panels.collapsible import CollapsibleGroupBox
-        from packages.report_studio.qt_compat import QtWidgets
-        grp = CollapsibleGroupBox("Test")
-        layout = QtWidgets.QVBoxLayout()
-        lbl = QtWidgets.QLabel("Content")
-        layout.addWidget(lbl)
-        grp.setLayout(layout)
+    def test_collapse_toggle(self, qapp):
+        from packages.report_studio.gui.panels.collapsible import CollapsibleSection
+        sec = CollapsibleSection("Test", expanded=True)
+        assert sec._toggle.isChecked()  # expanded
+        # Collapse
+        sec._toggle.setChecked(False)
+        sec._on_toggle(False)
+        assert not sec._toggle.isChecked()
+        # Expand
+        sec._toggle.setChecked(True)
+        sec._on_toggle(True)
+        assert sec._toggle.isChecked()
 
-        grp.setChecked(False)
-        assert grp.maximumHeight() == 30
+    def test_backward_compat_alias(self, qapp):
+        from packages.report_studio.gui.panels.collapsible import CollapsibleGroupBox, CollapsibleSection
+        assert CollapsibleGroupBox is CollapsibleSection
 
 
 class TestSubplotSettingsPanel:

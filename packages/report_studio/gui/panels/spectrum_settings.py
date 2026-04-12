@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, List
 from ...qt_compat import (
     QtWidgets, QtCore, Signal,
 )
-from .collapsible import CollapsibleGroupBox
+from .collapsible import CollapsibleSection
 
 if TYPE_CHECKING:
     from ...core.models import OffsetCurve
@@ -47,16 +47,22 @@ class SpectrumSettingsPanel(QtWidgets.QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(6)
 
-        grp = CollapsibleGroupBox("Spectrum Appearance")
-        fl = QtWidgets.QFormLayout()
+        # ── Appearance ─────────────────────────────────────────────────
+        sec = CollapsibleSection("Spectrum Appearance", expanded=True)
+        fl = sec.form
         fl.setSpacing(4)
+
+        # Name label
+        self._lbl_name = QtWidgets.QLabel("—")
+        self._lbl_name.setWordWrap(True)
+        fl.addRow("Source:", self._lbl_name)
 
         # Colormap
         self._combo_cmap = QtWidgets.QComboBox()
         self._combo_cmap.addItems(_COLORMAPS)
         self._combo_cmap.currentTextChanged.connect(
             lambda v: self._emit("spectrum_cmap", v))
-        fl.addRow("Colormap:", self._combo_cmap)
+        fl.addRow("Theme:", self._combo_cmap)
 
         # Opacity
         self._spin_alpha = QtWidgets.QDoubleSpinBox()
@@ -67,15 +73,21 @@ class SpectrumSettingsPanel(QtWidgets.QWidget):
             lambda v: self._emit("spectrum_alpha", v))
         fl.addRow("Opacity:", self._spin_alpha)
 
-        # Colorbar toggle
+        layout.addWidget(sec)
+
+        # ── Colorbar / Legend ──────────────────────────────────────────
+        bar_sec = CollapsibleSection("Colorbar", expanded=True)
+        bl = bar_sec.form
+        bl.setSpacing(4)
+
         self._chk_colorbar = QtWidgets.QCheckBox("Show colorbar")
         self._chk_colorbar.setChecked(False)
         self._chk_colorbar.toggled.connect(
             lambda v: self._emit("spectrum_colorbar", v))
-        fl.addRow(self._chk_colorbar)
+        bl.addRow(self._chk_colorbar)
 
-        grp.setLayout(fl)
-        layout.addWidget(grp)
+        layout.addWidget(bar_sec)
+
         layout.addStretch(1)
 
     # ── Public API ────────────────────────────────────────────────────
@@ -86,6 +98,7 @@ class SpectrumSettingsPanel(QtWidgets.QWidget):
         self._current_uid = curve.uid
         self._batch_uids = []
 
+        self._lbl_name.setText(curve.display_name)
         idx = self._combo_cmap.findText(curve.spectrum_cmap)
         if idx >= 0:
             self._combo_cmap.setCurrentIndex(idx)
@@ -100,6 +113,7 @@ class SpectrumSettingsPanel(QtWidgets.QWidget):
         self._batch_uids = list(uids)
         self._current_uid = uids[0] if uids else ""
 
+        self._lbl_name.setText(f"{len(uids)} spectra selected")
         if curves:
             c = curves[0]
             idx = self._combo_cmap.findText(c.spectrum_cmap)

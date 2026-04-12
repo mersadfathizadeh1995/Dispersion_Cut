@@ -2,7 +2,7 @@
 Subplot settings panel — rich per-subplot configuration.
 
 Shown in the Context tab when a subplot is selected (via tree or canvas click).
-Sections: Title & Labels, X Axis, Y Axis, Legend override.
+Sections: Title & Labels, X Axis, Y Axis.
 """
 
 from __future__ import annotations
@@ -10,10 +10,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ...qt_compat import (
-    QtWidgets, QtCore, Signal,
+    QtWidgets, QtCore, QtGui, Signal,
     Horizontal, PolicyExpanding,
 )
-from .collapsible import CollapsibleGroupBox
+from .collapsible import CollapsibleSection
 
 if TYPE_CHECKING:
     from ...core.models import SubplotState
@@ -43,8 +43,8 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
         layout.setSpacing(6)
 
         # ── Title & Labels ────────────────────────────────────────────
-        title_grp = CollapsibleGroupBox("Title && Labels")
-        tl = QtWidgets.QFormLayout()
+        title_sec = CollapsibleSection("Title && Labels", expanded=True)
+        tl = title_sec.form
         tl.setSpacing(4)
 
         self._edit_name = QtWidgets.QLineEdit()
@@ -79,12 +79,11 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
             lambda v: self._emit("tick_label_font_size", v))
         tl.addRow("Tick size:", self._spin_tick_size)
 
-        title_grp.setLayout(tl)
-        layout.addWidget(title_grp)
+        layout.addWidget(title_sec)
 
         # ── X Axis ────────────────────────────────────────────────────
-        x_grp = CollapsibleGroupBox("X Axis")
-        xl = QtWidgets.QFormLayout()
+        x_sec = CollapsibleSection("X Axis", expanded=True)
+        xl = x_sec.form
         xl.setSpacing(4)
 
         self._combo_domain = QtWidgets.QComboBox()
@@ -135,12 +134,11 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
             lambda: self._emit("x_label", self._edit_xlabel.text()))
         xl.addRow("Label:", self._edit_xlabel)
 
-        x_grp.setLayout(xl)
-        layout.addWidget(x_grp)
+        layout.addWidget(x_sec)
 
         # ── Y Axis ────────────────────────────────────────────────────
-        y_grp = CollapsibleGroupBox("Y Axis")
-        yl = QtWidgets.QFormLayout()
+        y_sec = CollapsibleSection("Y Axis", expanded=True)
+        yl = y_sec.form
         yl.setSpacing(4)
 
         self._combo_yscale = QtWidgets.QComboBox()
@@ -184,8 +182,7 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
             lambda: self._emit("y_label", self._edit_ylabel.text()))
         yl.addRow("Label:", self._edit_ylabel)
 
-        y_grp.setLayout(yl)
-        layout.addWidget(y_grp)
+        layout.addWidget(y_sec)
 
         layout.addStretch(1)
 
@@ -200,9 +197,7 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
 
         # Font
         if sp.font_family:
-            self._combo_font.setCurrentFont(QtWidgets.QApplication.font()
-                                             if not sp.font_family else
-                                             __import__("PySide6.QtGui", fromlist=["QFont"]).QFont(sp.font_family))
+            self._combo_font.setCurrentFont(QtGui.QFont(sp.font_family))
         self._spin_title_size.setValue(sp.title_font_size)
         self._spin_label_size.setValue(sp.axis_label_font_size)
         self._spin_tick_size.setValue(sp.tick_label_font_size)

@@ -37,6 +37,15 @@ class DataHandlersMixin:
         sheet.curves[uid].spectrum_visible = visible
         self._render_current()
 
+    def _on_spectrum_selected(self, uid: str):
+        """A spectrum item was selected in the data tree."""
+        sheet = self._current_sheet()
+        if not sheet or uid not in sheet.curves:
+            return
+        curve = sheet.curves[uid]
+        if hasattr(self, "right_panel"):
+            self.right_panel.show_spectrum(curve)
+
     def _on_curve_moved(self, uid: str, new_subplot_key: str):
         """Curve was dragged to a different subplot in the tree."""
         sheet = self._current_sheet()

@@ -13,7 +13,7 @@ from ...qt_compat import (
     QtWidgets, QtCore, Signal,
     Horizontal, PolicyExpanding,
 )
-from .collapsible import CollapsibleGroupBox
+from .collapsible import CollapsibleSection
 
 if TYPE_CHECKING:
     from ...core.models import SheetState
@@ -47,8 +47,8 @@ class GlobalSettingsPanel(QtWidgets.QWidget):
         layout.setSpacing(6)
 
         # ── Grid Layout ──────────────────────────────────────────────
-        grid_grp = CollapsibleGroupBox("Grid Layout")
-        gl = QtWidgets.QFormLayout()
+        grid_sec = CollapsibleSection("Grid Layout", expanded=True)
+        gl = grid_sec.form
         gl.setSpacing(4)
 
         self._spin_rows = QtWidgets.QSpinBox()
@@ -63,12 +63,11 @@ class GlobalSettingsPanel(QtWidgets.QWidget):
         self._spin_cols.valueChanged.connect(self._on_grid_spin)
         gl.addRow("Columns:", self._spin_cols)
 
-        grid_grp.setLayout(gl)
-        layout.addWidget(grid_grp)
+        layout.addWidget(grid_sec)
 
         # ── Figure Dimensions ────────────────────────────────────────
-        dim_grp = CollapsibleGroupBox("Figure Dimensions")
-        dl = QtWidgets.QFormLayout()
+        dim_sec = CollapsibleSection("Figure Dimensions", expanded=True)
+        dl = dim_sec.form
         dl.setSpacing(4)
 
         self._spin_fig_w = QtWidgets.QDoubleSpinBox()
@@ -91,12 +90,11 @@ class GlobalSettingsPanel(QtWidgets.QWidget):
             lambda v: self._emit_layout("figure_height", v))
         dl.addRow("Height:", self._spin_fig_h)
 
-        dim_grp.setLayout(dl)
-        layout.addWidget(dim_grp)
+        layout.addWidget(dim_sec)
 
         # ── Margins (numeric spinboxes, NOT sliders) ─────────────────
-        margin_grp = CollapsibleGroupBox("Margins")
-        ml = QtWidgets.QFormLayout()
+        margin_sec = CollapsibleSection("Margins", expanded=True)
+        ml = margin_sec.form
         ml.setSpacing(4)
 
         self._spin_hspace = QtWidgets.QDoubleSpinBox()
@@ -119,12 +117,11 @@ class GlobalSettingsPanel(QtWidgets.QWidget):
             lambda v: self._emit_layout("wspace", v))
         ml.addRow("Col gap:", self._spin_wspace)
 
-        margin_grp.setLayout(ml)
-        layout.addWidget(margin_grp)
+        layout.addWidget(margin_sec)
 
         # ── Render Quality ───────────────────────────────────────────
-        quality_grp = CollapsibleGroupBox("Canvas Quality")
-        ql = QtWidgets.QFormLayout()
+        quality_sec = CollapsibleSection("Canvas Quality", expanded=False)
+        ql = quality_sec.form
         ql.setSpacing(4)
 
         self._combo_quality = QtWidgets.QComboBox()
@@ -133,12 +130,11 @@ class GlobalSettingsPanel(QtWidgets.QWidget):
         self._combo_quality.currentIndexChanged.connect(self._on_quality)
         ql.addRow("Quality:", self._combo_quality)
 
-        quality_grp.setLayout(ql)
-        layout.addWidget(quality_grp)
+        layout.addWidget(quality_sec)
 
         # ── Legend ────────────────────────────────────────────────────
-        legend_grp = CollapsibleGroupBox("Legend")
-        ll = QtWidgets.QFormLayout()
+        legend_sec = CollapsibleSection("Legend", expanded=False)
+        ll = legend_sec.form
         ll.setSpacing(4)
 
         self._chk_legend = QtWidgets.QCheckBox("Show legend")
@@ -170,12 +166,11 @@ class GlobalSettingsPanel(QtWidgets.QWidget):
             lambda v: self._emit_legend("frame_on", v))
         ll.addRow(self._chk_legend_frame)
 
-        legend_grp.setLayout(ll)
-        layout.addWidget(legend_grp)
+        layout.addWidget(legend_sec)
 
         # ── Typography ───────────────────────────────────────────────
-        typo_grp = CollapsibleGroupBox("Typography (Global)")
-        tl = QtWidgets.QFormLayout()
+        typo_sec = CollapsibleSection("Typography (Global)", expanded=False)
+        tl = typo_sec.form
         tl.setSpacing(4)
 
         self._spin_title = QtWidgets.QSpinBox()
@@ -204,8 +199,7 @@ class GlobalSettingsPanel(QtWidgets.QWidget):
             lambda f: self._emit_typo("font_family", f.family()))
         tl.addRow("Font:", self._combo_font)
 
-        typo_grp.setLayout(tl)
-        layout.addWidget(typo_grp)
+        layout.addWidget(typo_sec)
 
         layout.addStretch(1)
 

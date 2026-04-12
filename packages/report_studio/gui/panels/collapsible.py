@@ -1,41 +1,56 @@
-"""Collapsible group box — QGroupBox that can collapse/expand its contents."""
+"""Reusable CollapsibleSection widget with arrow-based toggle.
+
+Matches the GeoFigure-style collapsible: a QToolButton header with a
+down/right arrow that expands or collapses the content beneath it.
+"""
 
 from __future__ import annotations
 
 from ...qt_compat import QtWidgets, QtCore
 
 
-class CollapsibleGroupBox(QtWidgets.QGroupBox):
-    """A QGroupBox whose content can be collapsed by clicking the title."""
+class CollapsibleSection(QtWidgets.QWidget):
+    """A section with a clickable arrow header that expands/collapses content."""
 
-    def __init__(self, title: str = "", parent=None, collapsed: bool = False):
-        super().__init__(title, parent)
-        self.setCheckable(True)
-        self.setChecked(not collapsed)
-        self.toggled.connect(self._on_toggled)
-        self._content_height = 0
+    def __init__(self, title: str, expanded: bool = True, parent=None):
+        super().__init__(parent)
+        self._toggle = QtWidgets.QToolButton()
+        self._toggle.setStyleSheet(
+            "QToolButton { border: none; font-weight: bold; padding: 2px 0px; }"
+        )
+        self._toggle.setToolButtonStyle(
+            QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self._toggle.setArrowType(
+            QtCore.Qt.ArrowType.DownArrow if expanded
+            else QtCore.Qt.ArrowType.RightArrow
+        )
+        self._toggle.setText(f" {title}")
+        self._toggle.setCheckable(True)
+        self._toggle.setChecked(expanded)
 
-    def _on_toggled(self, checked: bool):
-        """Show or hide group content."""
-        for i in range(self.layout().count()) if self.layout() else []:
-            item = self.layout().itemAt(i)
-            widget = item.widget()
-            if widget:
-                widget.setVisible(checked)
-            elif item.layout():
-                _set_layout_visible(item.layout(), checked)
-        if not checked:
-            self.setMaximumHeight(30)
-        else:
-            self.setMaximumHeight(16777215)
+        self.content = QtWidgets.QWidget()
+        self.form = QtWidgets.QFormLayout(self.content)
+        self.form.setContentsMargins(8, 2, 4, 2)
+        self.content.setVisible(expanded)
+
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self._toggle)
+        lay.addWidget(self.content)
+        self._toggle.toggled.connect(self._on_toggle)
+
+    def _on_toggle(self, checked: bool):
+        self._toggle.setArrowType(
+            QtCore.Qt.ArrowType.DownArrow if checked
+            else QtCore.Qt.ArrowType.RightArrow
+        )
+        self.content.setVisible(checked)
+
+    def set_expanded(self, expanded: bool):
+        self._toggle.setChecked(expanded)
 
 
-def _set_layout_visible(layout, visible: bool):
-    """Recursively show/hide widgets in a layout."""
-    for i in range(layout.count()):
-        item = layout.itemAt(i)
-        widget = item.widget()
-        if widget:
-            widget.setVisible(visible)
-        elif item.layout():
-            _set_layout_visible(item.layout(), visible)
+# Keep backward-compatible alias used by existing imports
+CollapsibleGroupBox = CollapsibleSection

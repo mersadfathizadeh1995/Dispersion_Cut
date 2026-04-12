@@ -100,6 +100,7 @@ class ReportStudioWindow(
         # Data tree
         self.data_tree.curve_selected.connect(self._on_curve_selected)
         self.data_tree.curves_selected.connect(self._on_curves_selected)
+        self.data_tree.spectrum_selected.connect(self._on_spectrum_selected)
         self.data_tree.curve_visibility_changed.connect(
             self._on_curve_visibility_changed
         )

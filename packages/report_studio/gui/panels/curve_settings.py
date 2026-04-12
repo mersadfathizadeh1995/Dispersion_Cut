@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, List
 from ...qt_compat import (
     QtWidgets, QtCore, QtGui, Signal,
 )
-from .collapsible import CollapsibleGroupBox
+from .collapsible import CollapsibleSection
 
 if TYPE_CHECKING:
     from ...core.models import OffsetCurve
@@ -57,8 +57,8 @@ class CurveSettingsPanel(QtWidgets.QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(6)
 
-        grp = CollapsibleGroupBox("Curve Style")
-        fl = QtWidgets.QFormLayout()
+        sec = CollapsibleSection("Curve Style", expanded=True)
+        fl = sec.form
         fl.setSpacing(4)
 
         # Name (read-only)
@@ -109,8 +109,7 @@ class CurveSettingsPanel(QtWidgets.QWidget):
         self._lbl_points = QtWidgets.QLabel("—")
         fl.addRow("Points:", self._lbl_points)
 
-        grp.setLayout(fl)
-        layout.addWidget(grp)
+        layout.addWidget(sec)
         layout.addStretch(1)
 
     # ── Public API ────────────────────────────────────────────────────

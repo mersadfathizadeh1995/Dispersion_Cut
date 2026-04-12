@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 from ...qt_compat import (
     QtWidgets, QtCore, Signal,
 )
-from .collapsible import CollapsibleGroupBox
+from .collapsible import CollapsibleSection
 
 if TYPE_CHECKING:
     from ...core.models import SheetState
@@ -51,8 +51,8 @@ class ExportPanel(QtWidgets.QWidget):
         layout.setSpacing(6)
 
         # ── Figure Export ────────────────────────────────────────────
-        fig_grp = CollapsibleGroupBox("Figure Export")
-        fl = QtWidgets.QFormLayout()
+        fig_sec = CollapsibleSection("Figure Export", expanded=True)
+        fl = fig_sec.form
         fl.setSpacing(4)
 
         # Output directory
@@ -95,27 +95,25 @@ class ExportPanel(QtWidgets.QWidget):
         self._btn_export_fig.clicked.connect(self._on_export_figure)
         fl.addRow(self._btn_export_fig)
 
-        fig_grp.setLayout(fl)
-        layout.addWidget(fig_grp)
+        layout.addWidget(fig_sec)
 
         # ── Subplot Export ───────────────────────────────────────────
-        sub_grp = CollapsibleGroupBox("Individual Subplot Export")
-        self._sub_layout = QtWidgets.QVBoxLayout()
-        self._sub_layout.setSpacing(2)
+        sub_sec = CollapsibleSection("Individual Subplot Export", expanded=False)
+        self._sub_form = sub_sec.form
+        self._sub_form.setSpacing(2)
 
         self._lbl_no_subplots = QtWidgets.QLabel("Load data to see subplots")
-        self._sub_layout.addWidget(self._lbl_no_subplots)
+        self._sub_form.addRow(self._lbl_no_subplots)
 
         self._btn_export_subs = QtWidgets.QPushButton("Export Selected Subplots")
         self._btn_export_subs.clicked.connect(self._on_export_subplots)
-        self._sub_layout.addWidget(self._btn_export_subs)
+        self._sub_form.addRow(self._btn_export_subs)
 
-        sub_grp.setLayout(self._sub_layout)
-        layout.addWidget(sub_grp)
+        layout.addWidget(sub_sec)
 
         # ── Data Export ──────────────────────────────────────────────
-        data_grp = CollapsibleGroupBox("Data Export")
-        dl = QtWidgets.QFormLayout()
+        data_sec = CollapsibleSection("Data Export", expanded=False)
+        dl = data_sec.form
         dl.setSpacing(4)
 
         self._combo_data_fmt = QtWidgets.QComboBox()
@@ -126,8 +124,7 @@ class ExportPanel(QtWidgets.QWidget):
         self._btn_export_data.clicked.connect(self._on_export_data)
         dl.addRow(self._btn_export_data)
 
-        data_grp.setLayout(dl)
-        layout.addWidget(data_grp)
+        layout.addWidget(data_sec)
 
         layout.addStretch(1)
 
@@ -135,10 +132,8 @@ class ExportPanel(QtWidgets.QWidget):
 
     def update_subplots(self, keys: List[str]):
         """Update the subplot checkboxes list."""
-        # Clear old checkboxes
         for chk in self._subplot_checks.values():
-            self._sub_layout.removeWidget(chk)
-            chk.deleteLater()
+            self._sub_form.removeRow(chk)
         self._subplot_checks.clear()
 
         self._lbl_no_subplots.setVisible(not keys)
@@ -146,8 +141,9 @@ class ExportPanel(QtWidgets.QWidget):
             chk = QtWidgets.QCheckBox(key)
             chk.setChecked(True)
             self._subplot_checks[key] = chk
-            self._sub_layout.insertWidget(
-                self._sub_layout.count() - 1, chk)  # before the button
+            # Insert before the export button row
+            row_count = self._sub_form.rowCount()
+            self._sub_form.insertRow(row_count - 1, chk)
 
     # ── Internal ──────────────────────────────────────────────────────
 

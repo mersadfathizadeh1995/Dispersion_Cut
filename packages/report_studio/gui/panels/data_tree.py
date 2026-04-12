@@ -130,6 +130,7 @@ class DataTreePanel(QtWidgets.QWidget):
 
     curve_selected = Signal(str)
     curves_selected = Signal(list)  # List[str] — multi-select UIDs
+    spectrum_selected = Signal(str)  # curve uid whose spectrum was selected
     curve_visibility_changed = Signal(str, bool)
     spectrum_visibility_changed = Signal(str, bool)
     curve_moved = Signal(str, str)
@@ -276,8 +277,10 @@ class DataTreePanel(QtWidgets.QWidget):
         item_type = item.data(0, _ITEM_TYPE_ROLE)
         uid = item.data(0, _UID_ROLE)
 
-        # Always emit single selection for the clicked item
-        if item_type in (_TYPE_CURVE, _TYPE_INFO, _TYPE_SPECTRUM) and uid:
+        # Emit the right signal based on item type
+        if item_type == _TYPE_SPECTRUM and uid:
+            self.spectrum_selected.emit(uid)
+        elif item_type in (_TYPE_CURVE, _TYPE_INFO) and uid:
             self.curve_selected.emit(uid)
 
         # Gather all selected curve UIDs for multi-select
