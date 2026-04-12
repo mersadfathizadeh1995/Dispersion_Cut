@@ -101,6 +101,9 @@ class ReportStudioWindow(
         self.data_tree.curve_selected.connect(self._on_curve_selected)
         self.data_tree.curves_selected.connect(self._on_curves_selected)
         self.data_tree.spectrum_selected.connect(self._on_spectrum_selected)
+        self.data_tree.spectra_selected.connect(self._on_spectra_selected)
+        self.data_tree.subplot_selected.connect(self._on_subplot_selected)
+        self.data_tree.subplots_selected.connect(self._on_subplots_selected)
         self.data_tree.curve_visibility_changed.connect(
             self._on_curve_visibility_changed
         )
@@ -126,7 +129,6 @@ class ReportStudioWindow(
         self.right_panel.grid_changed.connect(self._on_grid_changed)
         self.right_panel.layout_changed.connect(self._on_layout_changed)
         self.right_panel.legend_changed.connect(self._on_legend_changed)
-        self.right_panel.typography_changed.connect(self._on_typography_changed)
 
         # Right panel — Export tab
         self.right_panel.export_figure_requested.connect(

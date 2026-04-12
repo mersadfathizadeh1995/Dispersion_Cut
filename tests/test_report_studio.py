@@ -659,6 +659,53 @@ class TestDataTree:
 
         assert blocker.args == [c.uid]
 
+    def test_subplot_selected_signal(self, qapp, qtbot):
+        """Clicking a subplot item should emit subplot_selected."""
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel, _TYPE_SUBPLOT, _ITEM_TYPE_ROLE, _KEY_ROLE,
+        )
+        from packages.report_studio.core.models import SheetState
+        tree = DataTreePanel()
+        sheet = SheetState()
+        tree.populate(sheet)
+
+        main_item = tree._tree.topLevelItem(0)
+        assert main_item.data(0, _ITEM_TYPE_ROLE) == _TYPE_SUBPLOT
+
+        with qtbot.waitSignal(tree.subplot_selected, timeout=1000) as blocker:
+            tree._on_item_clicked(main_item, 0)
+
+        assert blocker.args == [main_item.data(0, _KEY_ROLE)]
+
+    def test_tree_highlight_style(self, qapp):
+        """Data tree should have a blue selection highlight stylesheet."""
+        from packages.report_studio.gui.panels.data_tree import DataTreePanel
+        tree = DataTreePanel()
+        style = tree._tree.styleSheet()
+        assert "#3399FF" in style
+
+    def test_subplot_batch_mode(self, qapp):
+        """SubplotSettingsPanel should support batch mode."""
+        from packages.report_studio.gui.panels.subplot_settings import SubplotSettingsPanel
+        from packages.report_studio.core.models import SubplotState
+        panel = SubplotSettingsPanel()
+        sp1 = SubplotState(key="a", name="Plot A")
+        sp2 = SubplotState(key="b", name="Plot B")
+        panel.show_subplots_batch(["a", "b"], [sp1, sp2])
+        assert panel._lbl_selection.isVisible() or "2 subplots" in panel._lbl_selection.text()
+        assert len(panel._batch_keys) == 2
+
+    def test_spectrum_batch_label(self, qapp):
+        """SpectrumSettingsPanel batch mode should show count."""
+        from packages.report_studio.gui.panels.spectrum_settings import SpectrumSettingsPanel
+        from packages.report_studio.core.models import OffsetCurve
+        panel = SpectrumSettingsPanel()
+        c1 = OffsetCurve(name="A", frequency=np.array([1.0]), velocity=np.array([1.0]))
+        c2 = OffsetCurve(name="B", frequency=np.array([1.0]), velocity=np.array([1.0]))
+        panel.show_spectra_batch([c1.uid, c2.uid], [c1, c2])
+        assert "2 spectra" in panel._lbl_name.text()
+        assert len(panel._batch_uids) == 2
+
 
 class TestPropertiesPanel:
     def test_construction(self, qapp):

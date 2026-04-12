@@ -129,8 +129,11 @@ class DataTreePanel(QtWidgets.QWidget):
     """
 
     curve_selected = Signal(str)
-    curves_selected = Signal(list)  # List[str] — multi-select UIDs
-    spectrum_selected = Signal(str)  # curve uid whose spectrum was selected
+    curves_selected = Signal(list)       # List[str] — multi-select curve UIDs
+    spectrum_selected = Signal(str)      # curve uid whose spectrum was selected
+    spectra_selected = Signal(list)      # List[str] — multi-select spectrum UIDs
+    subplot_selected = Signal(str)       # subplot key
+    subplots_selected = Signal(list)     # List[str] — multi-select subplot keys
     curve_visibility_changed = Signal(str, bool)
     spectrum_visibility_changed = Signal(str, bool)
     curve_moved = Signal(str, str)
@@ -161,6 +164,17 @@ class DataTreePanel(QtWidgets.QWidget):
         self._tree.itemClicked.connect(self._on_item_clicked)
         self._tree.itemChanged.connect(self._on_item_changed)
         self._tree.curve_moved.connect(self.curve_moved.emit)
+        # Windows Explorer-style strong blue selection highlight
+        self._tree.setStyleSheet(
+            "QTreeWidget::item:selected {"
+            "  background-color: #3399FF;"
+            "  color: white;"
+            "}"
+            "QTreeWidget::item:selected:!active {"
+            "  background-color: #5CACEE;"
+            "  color: white;"
+            "}"
+        )
         layout.addWidget(self._tree)
 
         # Context menu
@@ -276,25 +290,46 @@ class DataTreePanel(QtWidgets.QWidget):
     def _on_item_clicked(self, item, column):
         item_type = item.data(0, _ITEM_TYPE_ROLE)
         uid = item.data(0, _UID_ROLE)
+        key = item.data(0, _KEY_ROLE)
 
-        # Emit the right signal based on item type
-        if item_type == _TYPE_SPECTRUM and uid:
+        # ── Single-click signal based on item type ────────────────────
+        if item_type == _TYPE_SUBPLOT and key:
+            self.subplot_selected.emit(key)
+        elif item_type == _TYPE_SPECTRUM and uid:
             self.spectrum_selected.emit(uid)
         elif item_type in (_TYPE_CURVE, _TYPE_INFO) and uid:
             self.curve_selected.emit(uid)
 
-        # Gather all selected curve UIDs for multi-select
-        selected_uids = []
+        # ── Multi-select: gather per type ─────────────────────────────
+        sel_curve_uids = []
+        sel_spectrum_uids = []
+        sel_subplot_keys = []
+
         for sel_item in self._tree.selectedItems():
             sel_type = sel_item.data(0, _ITEM_TYPE_ROLE)
             sel_uid = sel_item.data(0, _UID_ROLE)
-            if sel_type == _TYPE_CURVE and sel_uid:
-                selected_uids.append(sel_uid)
-            elif sel_type in (_TYPE_INFO, _TYPE_SPECTRUM) and sel_uid:
-                if sel_uid not in selected_uids:
-                    selected_uids.append(sel_uid)
-        if len(selected_uids) > 1:
-            self.curves_selected.emit(selected_uids)
+            sel_key = sel_item.data(0, _KEY_ROLE)
+
+            if sel_type == _TYPE_SUBPLOT and sel_key:
+                if sel_key not in sel_subplot_keys:
+                    sel_subplot_keys.append(sel_key)
+            elif sel_type == _TYPE_SPECTRUM and sel_uid:
+                if sel_uid not in sel_spectrum_uids:
+                    sel_spectrum_uids.append(sel_uid)
+            elif sel_type == _TYPE_CURVE and sel_uid:
+                if sel_uid not in sel_curve_uids:
+                    sel_curve_uids.append(sel_uid)
+            elif sel_type == _TYPE_INFO and sel_uid:
+                if sel_uid not in sel_curve_uids:
+                    sel_curve_uids.append(sel_uid)
+
+        # Emit batch signals when >1 items of same type
+        if len(sel_curve_uids) > 1:
+            self.curves_selected.emit(sel_curve_uids)
+        if len(sel_spectrum_uids) > 1:
+            self.spectra_selected.emit(sel_spectrum_uids)
+        if len(sel_subplot_keys) > 1:
+            self.subplots_selected.emit(sel_subplot_keys)
 
     def _on_item_changed(self, item, column):
         item_type = item.data(0, _ITEM_TYPE_ROLE)

@@ -35,12 +35,20 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
         super().__init__(parent)
         self._updating = False
         self._subplot_key = ""
+        self._batch_keys: list = []
         self._build_ui()
 
     def _build_ui(self):
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(6)
+
+        # Selection info label
+        self._lbl_selection = QtWidgets.QLabel("")
+        self._lbl_selection.setStyleSheet(
+            "font-weight: bold; color: #3399FF; padding: 2px 4px;")
+        self._lbl_selection.setVisible(False)
+        layout.addWidget(self._lbl_selection)
 
         # ── Title & Labels ────────────────────────────────────────────
         title_sec = CollapsibleSection("Title && Labels", expanded=True)
@@ -192,6 +200,8 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
         """Populate from a SubplotState."""
         self._updating = True
         self._subplot_key = sp.key
+        self._batch_keys = []
+        self._lbl_selection.setVisible(False)
 
         self._edit_name.setText(sp.name)
 
@@ -233,6 +243,38 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
 
         self._updating = False
 
+    def show_subplots_batch(self, keys: list, subplots: list):
+        """Batch editing for multiple subplots — common settings apply to all."""
+        self._updating = True
+        self._batch_keys = list(keys)
+        self._subplot_key = keys[0] if keys else ""
+
+        self._lbl_selection.setText(f"{len(keys)} subplots selected")
+        self._lbl_selection.setVisible(True)
+
+        # Show first subplot's values as a reference
+        if subplots:
+            sp = subplots[0]
+            self._edit_name.setText("")
+            self._edit_name.setPlaceholderText("(multiple)")
+            if sp.font_family:
+                self._combo_font.setCurrentFont(QtGui.QFont(sp.font_family))
+            self._spin_title_size.setValue(sp.title_font_size)
+            self._spin_label_size.setValue(sp.axis_label_font_size)
+            self._spin_tick_size.setValue(sp.tick_label_font_size)
+
+            idx = self._combo_domain.findText(sp.x_domain)
+            if idx >= 0:
+                self._combo_domain.setCurrentIndex(idx)
+            idx = self._combo_xscale.findText(sp.x_scale)
+            if idx >= 0:
+                self._combo_xscale.setCurrentIndex(idx)
+            idx = self._combo_yscale.findText(sp.y_scale)
+            if idx >= 0:
+                self._combo_yscale.setCurrentIndex(idx)
+
+        self._updating = False
+
     def clear(self):
         """Reset to empty state."""
         self._subplot_key = ""
@@ -240,7 +282,12 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
     # ── Internal ──────────────────────────────────────────────────────
 
     def _emit(self, attr: str, value):
-        if not self._updating and self._subplot_key:
+        if self._updating:
+            return
+        if self._batch_keys and len(self._batch_keys) > 1:
+            for key in self._batch_keys:
+                self.setting_changed.emit(key, attr, value)
+        elif self._subplot_key:
             self.setting_changed.emit(self._subplot_key, attr, value)
 
     def _on_auto_x(self, checked):

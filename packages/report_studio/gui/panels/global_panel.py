@@ -28,13 +28,11 @@ class GlobalSettingsPanel(QtWidgets.QWidget):
     grid_changed(int, int)
     layout_changed(str, object)
     legend_changed(str, object)
-    typography_changed(str, object)
     """
 
     grid_changed = Signal(int, int)
     layout_changed = Signal(str, object)
     legend_changed = Signal(str, object)
-    typography_changed = Signal(str, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -168,39 +166,6 @@ class GlobalSettingsPanel(QtWidgets.QWidget):
 
         layout.addWidget(legend_sec)
 
-        # ── Typography ───────────────────────────────────────────────
-        typo_sec = CollapsibleSection("Typography (Global)", expanded=False)
-        tl = typo_sec.form
-        tl.setSpacing(4)
-
-        self._spin_title = QtWidgets.QSpinBox()
-        self._spin_title.setRange(6, 24)
-        self._spin_title.setValue(12)
-        self._spin_title.valueChanged.connect(
-            lambda v: self._emit_typo("title_size", v))
-        tl.addRow("Title size:", self._spin_title)
-
-        self._spin_axis_label = QtWidgets.QSpinBox()
-        self._spin_axis_label.setRange(6, 20)
-        self._spin_axis_label.setValue(10)
-        self._spin_axis_label.valueChanged.connect(
-            lambda v: self._emit_typo("axis_label_size", v))
-        tl.addRow("Axis label:", self._spin_axis_label)
-
-        self._spin_tick = QtWidgets.QSpinBox()
-        self._spin_tick.setRange(6, 18)
-        self._spin_tick.setValue(9)
-        self._spin_tick.valueChanged.connect(
-            lambda v: self._emit_typo("tick_label_size", v))
-        tl.addRow("Tick label:", self._spin_tick)
-
-        self._combo_font = QtWidgets.QFontComboBox()
-        self._combo_font.currentFontChanged.connect(
-            lambda f: self._emit_typo("font_family", f.family()))
-        tl.addRow("Font:", self._combo_font)
-
-        layout.addWidget(typo_sec)
-
         layout.addStretch(1)
 
     # ── Public API ────────────────────────────────────────────────────
@@ -234,12 +199,6 @@ class GlobalSettingsPanel(QtWidgets.QWidget):
         self._spin_legend_font.setValue(leg.font_size)
         self._chk_legend_frame.setChecked(leg.frame_on)
 
-        # Typography
-        typo = sheet.typography
-        self._spin_title.setValue(typo.title_size)
-        self._spin_axis_label.setValue(typo.axis_label_size)
-        self._spin_tick.setValue(typo.tick_label_size)
-
         self._updating = False
 
     # ── Internal ──────────────────────────────────────────────────────
@@ -262,7 +221,3 @@ class GlobalSettingsPanel(QtWidgets.QWidget):
     def _emit_legend(self, attr: str, value):
         if not self._updating:
             self.legend_changed.emit(attr, value)
-
-    def _emit_typo(self, attr: str, value):
-        if not self._updating:
-            self.typography_changed.emit(attr, value)

@@ -47,6 +47,13 @@ class SpectrumSettingsPanel(QtWidgets.QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(6)
 
+        # Selection info label (for batch mode)
+        self._lbl_selection = QtWidgets.QLabel("")
+        self._lbl_selection.setStyleSheet(
+            "font-weight: bold; color: #3399FF; padding: 2px 4px;")
+        self._lbl_selection.setVisible(False)
+        layout.addWidget(self._lbl_selection)
+
         # ── Appearance ─────────────────────────────────────────────────
         sec = CollapsibleSection("Spectrum Appearance", expanded=True)
         fl = sec.form
@@ -97,6 +104,7 @@ class SpectrumSettingsPanel(QtWidgets.QWidget):
         self._updating = True
         self._current_uid = curve.uid
         self._batch_uids = []
+        self._lbl_selection.setVisible(False)
 
         self._lbl_name.setText(curve.display_name)
         idx = self._combo_cmap.findText(curve.spectrum_cmap)
@@ -113,7 +121,10 @@ class SpectrumSettingsPanel(QtWidgets.QWidget):
         self._batch_uids = list(uids)
         self._current_uid = uids[0] if uids else ""
 
-        self._lbl_name.setText(f"{len(uids)} spectra selected")
+        self._lbl_selection.setText(f"{len(uids)} spectra selected")
+        self._lbl_selection.setVisible(True)
+        self._lbl_name.setText(f"{len(uids)} spectra")
+
         if curves:
             c = curves[0]
             idx = self._combo_cmap.findText(c.spectrum_cmap)

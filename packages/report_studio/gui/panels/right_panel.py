@@ -42,7 +42,6 @@ class RightPanel(QtWidgets.QWidget):
     grid_changed = Signal(int, int)
     layout_changed = Signal(str, object)
     legend_changed = Signal(str, object)
-    typography_changed = Signal(str, object)
     export_figure_requested = Signal(dict)
     export_subplots_requested = Signal(dict)
     export_data_requested = Signal(dict)
@@ -119,8 +118,6 @@ class RightPanel(QtWidgets.QWidget):
         self.global_panel.grid_changed.connect(self.grid_changed.emit)
         self.global_panel.layout_changed.connect(self.layout_changed.emit)
         self.global_panel.legend_changed.connect(self.legend_changed.emit)
-        self.global_panel.typography_changed.connect(
-            self.typography_changed.emit)
 
         self.export_panel.export_figure_requested.connect(
             self.export_figure_requested.emit)
@@ -137,6 +134,12 @@ class RightPanel(QtWidgets.QWidget):
         self._context_stack.setCurrentIndex(self._IDX_SUBPLOT)
         self._tabs.setCurrentIndex(0)  # switch to Context tab
 
+    def show_subplots_batch(self, keys: list, subplots: list):
+        """Activate subplot settings in batch mode."""
+        self.subplot_panel.show_subplots_batch(keys, subplots)
+        self._context_stack.setCurrentIndex(self._IDX_SUBPLOT)
+        self._tabs.setCurrentIndex(0)
+
     def show_curve(self, curve: "OffsetCurve"):
         """Activate the curve settings tab."""
         self.curve_panel.show_curve(curve)
@@ -146,6 +149,12 @@ class RightPanel(QtWidgets.QWidget):
     def show_spectrum(self, curve: "OffsetCurve"):
         """Activate the spectrum settings tab (using curve's spectrum attrs)."""
         self.spectrum_panel.show_spectrum(curve)
+        self._context_stack.setCurrentIndex(self._IDX_SPECTRUM)
+        self._tabs.setCurrentIndex(0)
+
+    def show_spectra_batch(self, uids: list, curves: list):
+        """Activate spectrum settings in batch mode."""
+        self.spectrum_panel.show_spectra_batch(uids, curves)
         self._context_stack.setCurrentIndex(self._IDX_SPECTRUM)
         self._tabs.setCurrentIndex(0)
 

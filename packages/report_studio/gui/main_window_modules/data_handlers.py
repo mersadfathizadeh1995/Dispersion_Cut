@@ -46,6 +46,35 @@ class DataHandlersMixin:
         if hasattr(self, "right_panel"):
             self.right_panel.show_spectrum(curve)
 
+    def _on_spectra_selected(self, uids: list):
+        """Multiple spectrum items selected (Ctrl/Shift click)."""
+        sheet = self._current_sheet()
+        if not sheet:
+            return
+        curves = [sheet.curves[u] for u in uids if u in sheet.curves]
+        if curves and hasattr(self, "right_panel"):
+            self.right_panel.show_spectra_batch(uids, curves)
+
+    def _on_subplot_selected(self, key: str):
+        """A subplot was selected in the data tree."""
+        sheet = self._current_sheet()
+        if not sheet or key not in sheet.subplots:
+            return
+        sp = sheet.subplots[key]
+        if hasattr(self, "right_panel"):
+            self.right_panel.show_subplot(sp)
+        self.statusBar().showMessage(f"Subplot: {sp.display_name}")
+
+    def _on_subplots_selected(self, keys: list):
+        """Multiple subplots selected (Ctrl/Shift click)."""
+        sheet = self._current_sheet()
+        if not sheet:
+            return
+        subplots = [sheet.subplots[k] for k in keys if k in sheet.subplots]
+        if subplots and hasattr(self, "right_panel"):
+            self.right_panel.show_subplots_batch(keys, subplots)
+        self.statusBar().showMessage(f"{len(subplots)} subplots selected")
+
     def _on_curve_moved(self, uid: str, new_subplot_key: str):
         """Curve was dragged to a different subplot in the tree."""
         sheet = self._current_sheet()
