@@ -20,6 +20,11 @@ class MenuSetupMixin:
         self._act_save_as.setShortcut("Ctrl+Shift+S")
         self._act_load_project = file_menu.addAction("&Load Project...")
         self._act_load_project.setShortcut("Ctrl+Shift+O")
+
+        # Recent Projects submenu
+        self._recent_menu = file_menu.addMenu("Recent Pro&jects")
+        self._refresh_recent_menu()
+
         file_menu.addSeparator()
         self._act_export_img = file_menu.addAction("Export &Image...")
         self._act_export_img.setShortcut("Ctrl+E")
@@ -40,3 +45,46 @@ class MenuSetupMixin:
         self._act_save_project.triggered.connect(self._on_save_project)
         self._act_save_as.triggered.connect(self._on_save_project_as)
         self._act_load_project.triggered.connect(self._on_load_project)
+
+    def _refresh_recent_menu(self):
+        """Populate the Recent Projects submenu from QSettings."""
+        self._recent_menu.clear()
+        try:
+            from ..panels.project_start_dialog import get_qsettings, KEY_RECENT_PROJECTS
+            s = get_qsettings()
+            recent = s.value(KEY_RECENT_PROJECTS, [])
+            if isinstance(recent, str):
+                recent = [recent] if recent else []
+            elif recent is None:
+                recent = []
+
+            if not recent:
+                act = self._recent_menu.addAction("(no recent projects)")
+                act.setEnabled(False)
+                return
+
+            import os
+            for proj_path in recent[:8]:
+                if isinstance(proj_path, str) and proj_path:
+                    name = os.path.basename(proj_path)
+                    act = self._recent_menu.addAction(f"{name}  —  {proj_path}")
+                    act.setData(proj_path)
+                    act.triggered.connect(
+                        lambda checked, p=proj_path: self._on_open_recent(p)
+                    )
+        except Exception:
+            act = self._recent_menu.addAction("(error loading recent)")
+            act.setEnabled(False)
+
+    def _on_open_recent(self, project_path: str):
+        """Open a project from the recent list."""
+        import os
+        pj = os.path.join(project_path, "project.json")
+        if not os.path.isfile(pj):
+            from ...qt_compat import QtWidgets
+            QtWidgets.QMessageBox.warning(
+                self, "Project Not Found",
+                f"Could not find project.json in:\n{project_path}",
+            )
+            return
+        self._open_project_dir(project_path)

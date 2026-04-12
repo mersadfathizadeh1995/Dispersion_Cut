@@ -422,3 +422,45 @@ def reload_and_apply(
             if curve_norm == spec_norm:
                 c.spectrum_uid = spec.uid
                 break
+
+
+# ── Session auto-save ────────────────────────────────────────────────────
+
+def save_session(
+    project_dir: str | Path,
+    sheets: List[SheetState],
+) -> Path:
+    """Auto-save all sheet states to {project}/session/."""
+    project_dir = Path(project_dir)
+    session_dir = project_dir / "session"
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    entries = []
+    for i, sheet in enumerate(sheets):
+        fname = f"sheet_{i}.json"
+        fpath = session_dir / fname
+        data = _sheet_to_dict(sheet)
+        with open(fpath, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        entries.append({"name": sheet.name, "file": fname})
+
+    manifest = {"sheets": entries}
+    manifest_path = session_dir / "session_manifest.json"
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+
+    return manifest_path
+
+
+def load_session_manifest(
+    project_dir: str | Path,
+) -> Optional[List[Dict[str, str]]]:
+    """Load session manifest entries. Returns None if no session."""
+    project_dir = Path(project_dir)
+    manifest_path = project_dir / "session" / "session_manifest.json"
+    if not manifest_path.exists():
+        return None
+
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data.get("sheets", [])

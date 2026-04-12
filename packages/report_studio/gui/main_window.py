@@ -43,7 +43,7 @@ class ReportStudioWindow(
     - Delegates rendering to render_sheet()
     """
 
-    def __init__(self, parent=None, controller=None):
+    def __init__(self, parent=None, controller=None, show_startup: bool = True):
         super().__init__(parent)
         self.setWindowTitle("DC Cut — Report Studio")
         self.resize(1200, 800)
@@ -62,8 +62,9 @@ class ReportStudioWindow(
         self._setup_menubar()
         self._connect_signals()
 
-        # Show project dialog on startup
-        QtCore.QTimer.singleShot(0, lambda: self._initial_load(controller))
+        # Show project startup dialog (skip in tests)
+        if show_startup:
+            QtCore.QTimer.singleShot(0, self._show_startup_dialog)
 
     # ── UI construction ────────────────────────────────────────────────
 
@@ -151,11 +152,15 @@ class ReportStudioWindow(
     def _add_new_sheet(self, name: str) -> int:
         """Create a new empty sheet with its own canvas."""
         sheet = SheetState(name=name)
+        return self._add_sheet_with_state(sheet)
+
+    def _add_sheet_with_state(self, sheet: SheetState) -> int:
+        """Add a sheet (with existing state) and its canvas."""
         self._sheets.append(sheet)
         canvas = PlotCanvas()
         canvas.curve_clicked.connect(self._on_curve_selected)
         canvas.subplot_clicked.connect(self._on_subplot_clicked)
-        idx = self.sheet_tabs.add_tab(canvas, name)
+        idx = self.sheet_tabs.add_tab(canvas, sheet.name)
         return idx
 
     def _current_sheet_index(self) -> int:
@@ -345,16 +350,120 @@ class ReportStudioWindow(
 
     # ── Initial load ───────────────────────────────────────────────────
 
+    def _show_startup_dialog(self):
+        """Show the ProjectStartDialog, then load accordingly."""
+        from .panels.project_start_dialog import ProjectStartDialog
+        from ..qt_compat import DialogAccepted
+
+        dlg = ProjectStartDialog(controller=self._controller, parent=self)
+        if dlg.exec() != DialogAccepted:
+            # User cancelled — start with empty studio
+            return
+
+        project_dir = dlg.project_dir
+        if project_dir:
+            self._project_path = project_dir
+
+        if dlg.is_open_existing:
+            # Open existing project from directory
+            self._open_project_dir(project_dir)
+        elif dlg.use_controller and self._controller is not None:
+            self._load_from_controller(self._controller)
+            if project_dir:
+                self._save_to_path(project_dir)
+        else:
+            pkl = dlg.pkl_path
+            npz = dlg.npz_path
+            if pkl:
+                self._load_from_files(pkl, npz, show_dialog=True)
+                if project_dir:
+                    self._save_to_path(project_dir)
+
+    def _open_project_dir(self, project_dir: str):
+        """Open a v4 project from its directory."""
+        import json
+        import os
+
+        pj_path = os.path.join(project_dir, "project.json")
+        if not os.path.isfile(pj_path):
+            return
+
+        try:
+            with open(pj_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        except Exception:
+            return
+
+        version = manifest.get("version", 0)
+        if version >= 4 and "data_sources" in manifest:
+            self._load_project_v4(project_dir, manifest)
+        else:
+            self._load_project_legacy(pj_path)
+
+        # Try session restore after loading project
+        QtCore.QTimer.singleShot(400, lambda: self._try_restore_session(project_dir))
+
+    def _try_restore_session(self, project_dir: str):
+        """Check for auto-saved session and offer to restore."""
+        from ..io.project_v4 import load_session_manifest
+
+        entries = load_session_manifest(project_dir)
+        if not entries:
+            return
+
+        from ..qt_compat import QtWidgets
+        reply = QtWidgets.QMessageBox.question(
+            self, "Restore Session",
+            f"Found {len(entries)} auto-saved sheet(s) from a previous session.\n"
+            "Restore unsaved changes?",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+
+        # Session sheets override whatever was loaded from project.json
+        import os
+        import json
+        from ..io.project_v4 import _dict_to_sheet_skeleton
+        session_dir = os.path.join(project_dir, "session")
+
+        restored = []
+        for entry in entries:
+            fpath = os.path.join(session_dir, entry.get("file", ""))
+            if not os.path.isfile(fpath):
+                continue
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                sheet = _dict_to_sheet_skeleton(data)
+                restored.append(sheet)
+            except Exception:
+                continue
+
+        if not restored:
+            return
+
+        # Replace current sheets with restored ones
+        self._sheets.clear()
+        self.sheet_tabs.clear()
+        for sheet in restored:
+            self._add_sheet_with_state(sheet)
+
+        self.sheet_tabs.setCurrentIndex(0)
+        self._render_current()
+
     def _initial_load(self, controller):
-        """Load data on startup — no dialog when no controller."""
+        """Legacy entry point — kept for backward compatibility."""
         if controller is not None:
             self._load_from_controller(controller)
-        # Otherwise start with an empty studio — user adds data per-subplot
 
     # ── Close event ────────────────────────────────────────────────────
 
     def closeEvent(self, event):
-        """Prompt to save if dirty before closing."""
+        """Auto-save session, then prompt to save if dirty."""
+        self._auto_save_session()
+
         if getattr(self, "_dirty", False):
             from ..qt_compat import QtWidgets
             btn = QtWidgets.QMessageBox.question(
@@ -374,3 +483,16 @@ class ReportStudioWindow(
                 event.ignore()
                 return
         super().closeEvent(event)
+
+    def _auto_save_session(self):
+        """Auto-save all sheet states to {project}/session/ on close."""
+        import os
+        project_dir = getattr(self, "_project_path", "")
+        if not project_dir or not os.path.isdir(project_dir):
+            return
+
+        try:
+            from ..io.project_v4 import save_session
+            save_session(project_dir, self._sheets)
+        except Exception:
+            pass

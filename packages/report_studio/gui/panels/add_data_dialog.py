@@ -36,6 +36,7 @@ class AddDataDialog(QtWidgets.QDialog):
         self._selected_type_id = "source_offset"
 
         self._build_ui()
+        self._restore_default_paths()
 
     # ── UI ──────────────────────────────────────────────────────────────
 
@@ -123,8 +124,10 @@ class AddDataDialog(QtWidgets.QDialog):
     # ── Browse handlers ────────────────────────────────────────────────
 
     def _browse_pkl(self):
+        import os
+        start = os.path.dirname(self._pkl_edit.text()) or ""
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Select State File", "",
+            self, "Select State File", start,
             "Pickle Files (*.pkl);;All Files (*)",
         )
         if path:
@@ -132,12 +135,27 @@ class AddDataDialog(QtWidgets.QDialog):
             self._load_offset_list(path)
 
     def _browse_npz(self):
+        import os
+        start = os.path.dirname(self._npz_edit.text()) or ""
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Select Spectrum File", "",
+            self, "Select Spectrum File", start,
             "NPZ Files (*.npz);;All Files (*)",
         )
         if path:
             self._npz_edit.setText(path)
+
+    def _restore_default_paths(self):
+        """Pre-fill PKL/NPZ from QSettings defaults."""
+        try:
+            from .project_start_dialog import load_data_paths
+            pkl, npz = load_data_paths()
+            if pkl and not self._pkl_edit.text():
+                self._pkl_edit.setText(pkl)
+                self._load_offset_list(pkl)
+            if npz and not self._npz_edit.text():
+                self._npz_edit.setText(npz)
+        except Exception:
+            pass
 
     def _load_offset_list(self, pkl_path: str):
         """Read PKL metadata and populate the offset checklist."""
@@ -198,6 +216,13 @@ class AddDataDialog(QtWidgets.QDialog):
                 "Please select at least one offset.",
             )
             return
+
+        # Persist paths for next time
+        try:
+            from .project_start_dialog import save_data_paths
+            save_data_paths(pkl, self._npz_edit.text().strip())
+        except Exception:
+            pass
 
         self.accept()
 

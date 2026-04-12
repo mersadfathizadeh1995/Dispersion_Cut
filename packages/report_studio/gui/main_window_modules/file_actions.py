@@ -40,9 +40,11 @@ class FileActionsMixin:
         if not pkl_path:
             return
 
-        # Store paths for v4 project save
+        # Store paths for v4 project save + QSettings
         self._pkl_path = pkl_path
         self._npz_path = npz_path
+        from ..panels.project_start_dialog import save_data_paths
+        save_data_paths(pkl_path, npz_path)
 
         curves = read_pkl(pkl_path)
         spectra = []
@@ -129,11 +131,27 @@ class FileActionsMixin:
     def _on_save_project_as(self):
         """Save all sheets to a new project directory (v4 format)."""
         from ...qt_compat import QtWidgets
-        path = QtWidgets.QFileDialog.getExistingDirectory(
-            self, "Choose Project Directory",
+        # Ask for base directory
+        base = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Choose Base Directory for Project",
         )
-        if path:
-            self._save_to_path(path)
+        if not base:
+            return
+        # Ask for project name
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "Project Name", "Enter project name:",
+        )
+        if not ok or not name.strip():
+            return
+        import os
+        project_dir = os.path.join(base, name.strip())
+        os.makedirs(os.path.join(project_dir, "sheets"), exist_ok=True)
+        os.makedirs(os.path.join(project_dir, "session"), exist_ok=True)
+        self._save_to_path(project_dir)
+
+        # Add to recent projects
+        from ..panels.project_start_dialog import add_recent_project
+        add_recent_project(project_dir)
 
     def _save_to_path(self, path: str):
         from ...qt_compat import QtWidgets
@@ -164,40 +182,64 @@ class FileActionsMixin:
             self._project_path = path
             self._mark_clean()
             self.statusBar().showMessage(f"Project saved to {path}")
+
+            # Update recent projects
+            from ..panels.project_start_dialog import add_recent_project
+            add_recent_project(path)
+            if hasattr(self, "_refresh_recent_menu"):
+                self._refresh_recent_menu()
         except Exception as e:
             QtWidgets.QMessageBox.warning(
                 self, "Save Error", f"Failed to save project:\n{e}"
             )
 
     def _on_load_project(self):
-        """Load a project — v4 directory or legacy v3 JSON."""
+        """Load a project — browse for a project directory."""
         from ...qt_compat import QtWidgets
+        from ..panels.project_start_dialog import load_data_paths
 
-        # Let user pick either a directory (v4) or file (v3)
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Load Project",
-            "",
-            "Project Files (project.json *.json);;All Files (*)",
+        # Start from last-used base directory
+        last_pkl, _ = load_data_paths()
+        start_dir = ""
+        if last_pkl:
+            import os
+            start_dir = os.path.dirname(os.path.dirname(last_pkl))
+
+        path = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Open Project Directory", start_dir,
         )
         if not path:
             return
 
         import os
-        project_dir = os.path.dirname(path)
+        pj_path = os.path.join(path, "project.json")
+        if not os.path.isfile(pj_path):
+            QtWidgets.QMessageBox.warning(
+                self, "Not a Project",
+                f"No project.json found in:\n{path}\n\n"
+                "Please select a directory containing a Report Studio project.",
+            )
+            return
 
-        # Check if this is a v4 project
+        import json
         try:
-            import json
-            with open(path, "r", encoding="utf-8") as f:
+            with open(pj_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             version = data.get("version", 0)
         except Exception:
             version = 0
 
+        self._project_path = path
         if version >= 4 and "data_sources" in data:
-            self._load_project_v4(project_dir, data)
+            self._load_project_v4(path, data)
         else:
-            self._load_project_legacy(path)
+            self._load_project_legacy(pj_path)
+
+        # Add to recent projects and refresh menu
+        from ..panels.project_start_dialog import add_recent_project
+        add_recent_project(path)
+        if hasattr(self, "_refresh_recent_menu"):
+            self._refresh_recent_menu()
 
     def _load_project_v4(self, project_dir: str, manifest: dict):
         """Load a v4 directory-based project."""

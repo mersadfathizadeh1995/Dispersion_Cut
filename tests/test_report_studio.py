@@ -2855,7 +2855,7 @@ class TestStartupFlow:
         from packages.report_studio.gui.main_window import (
             ReportStudioWindow,
         )
-        win = ReportStudioWindow(controller=None)
+        win = ReportStudioWindow(controller=None, show_startup=False)
         qtbot.addWidget(win)
         sheet = win._current_sheet()
         assert sheet is not None
@@ -2866,7 +2866,7 @@ class TestStartupFlow:
         from packages.report_studio.gui.main_window import (
             ReportStudioWindow,
         )
-        win = ReportStudioWindow(controller=None)
+        win = ReportStudioWindow(controller=None, show_startup=False)
         qtbot.addWidget(win)
         assert hasattr(win, "_act_save_as")
 
@@ -2874,7 +2874,7 @@ class TestStartupFlow:
         from packages.report_studio.gui.main_window import (
             ReportStudioWindow,
         )
-        win = ReportStudioWindow(controller=None)
+        win = ReportStudioWindow(controller=None, show_startup=False)
         qtbot.addWidget(win)
         assert not win._dirty
         win._mark_dirty()
@@ -3189,3 +3189,243 @@ class TestExportPanelSync:
         assert "cell_0_0" in panel._subplot_checks
         chk = panel._subplot_checks["cell_0_0"]
         assert chk.text() == "My Plot"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.6 — GeoFigure-Style Project Flow
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestProjectStartDialog:
+    """Startup dialog with data-source + project sections."""
+
+    def test_dialog_creates(self, qtbot):
+        from packages.report_studio.gui.panels.project_start_dialog import (
+            ProjectStartDialog,
+        )
+        dlg = ProjectStartDialog(controller=None)
+        qtbot.addWidget(dlg)
+        assert dlg.windowTitle() == "Report Studio — Project Setup"
+        assert dlg.use_controller is False
+
+    def test_dialog_properties_accessible(self, qtbot):
+        from packages.report_studio.gui.panels.project_start_dialog import (
+            ProjectStartDialog,
+        )
+        dlg = ProjectStartDialog(controller=None)
+        qtbot.addWidget(dlg)
+        # Properties should be accessible (may have QSettings values)
+        assert isinstance(dlg.pkl_path, str)
+        assert isinstance(dlg.npz_path, str)
+        assert isinstance(dlg.project_dir, str)
+        assert dlg.is_open_existing is False
+
+    def test_dialog_has_controller_checkbox_when_controller(self, qtbot):
+        from packages.report_studio.gui.panels.project_start_dialog import (
+            ProjectStartDialog,
+        )
+        dlg = ProjectStartDialog(controller="mock_controller")
+        qtbot.addWidget(dlg)
+        assert dlg._from_memory_cb is not None
+        assert dlg._from_memory_cb.isEnabled()
+        assert dlg.use_controller is True  # Default checked when controller exists
+
+
+class TestQSettingsRoundTrip:
+    """QSettings persistence for paths and recent projects."""
+
+    def test_save_and_load_data_paths(self):
+        from packages.report_studio.gui.panels.project_start_dialog import (
+            save_data_paths, load_data_paths, get_qsettings,
+        )
+        # Save
+        save_data_paths("/test/abc.pkl", "/test/abc.npz")
+        # Load
+        pkl, npz = load_data_paths()
+        assert pkl == "/test/abc.pkl"
+        assert npz == "/test/abc.npz"
+
+        # Clean up
+        s = get_qsettings()
+        s.remove("data/last_pkl")
+        s.remove("data/last_npz")
+
+    def test_add_and_get_recent_projects(self):
+        from packages.report_studio.gui.panels.project_start_dialog import (
+            add_recent_project, get_qsettings, KEY_RECENT_PROJECTS,
+        )
+        s = get_qsettings()
+        # Clear first
+        s.remove(KEY_RECENT_PROJECTS)
+
+        add_recent_project("/project/alpha")
+        add_recent_project("/project/beta")
+
+        recent = s.value(KEY_RECENT_PROJECTS, [])
+        if isinstance(recent, str):
+            recent = [recent]
+        assert "/project/beta" in recent
+        assert "/project/alpha" in recent
+        # Most recent first
+        assert recent[0] == "/project/beta"
+
+        # Clean up
+        s.remove(KEY_RECENT_PROJECTS)
+
+    def test_recent_projects_max_8(self):
+        from packages.report_studio.gui.panels.project_start_dialog import (
+            add_recent_project, get_qsettings, KEY_RECENT_PROJECTS,
+        )
+        s = get_qsettings()
+        s.remove(KEY_RECENT_PROJECTS)
+
+        for i in range(12):
+            add_recent_project(f"/project/proj_{i}")
+
+        recent = s.value(KEY_RECENT_PROJECTS, [])
+        if isinstance(recent, str):
+            recent = [recent]
+        assert len(recent) <= 8
+
+        # Clean up
+        s.remove(KEY_RECENT_PROJECTS)
+
+
+class TestSessionAutoSave:
+    """Session auto-save and restore helpers."""
+
+    def test_save_session_creates_manifest(self, tmp_path):
+        from packages.report_studio.io.project_v4 import save_session
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+
+        sheet = SheetState(name="Auto Sheet")
+        c = OffsetCurve(name="Test Curve", frequency=np.array([1, 2, 3]))
+        sheet.add_curve(c, "main")
+
+        manifest_path = save_session(tmp_path, [sheet])
+        assert manifest_path.exists()
+
+        data = json.loads(manifest_path.read_text())
+        assert len(data["sheets"]) == 1
+        assert data["sheets"][0]["name"] == "Auto Sheet"
+
+        # Sheet JSON should exist
+        sheet_path = tmp_path / "session" / data["sheets"][0]["file"]
+        assert sheet_path.exists()
+
+    def test_load_session_manifest(self, tmp_path):
+        from packages.report_studio.io.project_v4 import (
+            save_session, load_session_manifest,
+        )
+        from packages.report_studio.core.models import SheetState
+
+        s1 = SheetState(name="Sheet A")
+        s2 = SheetState(name="Sheet B")
+        save_session(tmp_path, [s1, s2])
+
+        entries = load_session_manifest(tmp_path)
+        assert entries is not None
+        assert len(entries) == 2
+        assert entries[0]["name"] == "Sheet A"
+        assert entries[1]["name"] == "Sheet B"
+
+    def test_load_session_manifest_none_when_missing(self, tmp_path):
+        from packages.report_studio.io.project_v4 import load_session_manifest
+        assert load_session_manifest(tmp_path) is None
+
+    def test_session_round_trip_preserves_settings(self, tmp_path):
+        from packages.report_studio.io.project_v4 import (
+            save_session, load_session_manifest, load_sheet_skeleton,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+
+        sheet = SheetState(name="Styled Sheet")
+        sheet.set_grid(2, 1)
+        sheet.hspace = 0.3
+        sheet.typography.title_size = 16
+
+        c = OffsetCurve(
+            name="Curve X", frequency=np.array([1, 2]),
+            color="#ff00ff", line_width=2.5,
+        )
+        sheet.add_curve(c, "cell_0_0")
+
+        save_session(tmp_path, [sheet])
+
+        # Reload
+        entries = load_session_manifest(tmp_path)
+        session_dir = tmp_path / "session"
+        sheet_path = session_dir / entries[0]["file"]
+
+        loaded, curve_settings = load_sheet_skeleton(sheet_path)
+
+        assert loaded.name == "Styled Sheet"
+        assert loaded.hspace == 0.3
+        assert loaded.typography.title_size == 16
+        assert "Curve X" in curve_settings
+
+
+class TestFolderBasedProject:
+    """Folder-based load and save flow."""
+
+    def test_load_project_uses_folder(self, qtbot):
+        """_on_load_project should use folder picker (not file)."""
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+        assert hasattr(win, "_on_load_project")
+        assert hasattr(win, "_on_save_project_as")
+
+    def test_open_project_dir_validates_manifest(self, qtbot, tmp_path):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+
+        # Non-existent project.json — should not crash
+        win._open_project_dir(str(tmp_path))
+        assert len(win._sheets) >= 1  # Still has default sheet
+
+    def test_recent_menu_exists(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+        assert hasattr(win, "_recent_menu")
+        assert hasattr(win, "_refresh_recent_menu")
+
+    def test_auto_save_session_no_crash_without_project(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+        # Should not crash when no project path is set
+        win._auto_save_session()
+
+    def test_show_startup_false_skips_dialog(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+        # Window should open normally without dialog
+        assert win._current_sheet() is not None
+
+    def test_add_sheet_with_state(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        from packages.report_studio.core.models import SheetState
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+
+        sheet = SheetState(name="Custom Sheet")
+        idx = win._add_sheet_with_state(sheet)
+        assert idx >= 0
+        assert win._sheets[-1].name == "Custom Sheet"
