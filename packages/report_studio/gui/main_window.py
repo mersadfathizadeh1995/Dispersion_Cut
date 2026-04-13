@@ -331,10 +331,12 @@ class ReportStudioWindow(
                 shadow_uids.append(sc.uid)
             aggregated.shadow_curve_uids = shadow_uids
             sheet.add_aggregated(aggregated)
-            # Link the subplot to this aggregated curve
+            # Link the subplot to this aggregated curve and sync x_domain
             sp = sheet.subplots.get(subplot_key)
             if sp:
                 sp.aggregated_uid = aggregated.uid
+                if aggregated.x_domain:
+                    sp.x_domain = aggregated.x_domain
 
         self._finalize_sheet(sheet, curves + shadow_curves, spectra)
 
@@ -412,6 +414,14 @@ class ReportStudioWindow(
         """Open a v4 project from its directory — then offer to load sheets."""
         import os
         import json
+
+        self._project_path = project_dir
+
+        # Add to recent projects and refresh menu
+        from .panels.project_start_dialog import add_recent_project
+        add_recent_project(project_dir)
+        if hasattr(self, "_refresh_recent_menu"):
+            self._refresh_recent_menu()
 
         # Try to read project-level data source paths (fallback for sheets)
         pj_path = os.path.join(project_dir, "project.json")

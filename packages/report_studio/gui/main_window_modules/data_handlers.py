@@ -208,6 +208,11 @@ class DataHandlersMixin:
         # If binning params changed, recompute aggregates from shadow curves
         if attr in ("num_bins", "log_bias", "x_domain"):
             self._recompute_aggregated(sheet, agg)
+        # Sync subplot x_domain when aggregated x_domain changes
+        if attr == "x_domain" and agg.subplot_key:
+            sp = sheet.subplots.get(agg.subplot_key)
+            if sp:
+                sp.x_domain = value
         self._render_current()
 
     def _recompute_aggregated(self, sheet, agg):
