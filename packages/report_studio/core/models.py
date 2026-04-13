@@ -164,7 +164,7 @@ class AggregatedCurve:
     avg_visible: bool = True
 
     # Uncertainty display
-    uncertainty_mode: str = "band"     # "band" (fill_between) | "errorbar"
+    uncertainty_mode: str = "band"     # "band" | "errorbar" | "sticks"
     uncertainty_alpha: float = 0.3
     uncertainty_color: str = ""        # "" = use avg_color
     uncertainty_visible: bool = True
@@ -414,10 +414,13 @@ class SheetState:
 
         # Collect all curve UIDs from old subplots that are disappearing
         orphan_uids: List[str] = []
+        orphan_agg_uids: List[str] = []
         old_keys = set(self.subplots.keys())
         for old_key in old_keys - new_keys:
             sp = self.subplots[old_key]
             orphan_uids.extend(sp.curve_uids)
+            if sp.aggregated_uid:
+                orphan_agg_uids.append(sp.aggregated_uid)
 
         # Create new subplot entries
         if is_single:
@@ -441,6 +444,16 @@ class SheetState:
                     self.curves[uid].subplot_key = first_key
                     if uid not in first_sp.curve_uids:
                         first_sp.curve_uids.append(uid)
+
+        # Migrate orphan aggregated UIDs to the first new subplot
+        if orphan_agg_uids:
+            first_key = "main" if is_single else "cell_0_0"
+            first_sp = self.subplots[first_key]
+            for agg_uid in orphan_agg_uids:
+                if agg_uid in self.aggregated:
+                    self.aggregated[agg_uid].subplot_key = first_key
+                    if not first_sp.aggregated_uid:
+                        first_sp.aggregated_uid = agg_uid
 
         # Remove old subplots that are no longer in the grid
         for old_key in old_keys - new_keys:

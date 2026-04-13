@@ -3708,6 +3708,59 @@ class TestSheetStateAggregated:
         # Shadow curve should also be removed
         assert c.uid not in sheet.curves
 
+    def test_grid_change_preserves_aggregated(self):
+        """Aggregated data should survive grid changes."""
+        from packages.report_studio.core.models import (
+            SheetState, AggregatedCurve, OffsetCurve,
+        )
+        sheet = SheetState(name="Test", grid_rows=1, grid_cols=1)
+        c = OffsetCurve(name="C1", frequency=np.array([1]), velocity=np.array([1]))
+        sheet.add_curve(c, "main")
+
+        agg = AggregatedCurve(
+            name="Avg",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([10]),
+            std_vals=np.array([1]),
+            shadow_curve_uids=[c.uid],
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["main"].aggregated_uid = agg.uid
+
+        # Expand to 2x2 grid — "main" disappears
+        sheet.set_grid(2, 2)
+        # Aggregated should be migrated to cell_0_0
+        first_sp = sheet.subplots["cell_0_0"]
+        assert first_sp.aggregated_uid == agg.uid
+        assert agg.uid in sheet.aggregated
+        assert agg.subplot_key == "cell_0_0"
+
+    def test_grid_change_preserves_aggregated_shrink(self):
+        """Aggregated data survives when grid shrinks back to 1x1."""
+        from packages.report_studio.core.models import (
+            SheetState, AggregatedCurve, OffsetCurve,
+        )
+        sheet = SheetState(name="Test", grid_rows=2, grid_cols=2)
+        sheet.set_grid(2, 2)  # create cells
+        c = OffsetCurve(name="C1", frequency=np.array([1]), velocity=np.array([1]))
+        sheet.add_curve(c, "cell_1_1")
+
+        agg = AggregatedCurve(
+            name="Avg",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([10]),
+            std_vals=np.array([1]),
+            shadow_curve_uids=[c.uid],
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["cell_1_1"].aggregated_uid = agg.uid
+        agg.subplot_key = "cell_1_1"
+
+        # Shrink to 1x1 — cell_1_1 disappears
+        sheet.set_grid(1, 1)
+        assert sheet.subplots["main"].aggregated_uid == agg.uid
+        assert agg.subplot_key == "main"
+
 
 class TestSubplotTypesAggregated:
     """Tests for aggregated subplot type acceptance."""
@@ -3816,6 +3869,26 @@ class TestAggregatedDrawer:
         agg = AggregatedCurve(name="Empty")
         draw(ax, agg, shadow_curves=[])
         assert len(ax.get_lines()) == 0
+        plt.close(fig)
+
+    def test_draw_sticks_mode(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import AggregatedCurve
+        from packages.report_studio.rendering.aggregated_drawer import draw
+
+        fig, ax = plt.subplots()
+        agg = AggregatedCurve(
+            name="Sticks",
+            bin_centers=np.array([1, 2, 5]),
+            avg_vals=np.array([100, 200, 300]),
+            std_vals=np.array([10, 20, 30]),
+            uncertainty_mode="sticks",
+        )
+        draw(ax, agg, shadow_curves=[])
+        # Average line + 3 vlines segments = at least 1 line
+        assert len(ax.get_lines()) >= 1
         plt.close(fig)
 
 

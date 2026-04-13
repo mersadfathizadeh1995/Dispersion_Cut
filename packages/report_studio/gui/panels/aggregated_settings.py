@@ -126,6 +126,7 @@ class AggregatedSettingsPanel(QtWidgets.QWidget):
         self._combo_unc_mode = QtWidgets.QComboBox()
         self._combo_unc_mode.addItem("Band (fill_between)", "band")
         self._combo_unc_mode.addItem("Errorbars", "errorbar")
+        self._combo_unc_mode.addItem("Sticks (vertical lines)", "sticks")
         self._combo_unc_mode.currentIndexChanged.connect(
             lambda: self._emit("uncertainty_mode",
                                self._combo_unc_mode.currentData()))

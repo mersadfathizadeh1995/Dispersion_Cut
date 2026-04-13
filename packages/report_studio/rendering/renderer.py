@@ -201,6 +201,10 @@ def _configure_axes(ax, sp, style: StyleConfig, x_domain: str, curves=None):
 
     # Common styling
     ax.tick_params(labelsize=tick_size)
+    # Sync tick label font with subplot/global font setting
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
+        label.set_fontfamily(font)
+        label.set_fontsize(tick_size)
     ax.grid(style.grid_visible, alpha=style.grid_alpha, linestyle=style.grid_style)
     for spine in ax.spines.values():
         spine.set_linewidth(style.spine_width)

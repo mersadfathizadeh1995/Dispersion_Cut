@@ -79,6 +79,17 @@ def draw(
                 label="±1σ errorbars",
                 zorder=7,
             )
+        elif agg.uncertainty_mode == "sticks":
+            # Vertical lines at each bin (no caps)
+            unc_alpha = min(agg.uncertainty_alpha + 0.3, 1.0)
+            ax.vlines(
+                x, y - std, y + std,
+                colors=unc_color,
+                linewidths=1.2,
+                alpha=unc_alpha,
+                label="±1σ sticks",
+                zorder=7,
+            )
 
     # ── Layer 3: Average line ───────────────────────────────────────────
     if agg.avg_visible:
