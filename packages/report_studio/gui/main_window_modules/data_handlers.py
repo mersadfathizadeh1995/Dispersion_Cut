@@ -185,3 +185,62 @@ class DataHandlersMixin:
         if curve.point_mask is not None and point_idx < len(curve.point_mask):
             curve.point_mask[point_idx] = visible
             self._render_current()
+
+    # ── Aggregated curve handlers ─────────────────────────────────────
+
+    def _on_aggregated_selected(self, uid: str):
+        """An aggregated curve node selected in the data tree."""
+        sheet = self._current_sheet()
+        if not sheet or uid not in sheet.aggregated:
+            return
+        agg = sheet.aggregated[uid]
+        if hasattr(self, "right_panel"):
+            self.right_panel.show_aggregated(agg)
+
+    def _on_aggregated_style_changed(self, uid: str, attr: str, value):
+        """Aggregated curve style changed from the settings panel."""
+        sheet = self._current_sheet()
+        if not sheet or uid not in sheet.aggregated:
+            return
+        agg = sheet.aggregated[uid]
+        if hasattr(agg, attr):
+            setattr(agg, attr, value)
+        # If binning params changed, recompute aggregates from shadow curves
+        if attr in ("num_bins", "log_bias"):
+            self._recompute_aggregated(sheet, agg)
+        self._render_current()
+
+    def _recompute_aggregated(self, sheet, agg):
+        """Recompute binned avg/std from shadow curves."""
+        from dc_cut.core.processing.averages import (
+            compute_binned_avg_std,
+            compute_binned_avg_std_wavelength,
+        )
+        import numpy as np
+
+        shadow_curves = [
+            sheet.curves[uid] for uid in agg.shadow_curve_uids
+            if uid in sheet.curves and sheet.curves[uid].has_data
+        ]
+        if not shadow_curves:
+            return
+        all_x, all_y = [], []
+        for c in shadow_curves:
+            if agg.x_domain == "wavelength" and c.wavelength.size > 0:
+                all_x.append(c.wavelength)
+            else:
+                all_x.append(c.frequency)
+            all_y.append(c.velocity)
+        if not all_x:
+            return
+        x_cat = np.concatenate(all_x)
+        y_cat = np.concatenate(all_y)
+        if agg.x_domain == "wavelength":
+            bc, av, sd = compute_binned_avg_std_wavelength(
+                x_cat, y_cat, num_bins=agg.num_bins, log_bias=agg.log_bias)
+        else:
+            bc, av, sd = compute_binned_avg_std(
+                x_cat, y_cat, num_bins=agg.num_bins, log_bias=agg.log_bias)
+        agg.bin_centers = bc
+        agg.avg_vals = av
+        agg.std_vals = sd

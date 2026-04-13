@@ -116,6 +116,7 @@ class AddDataDialog(QtWidgets.QDialog):
     def _populate_type_combo(self):
         # Import here to ensure plugins are registered
         from ...core.plugins import source_offset as _  # noqa: F401
+        from ...core.plugins import average_curve as _ac  # noqa: F401
         from ...core.figure_types import registry
 
         for plugin in registry.all_types():

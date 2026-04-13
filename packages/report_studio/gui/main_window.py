@@ -122,6 +122,7 @@ class ReportStudioWindow(
         self.data_tree.remove_curves_requested.connect(self._on_curves_removed)
         self.data_tree.add_data_requested.connect(self._on_add_data_to_subplot)
         self.data_tree.subplot_renamed.connect(self._on_subplot_renamed)
+        self.data_tree.aggregated_selected.connect(self._on_aggregated_selected)
 
         # Right panel — Context tab (subplot / curve / spectrum settings)
         self.right_panel.subplot_setting_changed.connect(
@@ -132,6 +133,9 @@ class ReportStudioWindow(
         )
         self.right_panel.spectrum_style_changed.connect(
             self._on_style_changed
+        )
+        self.right_panel.aggregated_style_changed.connect(
+            self._on_aggregated_style_changed
         )
 
         # Right panel — Global tab
@@ -299,15 +303,31 @@ class ReportStudioWindow(
 
         curves = result.get("curves", [])
         spectra = result.get("spectra", [])
+        aggregated = result.get("aggregated", None)
+        shadow_curves = result.get("shadow_curves", [])
 
-        if not curves:
+        if not curves and not shadow_curves and aggregated is None:
             return
 
-        # Add curves to the target subplot
+        # Add regular curves to the target subplot
         for curve in curves:
             sheet.add_curve(curve, subplot_key)
 
-        self._finalize_sheet(sheet, curves, spectra)
+        # Handle aggregated average figure
+        if aggregated is not None:
+            # Add shadow curves first
+            shadow_uids = []
+            for sc in shadow_curves:
+                sheet.add_curve(sc, subplot_key)
+                shadow_uids.append(sc.uid)
+            aggregated.shadow_curve_uids = shadow_uids
+            sheet.add_aggregated(aggregated)
+            # Link the subplot to this aggregated curve
+            sp = sheet.subplots.get(subplot_key)
+            if sp:
+                sp.aggregated_uid = aggregated.uid
+
+        self._finalize_sheet(sheet, curves + shadow_curves, spectra)
 
     # ── Rendering ──────────────────────────────────────────────────────
 

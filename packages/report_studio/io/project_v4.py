@@ -130,6 +130,7 @@ def _subplot_to_dict(sp: SubplotState) -> Dict[str, Any]:
         "legend_position": sp.legend_position,
         "legend_font_size": sp.legend_font_size,
         "legend_frame_on": sp.legend_frame_on,
+        "aggregated_uid": sp.aggregated_uid,
     }
 
 
@@ -160,6 +161,63 @@ def _dict_to_subplot(d: Dict) -> SubplotState:
         legend_position=d.get("legend_position", ""),
         legend_font_size=d.get("legend_font_size", 0),
         legend_frame_on=d.get("legend_frame_on"),
+        aggregated_uid=d.get("aggregated_uid", ""),
+    )
+
+
+# ── Aggregated curve serialization ────────────────────────────────────────
+
+def _aggregated_to_dict(agg) -> Dict[str, Any]:
+    """Serialize AggregatedCurve settings (no array data — recomputed on load)."""
+    return {
+        "uid": agg.uid,
+        "name": agg.name,
+        "avg_color": agg.avg_color,
+        "avg_line_width": agg.avg_line_width,
+        "avg_line_style": agg.avg_line_style,
+        "avg_marker_style": agg.avg_marker_style,
+        "avg_marker_size": agg.avg_marker_size,
+        "avg_visible": agg.avg_visible,
+        "uncertainty_mode": agg.uncertainty_mode,
+        "uncertainty_alpha": agg.uncertainty_alpha,
+        "uncertainty_color": agg.uncertainty_color,
+        "uncertainty_visible": agg.uncertainty_visible,
+        "shadow_visible": agg.shadow_visible,
+        "shadow_alpha": agg.shadow_alpha,
+        "shadow_curve_uids": agg.shadow_curve_uids,
+        "num_bins": agg.num_bins,
+        "log_bias": agg.log_bias,
+        "x_domain": agg.x_domain,
+    }
+
+
+def _dict_to_aggregated(d: Dict):
+    """Reconstruct AggregatedCurve from dict (arrays will be recomputed)."""
+    from ..core.models import AggregatedCurve
+    import numpy as np
+
+    return AggregatedCurve(
+        uid=d["uid"],
+        name=d.get("name", "Average"),
+        bin_centers=np.array([]),
+        avg_vals=np.array([]),
+        std_vals=np.array([]),
+        avg_color=d.get("avg_color", "#000000"),
+        avg_line_width=d.get("avg_line_width", 2.0),
+        avg_line_style=d.get("avg_line_style", "-"),
+        avg_marker_style=d.get("avg_marker_style", "none"),
+        avg_marker_size=d.get("avg_marker_size", 0.0),
+        avg_visible=d.get("avg_visible", True),
+        uncertainty_mode=d.get("uncertainty_mode", "band"),
+        uncertainty_alpha=d.get("uncertainty_alpha", 0.25),
+        uncertainty_color=d.get("uncertainty_color", ""),
+        uncertainty_visible=d.get("uncertainty_visible", True),
+        shadow_visible=d.get("shadow_visible", True),
+        shadow_alpha=d.get("shadow_alpha", 0.15),
+        shadow_curve_uids=d.get("shadow_curve_uids", []),
+        num_bins=d.get("num_bins", 50),
+        log_bias=d.get("log_bias", 0.7),
+        x_domain=d.get("x_domain", "frequency"),
     )
 
 
@@ -173,6 +231,8 @@ def _sheet_to_dict(sheet: SheetState) -> Dict[str, Any]:
                    for uid, c in sheet.curves.items()},
         "subplots": {k: _subplot_to_dict(sp)
                      for k, sp in sheet.subplots.items()},
+        "aggregated": {uid: _aggregated_to_dict(a)
+                       for uid, a in sheet.aggregated.items()},
         "grid_rows": sheet.grid_rows,
         "grid_cols": sheet.grid_cols,
         "col_ratios": sheet.col_ratios,
@@ -206,6 +266,7 @@ def _dict_to_sheet_skeleton(d: Dict) -> SheetState:
     sheet.name = d.get("name", "Sheet")
     sheet.curves = {}  # populated later from reloaded data
     sheet.spectra = {}
+    sheet.aggregated = {}  # populated after curves are reloaded
     sheet.subplots = {
         k: _dict_to_subplot(spd)
         for k, spd in d.get("subplots", {}).items()
@@ -241,6 +302,10 @@ def _dict_to_sheet_skeleton(d: Dict) -> SheetState:
 
     if not sheet.subplots:
         sheet.subplots = {"main": SubplotState(key="main", name="Main")}
+
+    # Restore saved aggregated curves (config only — arrays recomputed later)
+    for uid, agg_d in d.get("aggregated", {}).items():
+        sheet.aggregated[uid] = _dict_to_aggregated(agg_d)
 
     return sheet
 
@@ -426,6 +491,48 @@ def reload_and_apply(
             if curve_norm == spec_norm:
                 c.spectrum_uid = spec.uid
                 break
+
+    # Recompute aggregated curves from shadow data
+    _restore_aggregated(sheet)
+
+
+def _restore_aggregated(sheet: SheetState) -> None:
+    """Recompute aggregated curve arrays from shadow curves after data reload."""
+    from dc_cut.core.processing.averages import (
+        compute_binned_avg_std,
+        compute_binned_avg_std_wavelength,
+    )
+    import numpy as np
+
+    for agg in sheet.aggregated.values():
+        shadow = [
+            sheet.curves[uid]
+            for uid in agg.shadow_curve_uids
+            if uid in sheet.curves and sheet.curves[uid].has_data
+        ]
+        if not shadow:
+            continue
+        all_x, all_y = [], []
+        for c in shadow:
+            if agg.x_domain == "wavelength" and c.wavelength.size > 0:
+                all_x.append(c.wavelength)
+            else:
+                all_x.append(c.frequency)
+            all_y.append(c.velocity)
+        if not all_x:
+            continue
+        x_cat = np.concatenate(all_x)
+        y_cat = np.concatenate(all_y)
+        if agg.x_domain == "wavelength":
+            agg.bin_centers, agg.avg_vals, agg.std_vals = (
+                compute_binned_avg_std_wavelength(
+                    x_cat, y_cat,
+                    num_bins=agg.num_bins, log_bias=agg.log_bias))
+        else:
+            agg.bin_centers, agg.avg_vals, agg.std_vals = (
+                compute_binned_avg_std(
+                    x_cat, y_cat,
+                    num_bins=agg.num_bins, log_bias=agg.log_bias))
 
 
 # ── Session auto-save ────────────────────────────────────────────────────

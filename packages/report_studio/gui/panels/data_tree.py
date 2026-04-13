@@ -40,6 +40,7 @@ _TYPE_SUBPLOT = "subplot"
 _TYPE_CURVE = "curve"
 _TYPE_INFO = "info"
 _TYPE_SPECTRUM = "spectrum"
+_TYPE_AGGREGATED = "aggregated"
 
 
 class _DragTreeWidget(QtWidgets.QTreeWidget):
@@ -141,6 +142,7 @@ class DataTreePanel(QtWidgets.QWidget):
     remove_curves_requested = Signal(list)  # List[str] — batch removal
     add_data_requested = Signal(str)  # subplot_key
     subplot_renamed = Signal(str, str)  # (key, new_name)
+    aggregated_selected = Signal(str)  # aggregated uid
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -219,6 +221,20 @@ class DataTreePanel(QtWidgets.QWidget):
                 c_item = self._make_curve_item(curve, key, sheet)
                 sp_item.addChild(c_item)
                 self._curve_items[uid] = c_item
+
+            # Add aggregated curve node (if linked)
+            if sp.aggregated_uid:
+                agg = sheet.aggregated.get(sp.aggregated_uid)
+                if agg:
+                    agg_item = QtWidgets.QTreeWidgetItem(
+                        [f"📊 {agg.display_name}"])
+                    agg_item.setData(0, _ITEM_TYPE_ROLE, _TYPE_AGGREGATED)
+                    agg_item.setData(0, _UID_ROLE, agg.uid)
+                    agg_item.setFlags(ItemIsEnabled | ItemIsSelectable)
+                    font = agg_item.font(0)
+                    font.setItalic(True)
+                    agg_item.setFont(0, font)
+                    sp_item.addChild(agg_item)
 
             self._tree.addTopLevelItem(sp_item)
             self._subplot_items[key] = sp_item
@@ -299,6 +315,8 @@ class DataTreePanel(QtWidgets.QWidget):
             self.subplot_selected.emit(key)
         elif item_type == _TYPE_SPECTRUM and uid:
             self.spectrum_selected.emit(uid)
+        elif item_type == _TYPE_AGGREGATED and uid:
+            self.aggregated_selected.emit(uid)
         elif item_type in (_TYPE_CURVE, _TYPE_INFO) and uid:
             self.curve_selected.emit(uid)
 

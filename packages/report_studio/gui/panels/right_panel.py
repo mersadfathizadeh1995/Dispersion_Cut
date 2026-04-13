@@ -15,11 +15,12 @@ from ...qt_compat import QtWidgets, QtCore, Signal
 from .subplot_settings import SubplotSettingsPanel
 from .curve_settings import CurveSettingsPanel
 from .spectrum_settings import SpectrumSettingsPanel
+from .aggregated_settings import AggregatedSettingsPanel
 from .global_panel import GlobalSettingsPanel
 from .export_panel import ExportPanel
 
 if TYPE_CHECKING:
-    from ...core.models import SheetState, SubplotState, OffsetCurve
+    from ...core.models import SheetState, SubplotState, OffsetCurve, AggregatedCurve
 
 
 class RightPanel(QtWidgets.QWidget):
@@ -39,6 +40,7 @@ class RightPanel(QtWidgets.QWidget):
     subplot_setting_changed = Signal(str, str, object)
     curve_style_changed = Signal(str, str, object)
     spectrum_style_changed = Signal(str, str, object)
+    aggregated_style_changed = Signal(str, str, object)
     grid_changed = Signal(int, int)
     layout_changed = Signal(str, object)
     legend_changed = Signal(str, object)
@@ -51,6 +53,7 @@ class RightPanel(QtWidgets.QWidget):
     _IDX_SUBPLOT = 1
     _IDX_CURVE = 2
     _IDX_SPECTRUM = 3
+    _IDX_AGGREGATED = 4
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -93,6 +96,11 @@ class RightPanel(QtWidgets.QWidget):
         scroll_sx = _make_scroll(self.spectrum_panel)
         self._context_stack.addWidget(scroll_sx)
 
+        # Index 4: aggregated curve settings
+        self.aggregated_panel = AggregatedSettingsPanel()
+        scroll_ag = _make_scroll(self.aggregated_panel)
+        self._context_stack.addWidget(scroll_ag)
+
         ctx_layout.addWidget(self._context_stack)
         self._tabs.addTab(ctx_container, "Context")
 
@@ -114,6 +122,8 @@ class RightPanel(QtWidgets.QWidget):
             self.curve_style_changed.emit)
         self.spectrum_panel.spectrum_style_changed.connect(
             self.spectrum_style_changed.emit)
+        self.aggregated_panel.aggregated_style_changed.connect(
+            self.aggregated_style_changed.emit)
 
         self.global_panel.grid_changed.connect(self.grid_changed.emit)
         self.global_panel.layout_changed.connect(self.layout_changed.emit)
@@ -150,6 +160,12 @@ class RightPanel(QtWidgets.QWidget):
         """Activate the spectrum settings tab (using curve's spectrum attrs)."""
         self.spectrum_panel.show_spectrum(curve)
         self._context_stack.setCurrentIndex(self._IDX_SPECTRUM)
+        self._tabs.setCurrentIndex(0)
+
+    def show_aggregated(self, agg: "AggregatedCurve"):
+        """Activate the aggregated curve settings tab."""
+        self.aggregated_panel.show_aggregated(agg)
+        self._context_stack.setCurrentIndex(self._IDX_AGGREGATED)
         self._tabs.setCurrentIndex(0)
 
     def show_spectra_batch(self, uids: list, curves: list):

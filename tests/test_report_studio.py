@@ -3627,3 +3627,363 @@ class TestSuppressEditClear:
             assert dlg._open_existing_path == str(proj_dir)
 
         s.remove(KEY_RECENT_PROJECTS)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.8 — Average with Uncertainty figure type
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestAggregatedCurveModel:
+    """Tests for AggregatedCurve dataclass."""
+
+    def test_default_creation(self):
+        from packages.report_studio.core.models import AggregatedCurve
+        agg = AggregatedCurve(
+            name="Avg Test",
+            bin_centers=np.array([1, 2, 3]),
+            avg_vals=np.array([10, 20, 30]),
+            std_vals=np.array([1, 2, 3]),
+        )
+        assert agg.has_data is True
+        assert agg.display_name == "Avg Test"
+        assert agg.num_bins == 50
+        assert agg.log_bias == 0.7
+        assert agg.avg_visible is True
+        assert agg.shadow_visible is True
+        assert agg.uncertainty_visible is True
+        assert agg.uncertainty_mode == "band"
+        assert len(agg.uid) > 0
+
+    def test_empty_data(self):
+        from packages.report_studio.core.models import AggregatedCurve
+        agg = AggregatedCurve(name="Empty")
+        assert agg.has_data is False
+
+    def test_effective_uncertainty_color_default(self):
+        from packages.report_studio.core.models import AggregatedCurve
+        agg = AggregatedCurve(
+            name="T", avg_color="#FF0000",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([1]),
+            std_vals=np.array([1]),
+        )
+        assert agg.effective_uncertainty_color == "#FF0000"
+
+    def test_effective_uncertainty_color_custom(self):
+        from packages.report_studio.core.models import AggregatedCurve
+        agg = AggregatedCurve(
+            name="T", avg_color="#FF0000",
+            uncertainty_color="#00FF00",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([1]),
+            std_vals=np.array([1]),
+        )
+        assert agg.effective_uncertainty_color == "#00FF00"
+
+
+class TestSheetStateAggregated:
+    """Tests for SheetState aggregated dict management."""
+
+    def test_add_and_remove_aggregated(self):
+        from packages.report_studio.core.models import (
+            SheetState, AggregatedCurve, OffsetCurve,
+        )
+        sheet = SheetState(name="Test")
+        c = OffsetCurve(name="C1", frequency=np.array([1]), velocity=np.array([1]))
+        sheet.add_curve(c, "main")
+
+        agg = AggregatedCurve(
+            name="Avg",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([10]),
+            std_vals=np.array([1]),
+            shadow_curve_uids=[c.uid],
+        )
+        sheet.add_aggregated(agg)
+        assert agg.uid in sheet.aggregated
+
+        sheet.remove_aggregated(agg.uid)
+        assert agg.uid not in sheet.aggregated
+        # Shadow curve should also be removed
+        assert c.uid not in sheet.curves
+
+
+class TestSubplotTypesAggregated:
+    """Tests for aggregated subplot type acceptance."""
+
+    def test_kind_aggregated_exists(self):
+        from packages.report_studio.core.subplot_types import (
+            KIND_AGGREGATED, ACCEPTANCE_RULES,
+        )
+        assert KIND_AGGREGATED == "aggregated"
+        # COMBINED should accept aggregated
+        assert KIND_AGGREGATED in ACCEPTANCE_RULES.get("combined", set())
+
+
+class TestAverageCurvePlugin:
+    """Tests for the average_curve plugin."""
+
+    def test_plugin_registered(self):
+        from packages.report_studio.core.plugins import average_curve as _  # noqa
+        from packages.report_studio.core.figure_types import registry
+        p = registry.get("average_curve")
+        assert p is not None
+        assert p.display_name == "Average with Uncertainty"
+
+    def test_plugin_load_data_empty(self):
+        from packages.report_studio.core.plugins.average_curve import (
+            AverageCurvePlugin,
+        )
+        plugin = AverageCurvePlugin()
+        result = plugin.load_data(pkl_path="")
+        assert result["aggregated"] is None
+        assert result["shadow_curves"] == []
+
+    @pytest.mark.skipif(
+        not PKL_PATH.exists(), reason="Test PKL not available",
+    )
+    def test_plugin_load_data_from_pkl(self):
+        from packages.report_studio.core.plugins.average_curve import (
+            AverageCurvePlugin,
+        )
+        plugin = AverageCurvePlugin()
+        result = plugin.load_data(pkl_path=str(PKL_PATH))
+        assert result["aggregated"] is not None
+        agg = result["aggregated"]
+        assert agg.has_data
+        assert len(result["shadow_curves"]) > 0
+        assert agg.bin_centers.size > 0
+
+    def test_settings_fields(self):
+        from packages.report_studio.core.plugins.average_curve import (
+            AverageCurvePlugin,
+        )
+        fields = AverageCurvePlugin().settings_fields()
+        keys = [f["key"] for f in fields]
+        assert "x_domain" in keys
+        assert "num_bins" in keys
+
+
+class TestAggregatedDrawer:
+    """Tests for aggregated_drawer.draw()."""
+
+    def test_draw_does_not_crash(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import AggregatedCurve
+        from packages.report_studio.rendering.aggregated_drawer import draw
+
+        fig, ax = plt.subplots()
+        agg = AggregatedCurve(
+            name="Test Avg",
+            bin_centers=np.array([1, 2, 5, 10, 20]),
+            avg_vals=np.array([100, 200, 300, 250, 150]),
+            std_vals=np.array([10, 20, 30, 25, 15]),
+        )
+        draw(ax, agg, shadow_curves=[])
+        assert len(ax.get_lines()) >= 1
+        plt.close(fig)
+
+    def test_draw_with_errorbar_mode(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import AggregatedCurve
+        from packages.report_studio.rendering.aggregated_drawer import draw
+
+        fig, ax = plt.subplots()
+        agg = AggregatedCurve(
+            name="EB",
+            bin_centers=np.array([1, 2, 5]),
+            avg_vals=np.array([100, 200, 300]),
+            std_vals=np.array([10, 20, 30]),
+            uncertainty_mode="errorbar",
+        )
+        draw(ax, agg, shadow_curves=[])
+        assert len(ax.get_lines()) >= 1
+        plt.close(fig)
+
+    def test_draw_empty_does_not_crash(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import AggregatedCurve
+        from packages.report_studio.rendering.aggregated_drawer import draw
+
+        fig, ax = plt.subplots()
+        agg = AggregatedCurve(name="Empty")
+        draw(ax, agg, shadow_curves=[])
+        assert len(ax.get_lines()) == 0
+        plt.close(fig)
+
+
+class TestAggregatedSerialization:
+    """Tests for aggregated curve serialization round-trip."""
+
+    def test_round_trip(self, tmp_path):
+        from packages.report_studio.core.models import (
+            SheetState, AggregatedCurve, OffsetCurve,
+        )
+        from packages.report_studio.io.project_v4 import (
+            _sheet_to_dict, _dict_to_sheet_skeleton,
+        )
+
+        sheet = SheetState(name="SZ Test")
+        c = OffsetCurve(
+            name="C1",
+            frequency=np.array([1, 2, 3]),
+            velocity=np.array([100, 200, 300]),
+        )
+        sheet.add_curve(c, "main")
+
+        agg = AggregatedCurve(
+            name="Avg RT",
+            bin_centers=np.array([1.5, 2.5]),
+            avg_vals=np.array([150, 250]),
+            std_vals=np.array([10, 20]),
+            shadow_curve_uids=[c.uid],
+            avg_color="#FF0000",
+            uncertainty_mode="errorbar",
+            uncertainty_alpha=0.5,
+            num_bins=30,
+            log_bias=0.5,
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["main"].aggregated_uid = agg.uid
+
+        d = _sheet_to_dict(sheet)
+        assert "aggregated" in d
+        assert agg.uid in d["aggregated"]
+        assert d["aggregated"][agg.uid]["avg_color"] == "#FF0000"
+        assert d["aggregated"][agg.uid]["uncertainty_mode"] == "errorbar"
+
+        # Reconstruct
+        rebuilt = _dict_to_sheet_skeleton(d)
+        assert agg.uid in rebuilt.aggregated
+        r_agg = rebuilt.aggregated[agg.uid]
+        assert r_agg.avg_color == "#FF0000"
+        assert r_agg.num_bins == 30
+        assert r_agg.uncertainty_mode == "errorbar"
+        assert rebuilt.subplots["main"].aggregated_uid == agg.uid
+
+
+class TestAggregatedSettingsPanel:
+    """Tests for the AggregatedSettingsPanel widget."""
+
+    def test_show_aggregated(self, qtbot):
+        from packages.report_studio.gui.panels.aggregated_settings import (
+            AggregatedSettingsPanel,
+        )
+        from packages.report_studio.core.models import AggregatedCurve
+
+        panel = AggregatedSettingsPanel()
+        qtbot.addWidget(panel)
+
+        agg = AggregatedCurve(
+            name="Panel Test",
+            bin_centers=np.array([1, 2]),
+            avg_vals=np.array([10, 20]),
+            std_vals=np.array([1, 2]),
+            avg_color="#FF0000",
+            avg_line_width=3.0,
+            num_bins=40,
+        )
+        panel.show_aggregated(agg)
+        assert panel._current_uid == agg.uid
+        assert panel._spin_avg_lw.value() == 3.0
+        assert panel._spin_bins.value() == 40
+
+    def test_signal_emitted(self, qtbot):
+        from packages.report_studio.gui.panels.aggregated_settings import (
+            AggregatedSettingsPanel,
+        )
+        from packages.report_studio.core.models import AggregatedCurve
+
+        panel = AggregatedSettingsPanel()
+        qtbot.addWidget(panel)
+
+        agg = AggregatedCurve(
+            name="Sig Test",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([10]),
+            std_vals=np.array([1]),
+        )
+        panel.show_aggregated(agg)
+
+        with qtbot.waitSignal(panel.aggregated_style_changed, timeout=1000):
+            panel._spin_avg_lw.setValue(5.0)
+
+
+class TestRightPanelAggregated:
+    """Tests for aggregated integration in RightPanel."""
+
+    def test_aggregated_panel_index(self, qtbot):
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        panel = RightPanel()
+        qtbot.addWidget(panel)
+        assert hasattr(panel, "aggregated_panel")
+        assert panel._IDX_AGGREGATED == 4
+
+    def test_show_aggregated_switches_stack(self, qtbot):
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        from packages.report_studio.core.models import AggregatedCurve
+
+        panel = RightPanel()
+        qtbot.addWidget(panel)
+
+        agg = AggregatedCurve(
+            name="RP Test",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([10]),
+            std_vals=np.array([1]),
+        )
+        panel.show_aggregated(agg)
+        assert panel._context_stack.currentIndex() == panel._IDX_AGGREGATED
+
+
+class TestDataTreeAggregated:
+    """Tests for aggregated node in DataTreePanel."""
+
+    def test_aggregated_node_shown(self, qtbot):
+        from packages.report_studio.gui.panels.data_tree import DataTreePanel
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, AggregatedCurve,
+        )
+
+        tree = DataTreePanel()
+        qtbot.addWidget(tree)
+
+        sheet = SheetState(name="DT Test")
+        c = OffsetCurve(
+            name="C1",
+            frequency=np.array([1]),
+            velocity=np.array([1]),
+        )
+        sheet.add_curve(c, "main")
+
+        agg = AggregatedCurve(
+            name="Avg Node",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([10]),
+            std_vals=np.array([1]),
+            shadow_curve_uids=[c.uid],
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["main"].aggregated_uid = agg.uid
+
+        tree.populate(sheet)
+
+        # Check for aggregated node presence
+        root = tree._tree.topLevelItem(0)
+        found = False
+        for i in range(root.childCount()):
+            child = root.child(i)
+            from packages.report_studio.gui.panels.data_tree import (
+                _ITEM_TYPE_ROLE, _TYPE_AGGREGATED,
+            )
+            if child.data(0, _ITEM_TYPE_ROLE) == _TYPE_AGGREGATED:
+                found = True
+                break
+        assert found

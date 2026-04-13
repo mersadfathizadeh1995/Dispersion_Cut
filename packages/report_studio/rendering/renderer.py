@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Dict, Optional
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 
-from . import layout_builder, curve_drawer, spectrum_drawer
+from . import layout_builder, curve_drawer, spectrum_drawer, aggregated_drawer
 from .style import StyleConfig
 
 if TYPE_CHECKING:
@@ -109,7 +109,20 @@ def _render_subplot(
                     _last_im = im
                     _last_curve_for_colorbar = curve
 
-    # 2. Draw dispersion curves
+    # 2. Draw aggregated average + uncertainty (if linked)
+    if sp.aggregated_uid:
+        agg = state.aggregated.get(sp.aggregated_uid)
+        if agg and agg.has_data:
+            shadow_curves = [
+                state.curves[uid]
+                for uid in agg.shadow_curve_uids
+                if uid in state.curves
+            ]
+            aggregated_drawer.draw(
+                ax, agg, shadow_curves, x_domain, style,
+            )
+
+    # 3. Draw dispersion curves (non-shadow or explicit visible)
     for curve in curves:
         if curve.visible:
             curve_drawer.draw(
@@ -117,10 +130,10 @@ def _render_subplot(
                 highlight=(curve.uid == selected_uid),
             )
 
-    # 3. Configure axes
+    # 4. Configure axes
     _configure_axes(ax, sp, style, x_domain, curves=curves)
 
-    # 4. Legend (per-subplot override → global fallback)
+    # 5. Legend (per-subplot override → global fallback)
     leg_visible = sp.legend_visible if sp.legend_visible is not None else style.legend_visible
     if leg_visible and curves:
         visible_curves = [c for c in curves if c.visible]
@@ -137,7 +150,7 @@ def _render_subplot(
                 prop={"family": leg_font, "size": leg_size},
             )
 
-    # 5. Colorbar (for last drawn spectrum that requests it)
+    # 6. Colorbar (for last drawn spectrum that requests it)
     if _last_im is not None and _last_curve_for_colorbar is not None:
         cb_curve = _last_curve_for_colorbar
         if cb_curve.spectrum_colorbar:
@@ -156,7 +169,7 @@ def _render_subplot(
             except Exception:
                 pass
 
-    # 5. Title
+    # 7. Title
     if sp.display_name:
         title_size = sp.title_font_size if sp.title_font_size > 0 else style.title_size
         title_font = sp.font_family if sp.font_family else style.font_family

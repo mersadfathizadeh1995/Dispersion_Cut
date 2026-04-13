@@ -136,6 +136,66 @@ class SpectrumData:
         return self.power is not None and self.power.size > 0
 
 
+# ── AggregatedCurve ───────────────────────────────────────────────────────
+
+@dataclass
+class AggregatedCurve:
+    """Binned average dispersion curve with uncertainty."""
+
+    uid: str = ""
+    name: str = "Average"
+
+    # Computed arrays (frequency-domain by default)
+    bin_centers: np.ndarray = field(default_factory=lambda: np.array([]))
+    avg_vals: np.ndarray = field(default_factory=lambda: np.array([]))
+    std_vals: np.ndarray = field(default_factory=lambda: np.array([]))
+
+    # Binning configuration
+    num_bins: int = 50
+    log_bias: float = 0.7
+    x_domain: str = "frequency"  # "frequency" | "wavelength"
+
+    # Average line display
+    avg_color: str = "#0173B2"
+    avg_line_width: float = 2.0
+    avg_line_style: str = "-"          # "-", "--", "-.", ":"
+    avg_marker_style: str = "o"        # "o", "s", "^", "D", "none"
+    avg_marker_size: float = 5.0
+    avg_visible: bool = True
+
+    # Uncertainty display
+    uncertainty_mode: str = "band"     # "band" (fill_between) | "errorbar"
+    uncertainty_alpha: float = 0.3
+    uncertainty_color: str = ""        # "" = use avg_color
+    uncertainty_visible: bool = True
+
+    # Shadow curves (individual offsets as faded background)
+    shadow_visible: bool = True
+    shadow_alpha: float = 0.15
+
+    # UIDs of associated shadow curves stored in SheetState.curves
+    shadow_curve_uids: List[str] = field(default_factory=list)
+
+    # Subplot assignment
+    subplot_key: str = "main"
+
+    def __post_init__(self):
+        if not self.uid:
+            self.uid = _short_uid()
+
+    @property
+    def has_data(self) -> bool:
+        return self.bin_centers is not None and len(self.bin_centers) > 0
+
+    @property
+    def display_name(self) -> str:
+        return self.name or self.uid
+
+    @property
+    def effective_uncertainty_color(self) -> str:
+        return self.uncertainty_color or self.avg_color
+
+
 # ── SubplotState ──────────────────────────────────────────────────────────
 
 @dataclass
@@ -180,6 +240,9 @@ class SubplotState:
     legend_font_size: int = 0
     legend_frame_on: Optional[bool] = None
 
+    # Aggregated curve link (uid of AggregatedCurve, "" = none)
+    aggregated_uid: str = ""
+
     @property
     def display_name(self) -> str:
         return self.name or self.key
@@ -221,6 +284,7 @@ class SheetState:
     # Data containers (keyed by uid)
     curves: Dict[str, OffsetCurve] = field(default_factory=dict)
     spectra: Dict[str, SpectrumData] = field(default_factory=dict)
+    aggregated: Dict[str, AggregatedCurve] = field(default_factory=dict)
 
     # Subplot container (keyed by subplot key)
     subplots: Dict[str, SubplotState] = field(default_factory=dict)
@@ -301,6 +365,26 @@ class SheetState:
             sp_new.curve_uids.append(uid)
         curve.subplot_key = new_subplot_key
         sp_new.stype = ST.auto_assign_type(sp_new.stype, ST.KIND_CURVE)
+
+    def add_aggregated(self, agg: "AggregatedCurve", subplot_key: str = "main"):
+        """Add an aggregated curve and link it to a subplot."""
+        self.aggregated[agg.uid] = agg
+        agg.subplot_key = subplot_key
+        if subplot_key not in self.subplots:
+            self.subplots[subplot_key] = SubplotState(key=subplot_key)
+        self.subplots[subplot_key].aggregated_uid = agg.uid
+
+    def remove_aggregated(self, uid: str):
+        """Remove an aggregated curve and its shadow curves."""
+        if uid not in self.aggregated:
+            return
+        agg = self.aggregated.pop(uid)
+        # Unlink from subplot
+        for sp in self.subplots.values():
+            if sp.aggregated_uid == uid:
+                sp.aggregated_uid = ""
+        # Remove shadow curves
+        self.remove_curves(list(agg.shadow_curve_uids))
 
     def set_grid(self, rows: int, cols: int):
         """Resize the subplot grid, migrating curves between subplots."""
