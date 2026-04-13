@@ -4020,7 +4020,11 @@ class TestDataTreeAggregated:
     """Tests for aggregated node in DataTreePanel."""
 
     def test_aggregated_node_shown(self, qtbot):
-        from packages.report_studio.gui.panels.data_tree import DataTreePanel
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel, _ITEM_TYPE_ROLE, _TYPE_AGG_GROUP,
+            _TYPE_AGG_AVG, _TYPE_AGG_UNC, _TYPE_AGG_SHADOW_GROUP,
+            _TYPE_AGG_SHADOW,
+        )
         from packages.report_studio.core.models import (
             SheetState, OffsetCurve, AggregatedCurve,
         )
@@ -4048,15 +4052,180 @@ class TestDataTreeAggregated:
 
         tree.populate(sheet)
 
-        # Check for aggregated node presence
+        # Root = subplot, first child should be the group node
         root = tree._tree.topLevelItem(0)
-        found = False
+        group = root.child(0)
+        assert group.data(0, _ITEM_TYPE_ROLE) == _TYPE_AGG_GROUP
+        assert "Avg Node" in group.text(0)
+
+        # Group children: Average Line, Uncertainty, Shadow Curves, Binning
+        child_types = [
+            group.child(i).data(0, _ITEM_TYPE_ROLE)
+            for i in range(group.childCount())
+        ]
+        assert _TYPE_AGG_AVG in child_types
+        assert _TYPE_AGG_UNC in child_types
+        assert _TYPE_AGG_SHADOW_GROUP in child_types
+
+        # Shadow group should contain the shadow curve
+        shadow_idx = child_types.index(_TYPE_AGG_SHADOW_GROUP)
+        shadow_group = group.child(shadow_idx)
+        assert shadow_group.childCount() == 1
+        assert shadow_group.child(0).data(0, _ITEM_TYPE_ROLE) == _TYPE_AGG_SHADOW
+
+        # Shadow curve should NOT appear as a flat sibling
         for i in range(root.childCount()):
             child = root.child(i)
             from packages.report_studio.gui.panels.data_tree import (
-                _ITEM_TYPE_ROLE, _TYPE_AGGREGATED,
+                _TYPE_CURVE, _UID_ROLE,
             )
-            if child.data(0, _ITEM_TYPE_ROLE) == _TYPE_AGGREGATED:
-                found = True
+            if child.data(0, _ITEM_TYPE_ROLE) == _TYPE_CURVE:
+                assert child.data(0, _UID_ROLE) != c.uid
+
+    def test_group_checkbox_propagates(self, qtbot):
+        """Unchecking group toggles all sub-layer checkboxes."""
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel, _ITEM_TYPE_ROLE, _TYPE_AGG_GROUP,
+            _TYPE_AGG_AVG, _TYPE_AGG_UNC, _TYPE_AGG_SHADOW_GROUP,
+            _TYPE_AGG_SHADOW, Checked, Unchecked,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, AggregatedCurve,
+        )
+
+        tree = DataTreePanel()
+        qtbot.addWidget(tree)
+
+        sheet = SheetState(name="Propagate")
+        c = OffsetCurve(name="S1", frequency=np.array([1]), velocity=np.array([1]))
+        sheet.add_curve(c, "main")
+        agg = AggregatedCurve(
+            name="Agg", bin_centers=np.array([1]),
+            avg_vals=np.array([10]), std_vals=np.array([1]),
+            shadow_curve_uids=[c.uid],
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["main"].aggregated_uid = agg.uid
+        tree.populate(sheet)
+
+        root = tree._tree.topLevelItem(0)
+        group = root.child(0)
+        assert group.data(0, _ITEM_TYPE_ROLE) == _TYPE_AGG_GROUP
+
+        # Uncheck group — all children should become unchecked
+        with qtbot.waitSignal(tree.aggregated_visibility_changed, timeout=1000):
+            group.setCheckState(0, Unchecked)
+
+        for i in range(group.childCount()):
+            child = group.child(i)
+            ctype = child.data(0, _ITEM_TYPE_ROLE)
+            if ctype in (_TYPE_AGG_AVG, _TYPE_AGG_UNC, _TYPE_AGG_SHADOW_GROUP):
+                assert child.checkState(0) == Unchecked
+                if ctype == _TYPE_AGG_SHADOW_GROUP:
+                    for j in range(child.childCount()):
+                        assert child.child(j).checkState(0) == Unchecked
+
+        # Re-check group — all children checked
+        with qtbot.waitSignal(tree.aggregated_visibility_changed, timeout=1000):
+            group.setCheckState(0, Checked)
+
+        for i in range(group.childCount()):
+            child = group.child(i)
+            ctype = child.data(0, _ITEM_TYPE_ROLE)
+            if ctype in (_TYPE_AGG_AVG, _TYPE_AGG_UNC, _TYPE_AGG_SHADOW_GROUP):
+                assert child.checkState(0) == Checked
+
+    def test_shadow_group_checkbox_propagates(self, qtbot):
+        """Unchecking shadow group toggles individual shadow curves."""
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel, _ITEM_TYPE_ROLE, _TYPE_AGG_GROUP,
+            _TYPE_AGG_SHADOW_GROUP, _TYPE_AGG_SHADOW, Unchecked,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, AggregatedCurve,
+        )
+
+        tree = DataTreePanel()
+        qtbot.addWidget(tree)
+
+        sheet = SheetState(name="Shadow")
+        c1 = OffsetCurve(name="S1", frequency=np.array([1]), velocity=np.array([1]))
+        c2 = OffsetCurve(name="S2", frequency=np.array([2]), velocity=np.array([2]))
+        sheet.add_curve(c1, "main")
+        sheet.add_curve(c2, "main")
+        agg = AggregatedCurve(
+            name="A", bin_centers=np.array([1]),
+            avg_vals=np.array([10]), std_vals=np.array([1]),
+            shadow_curve_uids=[c1.uid, c2.uid],
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["main"].aggregated_uid = agg.uid
+        tree.populate(sheet)
+
+        root = tree._tree.topLevelItem(0)
+        group = root.child(0)
+
+        # Find shadow group
+        shadow_grp = None
+        for i in range(group.childCount()):
+            if group.child(i).data(0, _ITEM_TYPE_ROLE) == _TYPE_AGG_SHADOW_GROUP:
+                shadow_grp = group.child(i)
                 break
-        assert found
+        assert shadow_grp is not None
+        assert shadow_grp.childCount() == 2
+
+        with qtbot.waitSignal(tree.aggregated_visibility_changed, timeout=1000):
+            shadow_grp.setCheckState(0, Unchecked)
+
+        for j in range(shadow_grp.childCount()):
+            assert shadow_grp.child(j).checkState(0) == Unchecked
+
+    def test_aggregated_visibility_signal_layers(self, qtbot):
+        """Each sub-layer emits correct layer string."""
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel, _ITEM_TYPE_ROLE, _TYPE_AGG_GROUP,
+            _TYPE_AGG_AVG, _TYPE_AGG_UNC, Unchecked,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, AggregatedCurve,
+        )
+
+        tree = DataTreePanel()
+        qtbot.addWidget(tree)
+
+        sheet = SheetState(name="Sig")
+        c = OffsetCurve(name="C", frequency=np.array([1]), velocity=np.array([1]))
+        sheet.add_curve(c, "main")
+        agg = AggregatedCurve(
+            name="A", bin_centers=np.array([1]),
+            avg_vals=np.array([10]), std_vals=np.array([1]),
+            shadow_curve_uids=[c.uid],
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["main"].aggregated_uid = agg.uid
+        tree.populate(sheet)
+
+        root = tree._tree.topLevelItem(0)
+        group = root.child(0)
+
+        # Toggle Average Line → emits "avg"
+        avg_item = None
+        unc_item = None
+        for i in range(group.childCount()):
+            ct = group.child(i).data(0, _ITEM_TYPE_ROLE)
+            if ct == _TYPE_AGG_AVG:
+                avg_item = group.child(i)
+            elif ct == _TYPE_AGG_UNC:
+                unc_item = group.child(i)
+
+        with qtbot.waitSignal(tree.aggregated_visibility_changed,
+                              timeout=1000) as sig:
+            avg_item.setCheckState(0, Unchecked)
+        assert sig.args[1] == "avg"
+        assert sig.args[2] is False
+
+        with qtbot.waitSignal(tree.aggregated_visibility_changed,
+                              timeout=1000) as sig:
+            unc_item.setCheckState(0, Unchecked)
+        assert sig.args[1] == "uncertainty"
+        assert sig.args[2] is False

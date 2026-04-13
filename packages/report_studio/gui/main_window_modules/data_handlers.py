@@ -244,3 +244,55 @@ class DataHandlersMixin:
         agg.bin_centers = bc
         agg.avg_vals = av
         agg.std_vals = sd
+
+    def _on_aggregated_visibility_changed(self, uid: str, layer: str,
+                                          visible: bool):
+        """Aggregated sub-layer visibility toggled from tree checkbox."""
+        sheet = self._current_sheet()
+        if not sheet or uid not in sheet.aggregated:
+            return
+        agg = sheet.aggregated[uid]
+        if layer == "all":
+            agg.avg_visible = visible
+            agg.uncertainty_visible = visible
+            agg.shadow_visible = visible
+            # Also toggle individual shadow curves
+            for sc_uid in agg.shadow_curve_uids:
+                sc = sheet.curves.get(sc_uid)
+                if sc:
+                    sc.visible = visible
+        elif layer == "avg":
+            agg.avg_visible = visible
+        elif layer == "uncertainty":
+            agg.uncertainty_visible = visible
+        elif layer == "shadow":
+            agg.shadow_visible = visible
+            for sc_uid in agg.shadow_curve_uids:
+                sc = sheet.curves.get(sc_uid)
+                if sc:
+                    sc.visible = visible
+        self._render_current()
+
+    def _on_remove_aggregated(self, uid: str):
+        """Remove an entire aggregated figure (avg + uncertainty + shadows)."""
+        sheet = self._current_sheet()
+        if not sheet or uid not in sheet.aggregated:
+            return
+        agg = sheet.aggregated[uid]
+        # Remove shadow curves from sheet
+        for sc_uid in list(agg.shadow_curve_uids):
+            if sc_uid in sheet.curves:
+                del sheet.curves[sc_uid]
+            # Remove from subplot curve_uids
+            for sp in sheet.subplots.values():
+                if sc_uid in sp.curve_uids:
+                    sp.curve_uids.remove(sc_uid)
+        # Clear subplot link
+        for sp in sheet.subplots.values():
+            if sp.aggregated_uid == uid:
+                sp.aggregated_uid = ""
+        # Remove from aggregated dict
+        del sheet.aggregated[uid]
+        # Refresh tree + canvas
+        self.data_tree.populate(sheet)
+        self._render_current()

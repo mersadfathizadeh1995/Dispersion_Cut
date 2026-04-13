@@ -123,6 +123,12 @@ class ReportStudioWindow(
         self.data_tree.add_data_requested.connect(self._on_add_data_to_subplot)
         self.data_tree.subplot_renamed.connect(self._on_subplot_renamed)
         self.data_tree.aggregated_selected.connect(self._on_aggregated_selected)
+        self.data_tree.aggregated_visibility_changed.connect(
+            self._on_aggregated_visibility_changed
+        )
+        self.data_tree.remove_aggregated_requested.connect(
+            self._on_remove_aggregated
+        )
 
         # Right panel — Context tab (subplot / curve / spectrum settings)
         self.right_panel.subplot_setting_changed.connect(

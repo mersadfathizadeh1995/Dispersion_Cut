@@ -41,6 +41,11 @@ _TYPE_CURVE = "curve"
 _TYPE_INFO = "info"
 _TYPE_SPECTRUM = "spectrum"
 _TYPE_AGGREGATED = "aggregated"
+_TYPE_AGG_GROUP = "agg_group"
+_TYPE_AGG_AVG = "agg_avg"
+_TYPE_AGG_UNC = "agg_unc"
+_TYPE_AGG_SHADOW_GROUP = "agg_shadow_group"
+_TYPE_AGG_SHADOW = "agg_shadow"
 
 
 class _DragTreeWidget(QtWidgets.QTreeWidget):
@@ -143,6 +148,8 @@ class DataTreePanel(QtWidgets.QWidget):
     add_data_requested = Signal(str)  # subplot_key
     subplot_renamed = Signal(str, str)  # (key, new_name)
     aggregated_selected = Signal(str)  # aggregated uid
+    aggregated_visibility_changed = Signal(str, str, bool)  # (agg_uid, sub_layer, visible)
+    remove_aggregated_requested = Signal(str)  # aggregated uid
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -199,6 +206,11 @@ class DataTreePanel(QtWidgets.QWidget):
         self._subplot_items.clear()
         self._curve_items.clear()
 
+        # Collect all shadow curve UIDs so they can be excluded from regular loop
+        shadow_uids: set = set()
+        for agg in sheet.aggregated.values():
+            shadow_uids.update(agg.shadow_curve_uids)
+
         for key in sheet.subplot_keys_ordered():
             sp = sheet.subplots[key]
             sp_item = QtWidgets.QTreeWidgetItem([sp.display_name])
@@ -213,8 +225,17 @@ class DataTreePanel(QtWidgets.QWidget):
             font.setBold(True)
             sp_item.setFont(0, font)
 
-            # Add curves with sub-layers
+            # ── Aggregated group (if linked) ──────────────────────────
+            if sp.aggregated_uid:
+                agg = sheet.aggregated.get(sp.aggregated_uid)
+                if agg:
+                    agg_group = self._make_aggregated_group(agg, sheet)
+                    sp_item.addChild(agg_group)
+
+            # ── Regular curves (skip shadow curves) ───────────────────
             for uid in sp.curve_uids:
+                if uid in shadow_uids:
+                    continue
                 curve = sheet.curves.get(uid)
                 if not curve:
                     continue
@@ -222,25 +243,91 @@ class DataTreePanel(QtWidgets.QWidget):
                 sp_item.addChild(c_item)
                 self._curve_items[uid] = c_item
 
-            # Add aggregated curve node (if linked)
-            if sp.aggregated_uid:
-                agg = sheet.aggregated.get(sp.aggregated_uid)
-                if agg:
-                    agg_item = QtWidgets.QTreeWidgetItem(
-                        [f"📊 {agg.display_name}"])
-                    agg_item.setData(0, _ITEM_TYPE_ROLE, _TYPE_AGGREGATED)
-                    agg_item.setData(0, _UID_ROLE, agg.uid)
-                    agg_item.setFlags(ItemIsEnabled | ItemIsSelectable)
-                    font = agg_item.font(0)
-                    font.setItalic(True)
-                    agg_item.setFont(0, font)
-                    sp_item.addChild(agg_item)
-
             self._tree.addTopLevelItem(sp_item)
             self._subplot_items[key] = sp_item
             sp_item.setExpanded(True)
 
         self._tree.blockSignals(False)
+
+    def _make_aggregated_group(self, agg, sheet) -> QtWidgets.QTreeWidgetItem:
+        """Build the hierarchical aggregated layer group."""
+        # ── Group root: 📊 Name ──
+        group = QtWidgets.QTreeWidgetItem([f"📊 {agg.display_name}"])
+        group.setData(0, _ITEM_TYPE_ROLE, _TYPE_AGG_GROUP)
+        group.setData(0, _UID_ROLE, agg.uid)
+        group.setFlags(ItemIsEnabled | ItemIsSelectable | ItemIsUserCheckable)
+        # Group is checked if ANY sub-layer is visible
+        all_on = agg.avg_visible or agg.uncertainty_visible or agg.shadow_visible
+        group.setCheckState(0, Checked if all_on else Unchecked)
+        font = group.font(0)
+        font.setBold(True)
+        font.setItalic(True)
+        group.setFont(0, font)
+
+        # ── Average Line child ──
+        avg_item = QtWidgets.QTreeWidgetItem(["Average Line"])
+        avg_item.setData(0, _ITEM_TYPE_ROLE, _TYPE_AGG_AVG)
+        avg_item.setData(0, _UID_ROLE, agg.uid)
+        avg_item.setFlags(ItemIsEnabled | ItemIsSelectable | ItemIsUserCheckable)
+        avg_item.setCheckState(0, Checked if agg.avg_visible else Unchecked)
+        # Color swatch
+        px = QtGui.QPixmap(12, 12)
+        px.fill(QtGui.QColor(agg.avg_color))
+        avg_item.setIcon(0, QtGui.QIcon(px))
+        group.addChild(avg_item)
+
+        # ── Uncertainty child ──
+        unc_item = QtWidgets.QTreeWidgetItem(["Uncertainty"])
+        unc_item.setData(0, _ITEM_TYPE_ROLE, _TYPE_AGG_UNC)
+        unc_item.setData(0, _UID_ROLE, agg.uid)
+        unc_item.setFlags(ItemIsEnabled | ItemIsSelectable | ItemIsUserCheckable)
+        unc_item.setCheckState(0, Checked if agg.uncertainty_visible else Unchecked)
+        unc_color = agg.effective_uncertainty_color
+        px2 = QtGui.QPixmap(12, 12)
+        px2.fill(QtGui.QColor(unc_color))
+        unc_item.setIcon(0, QtGui.QIcon(px2))
+        group.addChild(unc_item)
+
+        # ── Shadow Curves sub-group ──
+        shadow_group = QtWidgets.QTreeWidgetItem(["Shadow Curves"])
+        shadow_group.setData(0, _ITEM_TYPE_ROLE, _TYPE_AGG_SHADOW_GROUP)
+        shadow_group.setData(0, _UID_ROLE, agg.uid)
+        shadow_group.setFlags(
+            ItemIsEnabled | ItemIsSelectable | ItemIsUserCheckable)
+        shadow_group.setCheckState(0, Checked if agg.shadow_visible else Unchecked)
+        shadow_group.setForeground(0, QtGui.QColor("#666666"))
+
+        for sc_uid in agg.shadow_curve_uids:
+            sc = sheet.curves.get(sc_uid)
+            if not sc:
+                continue
+            sc_item = QtWidgets.QTreeWidgetItem([sc.display_name])
+            sc_item.setData(0, _ITEM_TYPE_ROLE, _TYPE_AGG_SHADOW)
+            sc_item.setData(0, _UID_ROLE, sc.uid)
+            sc_item.setFlags(
+                ItemIsEnabled | ItemIsSelectable | ItemIsUserCheckable)
+            sc_item.setCheckState(0, Checked if sc.visible else Unchecked)
+            if sc.color:
+                px3 = QtGui.QPixmap(12, 12)
+                px3.fill(QtGui.QColor(sc.color))
+                sc_item.setIcon(0, QtGui.QIcon(px3))
+            shadow_group.addChild(sc_item)
+            self._curve_items[sc.uid] = sc_item
+
+        group.addChild(shadow_group)
+
+        # ── Binning info ──
+        info_item = QtWidgets.QTreeWidgetItem(
+            [f"Binning: {agg.num_bins} bins (bias {agg.log_bias:.1f})"])
+        info_item.setData(0, _ITEM_TYPE_ROLE, _TYPE_INFO)
+        info_item.setData(0, _UID_ROLE, agg.uid)
+        info_item.setFlags(ItemIsEnabled | ItemIsSelectable)
+        info_item.setForeground(0, QtGui.QColor("#888888"))
+        group.addChild(info_item)
+
+        group.setExpanded(True)
+        shadow_group.setExpanded(False)
+        return group
 
     def select_curve(self, uid: str):
         """Programmatically select a curve in the tree."""
@@ -315,7 +402,13 @@ class DataTreePanel(QtWidgets.QWidget):
             self.subplot_selected.emit(key)
         elif item_type == _TYPE_SPECTRUM and uid:
             self.spectrum_selected.emit(uid)
-        elif item_type == _TYPE_AGGREGATED and uid:
+        elif item_type in (_TYPE_AGG_GROUP, _TYPE_AGG_AVG, _TYPE_AGG_UNC,
+                           _TYPE_AGGREGATED) and uid:
+            self.aggregated_selected.emit(uid)
+        elif item_type == _TYPE_AGG_SHADOW and uid:
+            # Clicking individual shadow curve selects its curve settings
+            self.curve_selected.emit(uid)
+        elif item_type == _TYPE_AGG_SHADOW_GROUP and uid:
             self.aggregated_selected.emit(uid)
         elif item_type in (_TYPE_CURVE, _TYPE_INFO) and uid:
             self.curve_selected.emit(uid)
@@ -336,7 +429,7 @@ class DataTreePanel(QtWidgets.QWidget):
             elif sel_type == _TYPE_SPECTRUM and sel_uid:
                 if sel_uid not in sel_spectrum_uids:
                     sel_spectrum_uids.append(sel_uid)
-            elif sel_type == _TYPE_CURVE and sel_uid:
+            elif sel_type in (_TYPE_CURVE, _TYPE_AGG_SHADOW) and sel_uid:
                 if sel_uid not in sel_curve_uids:
                     sel_curve_uids.append(sel_uid)
             elif sel_type == _TYPE_INFO and sel_uid:
@@ -353,16 +446,59 @@ class DataTreePanel(QtWidgets.QWidget):
 
     def _on_item_changed(self, item, column):
         item_type = item.data(0, _ITEM_TYPE_ROLE)
+        uid = item.data(0, _UID_ROLE)
+
         if item_type == _TYPE_CURVE:
-            uid = item.data(0, _UID_ROLE)
             checked = item.checkState(0) == Checked
             if uid:
                 self.curve_visibility_changed.emit(uid, checked)
+
         elif item_type == _TYPE_SPECTRUM:
-            uid = item.data(0, _UID_ROLE)
             checked = item.checkState(0) == Checked
             if uid:
                 self.spectrum_visibility_changed.emit(uid, checked)
+
+        elif item_type == _TYPE_AGG_GROUP and uid:
+            # Group toggle → propagate to all sub-layers
+            checked = item.checkState(0) == Checked
+            self._tree.blockSignals(True)
+            for i in range(item.childCount()):
+                child = item.child(i)
+                ctype = child.data(0, _ITEM_TYPE_ROLE)
+                if ctype in (_TYPE_AGG_AVG, _TYPE_AGG_UNC, _TYPE_AGG_SHADOW_GROUP):
+                    child.setCheckState(0, Checked if checked else Unchecked)
+                    # Propagate shadow group → individual shadows
+                    if ctype == _TYPE_AGG_SHADOW_GROUP:
+                        for j in range(child.childCount()):
+                            sc = child.child(j)
+                            if sc.data(0, _ITEM_TYPE_ROLE) == _TYPE_AGG_SHADOW:
+                                sc.setCheckState(0, Checked if checked else Unchecked)
+            self._tree.blockSignals(False)
+            # Emit signals
+            self.aggregated_visibility_changed.emit(uid, "all", checked)
+
+        elif item_type == _TYPE_AGG_AVG and uid:
+            checked = item.checkState(0) == Checked
+            self.aggregated_visibility_changed.emit(uid, "avg", checked)
+
+        elif item_type == _TYPE_AGG_UNC and uid:
+            checked = item.checkState(0) == Checked
+            self.aggregated_visibility_changed.emit(uid, "uncertainty", checked)
+
+        elif item_type == _TYPE_AGG_SHADOW_GROUP and uid:
+            # Shadow group toggle → propagate to individual shadows
+            checked = item.checkState(0) == Checked
+            self._tree.blockSignals(True)
+            for i in range(item.childCount()):
+                sc = item.child(i)
+                if sc.data(0, _ITEM_TYPE_ROLE) == _TYPE_AGG_SHADOW:
+                    sc.setCheckState(0, Checked if checked else Unchecked)
+            self._tree.blockSignals(False)
+            self.aggregated_visibility_changed.emit(uid, "shadow", checked)
+
+        elif item_type == _TYPE_AGG_SHADOW and uid:
+            checked = item.checkState(0) == Checked
+            self.curve_visibility_changed.emit(uid, checked)
 
     def _on_add_clicked(self):
         """Determine target subplot and emit add_data_requested(subplot_key)."""
@@ -402,7 +538,7 @@ class DataTreePanel(QtWidgets.QWidget):
             # Collect all selected curve UIDs
             selected_uids = []
             for sel in self._tree.selectedItems():
-                if sel.data(0, _ITEM_TYPE_ROLE) == _TYPE_CURVE:
+                if sel.data(0, _ITEM_TYPE_ROLE) in (_TYPE_CURVE, _TYPE_AGG_SHADOW):
                     uid = sel.data(0, _UID_ROLE)
                     if uid:
                         selected_uids.append(uid)
@@ -417,6 +553,18 @@ class DataTreePanel(QtWidgets.QWidget):
                 act_remove = menu.addAction("Remove curve")
                 act_remove.triggered.connect(
                     lambda: self.remove_curve_requested.emit(uid))
+
+        if item_type == _TYPE_AGG_GROUP:
+            uid = item.data(0, _UID_ROLE)
+            act_remove = menu.addAction("Remove aggregated figure")
+            act_remove.triggered.connect(
+                lambda: self.remove_aggregated_requested.emit(uid))
+
+        if item_type == _TYPE_AGG_SHADOW:
+            uid = item.data(0, _UID_ROLE)
+            act_remove = menu.addAction("Remove shadow curve")
+            act_remove.triggered.connect(
+                lambda: self.remove_curve_requested.emit(uid))
 
         if menu.actions():
             menu.exec(self._tree.viewport().mapToGlobal(pos))
