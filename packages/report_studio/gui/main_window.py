@@ -129,6 +129,9 @@ class ReportStudioWindow(
         self.data_tree.remove_aggregated_requested.connect(
             self._on_remove_aggregated
         )
+        self.data_tree.aggregated_moved.connect(
+            self._on_aggregated_moved
+        )
 
         # Right panel — Context tab (subplot / curve / spectrum settings)
         self.right_panel.subplot_setting_changed.connect(

@@ -206,7 +206,7 @@ class DataHandlersMixin:
         if hasattr(agg, attr):
             setattr(agg, attr, value)
         # If binning params changed, recompute aggregates from shadow curves
-        if attr in ("num_bins", "log_bias"):
+        if attr in ("num_bins", "log_bias", "x_domain"):
             self._recompute_aggregated(sheet, agg)
         self._render_current()
 
@@ -294,5 +294,14 @@ class DataHandlersMixin:
         # Remove from aggregated dict
         del sheet.aggregated[uid]
         # Refresh tree + canvas
+        self.data_tree.populate(sheet)
+        self._render_current()
+
+    def _on_aggregated_moved(self, uid: str, new_subplot_key: str):
+        """Move an aggregated figure (avg + shadows) to another subplot."""
+        sheet = self._current_sheet()
+        if not sheet or uid not in sheet.aggregated:
+            return
+        sheet.move_aggregated(uid, new_subplot_key)
         self.data_tree.populate(sheet)
         self._render_current()

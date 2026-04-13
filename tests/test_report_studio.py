@@ -3782,7 +3782,7 @@ class TestAverageCurvePlugin:
         from packages.report_studio.core.figure_types import registry
         p = registry.get("average_curve")
         assert p is not None
-        assert p.display_name == "Average with Uncertainty"
+        assert p.display_name == "Average with Uncertainty (Frequency)"
 
     def test_plugin_load_data_empty(self):
         from packages.report_studio.core.plugins.average_curve import (
@@ -4229,3 +4229,152 @@ class TestDataTreeAggregated:
             unc_item.setCheckState(0, Unchecked)
         assert sig.args[1] == "uncertainty"
         assert sig.args[2] is False
+
+
+class TestV282WavelengthMoveXdomain:
+    """v2.8.2 — Wavelength plugin, move aggregated, x_domain recompute."""
+
+    def test_wavelength_plugin_registered(self):
+        from packages.report_studio.core.plugins import average_curve as _  # noqa
+        from packages.report_studio.core.figure_types import registry
+        p = registry.get("average_curve_wavelength")
+        assert p is not None
+        assert p.display_name == "Average with Uncertainty (Wavelength)"
+
+    def test_wavelength_plugin_defaults_xdomain(self):
+        from packages.report_studio.core.plugins.average_curve import (
+            AverageCurveWavelengthPlugin,
+        )
+        plugin = AverageCurveWavelengthPlugin()
+        fields = plugin.settings_fields()
+        xd = [f for f in fields if f["key"] == "x_domain"][0]
+        assert xd["default"] == "wavelength"
+
+    @pytest.mark.skipif(
+        not PKL_PATH.exists(), reason="Test PKL not available",
+    )
+    def test_wavelength_plugin_load_data(self):
+        from packages.report_studio.core.plugins.average_curve import (
+            AverageCurveWavelengthPlugin,
+        )
+        plugin = AverageCurveWavelengthPlugin()
+        result = plugin.load_data(pkl_path=str(PKL_PATH))
+        agg = result["aggregated"]
+        assert agg is not None
+        assert agg.x_domain == "wavelength"
+        assert agg.bin_centers.size > 0
+
+    def test_xdomain_triggers_recompute(self):
+        """Changing x_domain should recompute aggregated arrays."""
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, AggregatedCurve,
+        )
+        sheet = SheetState(name="XD")
+        c = OffsetCurve(
+            name="C1",
+            frequency=np.array([5.0, 10.0, 20.0]),
+            velocity=np.array([300.0, 250.0, 200.0]),
+            wavelength=np.array([60.0, 25.0, 10.0]),
+        )
+        sheet.add_curve(c, "main")
+        agg = AggregatedCurve(
+            name="A",
+            bin_centers=np.array([5.0, 10.0, 20.0]),
+            avg_vals=np.array([300.0, 250.0, 200.0]),
+            std_vals=np.array([10.0, 10.0, 10.0]),
+            shadow_curve_uids=[c.uid],
+            x_domain="frequency",
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["main"].aggregated_uid = agg.uid
+
+        old_bins = agg.bin_centers.copy()
+
+        # Simulate x_domain change + recompute
+        agg.x_domain = "wavelength"
+        from dc_cut.core.processing.averages import (
+            compute_binned_avg_std_wavelength,
+        )
+        wl = c.wavelength
+        vel = c.velocity
+        bc, av, sd = compute_binned_avg_std_wavelength(
+            wl, vel, num_bins=agg.num_bins, log_bias=agg.log_bias)
+        agg.bin_centers = bc
+        agg.avg_vals = av
+        agg.std_vals = sd
+
+        # Bins should differ (wavelength domain vs frequency domain)
+        assert agg.x_domain == "wavelength"
+        assert agg.bin_centers.size > 0
+
+    def test_move_aggregated_model(self):
+        """SheetState.move_aggregated moves agg + shadows to new subplot."""
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, AggregatedCurve, SubplotState,
+        )
+        sheet = SheetState(name="Move")
+        sheet.grid_rows = 2
+        sheet.subplots["cell_0_0"] = SubplotState(key="cell_0_0")
+        sheet.subplots["cell_1_0"] = SubplotState(key="cell_1_0")
+
+        c1 = OffsetCurve(name="S1", frequency=np.array([1]), velocity=np.array([1]))
+        c2 = OffsetCurve(name="S2", frequency=np.array([2]), velocity=np.array([2]))
+        sheet.add_curve(c1, "cell_0_0")
+        sheet.add_curve(c2, "cell_0_0")
+
+        agg = AggregatedCurve(
+            name="Avg",
+            bin_centers=np.array([1.5]),
+            avg_vals=np.array([1.5]),
+            std_vals=np.array([0.5]),
+            shadow_curve_uids=[c1.uid, c2.uid],
+        )
+        sheet.add_aggregated(agg, "cell_0_0")
+        sheet.subplots["cell_0_0"].aggregated_uid = agg.uid
+
+        # Move to cell_1_0
+        sheet.move_aggregated(agg.uid, "cell_1_0")
+
+        # Old subplot should be unlinked
+        assert sheet.subplots["cell_0_0"].aggregated_uid == ""
+        # New subplot should be linked
+        assert sheet.subplots["cell_1_0"].aggregated_uid == agg.uid
+        assert agg.subplot_key == "cell_1_0"
+        # Shadow curves should have moved
+        assert c1.subplot_key == "cell_1_0"
+        assert c2.subplot_key == "cell_1_0"
+        assert c1.uid in sheet.subplots["cell_1_0"].curve_uids
+        assert c2.uid in sheet.subplots["cell_1_0"].curve_uids
+
+    def test_drag_agg_group_emits_signal(self, qtbot):
+        """Aggregated group nodes should be draggable."""
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel, _ITEM_TYPE_ROLE, _TYPE_AGG_GROUP,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, AggregatedCurve,
+        )
+        tree = DataTreePanel()
+        qtbot.addWidget(tree)
+
+        sheet = SheetState(name="Drag")
+        c = OffsetCurve(name="C", frequency=np.array([1]), velocity=np.array([1]))
+        sheet.add_curve(c, "main")
+        agg = AggregatedCurve(
+            name="A",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([10]),
+            std_vals=np.array([1]),
+            shadow_curve_uids=[c.uid],
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["main"].aggregated_uid = agg.uid
+        tree.populate(sheet)
+
+        # Verify the agg group node exists and is draggable type
+        root = tree._tree.topLevelItem(0)
+        group = root.child(0)
+        assert group.data(0, _ITEM_TYPE_ROLE) == _TYPE_AGG_GROUP
+        # Verify the agg group node exists and has correct UID
+        from packages.report_studio.gui.panels.data_tree import _UID_ROLE
+        assert group.data(0, _UID_ROLE) == agg.uid

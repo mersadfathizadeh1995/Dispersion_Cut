@@ -68,10 +68,12 @@ class _DragTreeWidget(QtWidgets.QTreeWidget):
             self.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
 
     def startDrag(self, supportedActions):
-        """Only allow dragging curve items (not subplot roots or info items)."""
+        """Allow dragging curve items and aggregated group nodes."""
         item = self.currentItem()
-        if item and item.data(0, _ITEM_TYPE_ROLE) == _TYPE_CURVE:
-            super().startDrag(supportedActions)
+        if item:
+            itype = item.data(0, _ITEM_TYPE_ROLE)
+            if itype in (_TYPE_CURVE, _TYPE_AGG_GROUP):
+                super().startDrag(supportedActions)
 
     def dragEnterEvent(self, event):
         event.acceptProposedAction()
@@ -93,7 +95,7 @@ class _DragTreeWidget(QtWidgets.QTreeWidget):
             event.ignore()
 
     def dropEvent(self, event):
-        """Move curve to the target subplot."""
+        """Move curve or aggregated group to the target subplot."""
         try:
             pos = event.position().toPoint()
         except AttributeError:
@@ -102,7 +104,7 @@ class _DragTreeWidget(QtWidgets.QTreeWidget):
         if not target:
             return
 
-        # Find the subplot target
+        # Find the subplot target (walk up to subplot root)
         if target.data(0, _ITEM_TYPE_ROLE) == _TYPE_SUBPLOT:
             new_key = target.data(0, _KEY_ROLE)
         elif target.parent() and target.parent().data(0, _ITEM_TYPE_ROLE) == _TYPE_SUBPLOT:
@@ -111,12 +113,18 @@ class _DragTreeWidget(QtWidgets.QTreeWidget):
             return
 
         dragged = self.currentItem()
-        if not dragged or dragged.data(0, _ITEM_TYPE_ROLE) != _TYPE_CURVE:
+        if not dragged:
             return
 
+        itype = dragged.data(0, _ITEM_TYPE_ROLE)
         uid = dragged.data(0, _UID_ROLE)
-        if uid and new_key:
+        if not uid or not new_key:
+            return
+
+        if itype == _TYPE_CURVE:
             self.curve_moved.emit(uid, new_key)
+        elif itype == _TYPE_AGG_GROUP:
+            self.aggregated_moved.emit(uid, new_key)
         event.acceptProposedAction()
 
 
@@ -149,6 +157,7 @@ class DataTreePanel(QtWidgets.QWidget):
     subplot_renamed = Signal(str, str)  # (key, new_name)
     aggregated_selected = Signal(str)  # aggregated uid
     aggregated_visibility_changed = Signal(str, str, bool)  # (agg_uid, sub_layer, visible)
+    aggregated_moved = Signal(str, str)  # (agg_uid, new_subplot_key)
     remove_aggregated_requested = Signal(str)  # aggregated uid
 
     def __init__(self, parent=None):

@@ -386,6 +386,27 @@ class SheetState:
         # Remove shadow curves
         self.remove_curves(list(agg.shadow_curve_uids))
 
+    def move_aggregated(self, uid: str, new_subplot_key: str):
+        """Move an aggregated curve and all its shadow curves to another subplot."""
+        if uid not in self.aggregated:
+            return
+        agg = self.aggregated[uid]
+        old_key = agg.subplot_key
+
+        # Unlink from old subplot
+        if old_key in self.subplots:
+            self.subplots[old_key].aggregated_uid = ""
+
+        # Move all shadow curves
+        for sc_uid in agg.shadow_curve_uids:
+            self.move_curve(sc_uid, new_subplot_key)
+
+        # Link to new subplot
+        if new_subplot_key not in self.subplots:
+            self.subplots[new_subplot_key] = SubplotState(key=new_subplot_key)
+        self.subplots[new_subplot_key].aggregated_uid = uid
+        agg.subplot_key = new_subplot_key
+
     def set_grid(self, rows: int, cols: int):
         """Resize the subplot grid, migrating curves between subplots."""
         self.grid_rows = max(1, rows)

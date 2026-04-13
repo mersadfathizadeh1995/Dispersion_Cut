@@ -18,7 +18,7 @@ from .. import subplot_types as ST
 
 
 class AverageCurvePlugin:
-    """Figure type: average dispersion curve with uncertainty envelope."""
+    """Figure type: average dispersion curve with uncertainty envelope (frequency domain)."""
 
     @property
     def type_id(self) -> str:
@@ -26,7 +26,7 @@ class AverageCurvePlugin:
 
     @property
     def display_name(self) -> str:
-        return "Average with Uncertainty"
+        return "Average with Uncertainty (Frequency)"
 
     @property
     def accepted_subplot_types(self) -> Sequence[str]:
@@ -133,3 +133,36 @@ class AverageCurvePlugin:
 # Auto-register when this module is imported
 _plugin = AverageCurvePlugin()
 registry.register(_plugin)
+
+
+class AverageCurveWavelengthPlugin(AverageCurvePlugin):
+    """Wavelength-domain variant — defaults x_domain to 'wavelength'."""
+
+    @property
+    def type_id(self) -> str:
+        return "average_curve_wavelength"
+
+    @property
+    def display_name(self) -> str:
+        return "Average with Uncertainty (Wavelength)"
+
+    def load_data(self, pkl_path: str = "", npz_path: str = "",
+                  selected_offsets: Optional[List[str]] = None,
+                  num_bins: int = 50, log_bias: float = 0.7,
+                  x_domain: str = "wavelength", **kwargs) -> Dict[str, Any]:
+        return super().load_data(
+            pkl_path=pkl_path, npz_path=npz_path,
+            selected_offsets=selected_offsets, num_bins=num_bins,
+            log_bias=log_bias, x_domain=x_domain, **kwargs)
+
+    def settings_fields(self) -> List[Dict[str, Any]]:
+        fields = super().settings_fields()
+        # Change default x_domain to wavelength
+        for f in fields:
+            if f["key"] == "x_domain":
+                f["default"] = "wavelength"
+        return fields
+
+
+_plugin_wl = AverageCurveWavelengthPlugin()
+registry.register(_plugin_wl)
