@@ -51,7 +51,8 @@ _TYPE_AGG_SHADOW = "agg_shadow"
 class _DragTreeWidget(QtWidgets.QTreeWidget):
     """QTreeWidget with drag-drop support for moving curves between subplots."""
 
-    curve_moved = Signal(str, str)  # uid, new_subplot_key
+    curve_moved = Signal(str, str)       # uid, new_subplot_key
+    aggregated_moved = Signal(str, str)  # agg_uid, new_subplot_key
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -67,6 +68,20 @@ class _DragTreeWidget(QtWidgets.QTreeWidget):
         except AttributeError:
             self.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
 
+    # ── helpers ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _find_subplot_ancestor(item):
+        """Walk up the tree to find the nearest subplot root item."""
+        node = item
+        while node is not None:
+            if node.data(0, _ITEM_TYPE_ROLE) == _TYPE_SUBPLOT:
+                return node
+            node = node.parent()
+        return None
+
+    # ── drag / drop ──────────────────────────────────────────────────
+
     def startDrag(self, supportedActions):
         """Allow dragging curve items and aggregated group nodes."""
         item = self.currentItem()
@@ -79,18 +94,14 @@ class _DragTreeWidget(QtWidgets.QTreeWidget):
         event.acceptProposedAction()
 
     def dragMoveEvent(self, event):
-        """Only accept drops on subplot root items."""
+        """Accept drops on or inside any subplot root item."""
         try:
             pos = event.position().toPoint()
         except AttributeError:
             pos = event.pos()
         target = self.itemAt(pos)
-        if target and target.data(0, _ITEM_TYPE_ROLE) == _TYPE_SUBPLOT:
+        if target and self._find_subplot_ancestor(target) is not None:
             event.acceptProposedAction()
-        elif target and target.parent():
-            parent = target.parent()
-            if parent.data(0, _ITEM_TYPE_ROLE) == _TYPE_SUBPLOT:
-                event.acceptProposedAction()
         else:
             event.ignore()
 
@@ -104,13 +115,11 @@ class _DragTreeWidget(QtWidgets.QTreeWidget):
         if not target:
             return
 
-        # Find the subplot target (walk up to subplot root)
-        if target.data(0, _ITEM_TYPE_ROLE) == _TYPE_SUBPLOT:
-            new_key = target.data(0, _KEY_ROLE)
-        elif target.parent() and target.parent().data(0, _ITEM_TYPE_ROLE) == _TYPE_SUBPLOT:
-            new_key = target.parent().data(0, _KEY_ROLE)
-        else:
+        # Walk up to find the subplot root
+        sp_item = self._find_subplot_ancestor(target)
+        if sp_item is None:
             return
+        new_key = sp_item.data(0, _KEY_ROLE)
 
         dragged = self.currentItem()
         if not dragged:
@@ -184,6 +193,7 @@ class DataTreePanel(QtWidgets.QWidget):
         self._tree.itemClicked.connect(self._on_item_clicked)
         self._tree.itemChanged.connect(self._on_item_changed)
         self._tree.curve_moved.connect(self.curve_moved.emit)
+        self._tree.aggregated_moved.connect(self.aggregated_moved.emit)
         # Windows Explorer-style strong blue selection highlight
         self._tree.setStyleSheet(
             "QTreeWidget::item:selected {"

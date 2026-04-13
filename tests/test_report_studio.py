@@ -4378,3 +4378,166 @@ class TestV282WavelengthMoveXdomain:
         # Verify the agg group node exists and has correct UID
         from packages.report_studio.gui.panels.data_tree import _UID_ROLE
         assert group.data(0, _UID_ROLE) == agg.uid
+
+
+# ── v2.8.3 — Aggregated save/load UID fix + drag-drop signal ─────────────
+
+class TestV283:
+    """v2.8.3: aggregated save/load round-trip, drag-drop signal fix."""
+
+    def test_aggregated_save_load_roundtrip(self, tmp_path):
+        """Shadow curve UIDs survive save → load → reload cycle."""
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, AggregatedCurve, SubplotState,
+        )
+        from packages.report_studio.io.project_v4 import (
+            save_sheet, load_sheet_skeleton, reload_and_apply,
+        )
+
+        # --- build a sheet with 2 curves + 1 aggregated ---
+        sheet = SheetState(name="RoundTrip")
+        c1 = OffsetCurve(
+            name="SO1",
+            frequency=np.array([1.0, 2.0, 3.0]),
+            velocity=np.array([100.0, 200.0, 300.0]),
+            wavelength=np.array([10.0, 20.0, 30.0]),
+        )
+        c2 = OffsetCurve(
+            name="SO2",
+            frequency=np.array([1.5, 2.5]),
+            velocity=np.array([150.0, 250.0]),
+            wavelength=np.array([15.0, 25.0]),
+        )
+        sheet.add_curve(c1, "main")
+        sheet.add_curve(c2, "main")
+
+        agg = AggregatedCurve(
+            name="Average",
+            bin_centers=np.array([1.5, 2.5]),
+            avg_vals=np.array([125.0, 225.0]),
+            std_vals=np.array([25.0, 25.0]),
+            shadow_curve_uids=[c1.uid, c2.uid],
+            num_bins=10,
+            log_bias=0.5,
+        )
+        sheet.add_aggregated(agg, "main")
+        sheet.subplots["main"].aggregated_uid = agg.uid
+
+        orig_c1_uid = c1.uid
+        orig_c2_uid = c2.uid
+        orig_agg_uid = agg.uid
+
+        # --- save ---
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "sheets").mkdir()
+        save_sheet(proj, sheet)
+
+        # --- load skeleton ---
+        sheet_json = proj / "sheets" / "RoundTrip.json"
+        assert sheet_json.exists()
+        skel, curve_settings = load_sheet_skeleton(sheet_json)
+
+        # skeleton has aggregated with old shadow UIDs
+        assert orig_agg_uid in skel.aggregated
+        assert skel.aggregated[orig_agg_uid].shadow_curve_uids == [
+            orig_c1_uid, orig_c2_uid
+        ]
+
+        # --- simulate fresh curves from PKL (new auto UIDs) ---
+        fresh_c1 = OffsetCurve(
+            name="SO1",
+            frequency=np.array([1.0, 2.0, 3.0]),
+            velocity=np.array([100.0, 200.0, 300.0]),
+            wavelength=np.array([10.0, 20.0, 30.0]),
+        )
+        fresh_c2 = OffsetCurve(
+            name="SO2",
+            frequency=np.array([1.5, 2.5]),
+            velocity=np.array([150.0, 250.0]),
+            wavelength=np.array([15.0, 25.0]),
+        )
+        # These have NEW auto UIDs, different from the saved ones
+        assert fresh_c1.uid != orig_c1_uid
+        assert fresh_c2.uid != orig_c2_uid
+
+        # --- reload and apply ---
+        reload_and_apply(skel, curve_settings, [fresh_c1, fresh_c2], [])
+
+        # UIDs should have been remapped to original saved UIDs
+        assert fresh_c1.uid == orig_c1_uid
+        assert fresh_c2.uid == orig_c2_uid
+
+        # Curves should be in sheet keyed by original UIDs
+        assert orig_c1_uid in skel.curves
+        assert orig_c2_uid in skel.curves
+
+        # Aggregated shadow_curve_uids should match
+        restored_agg = skel.aggregated[orig_agg_uid]
+        assert restored_agg.shadow_curve_uids == [orig_c1_uid, orig_c2_uid]
+
+        # Aggregated arrays should be recomputed (not empty)
+        assert restored_agg.bin_centers.size > 0
+        assert restored_agg.avg_vals.size > 0
+
+    def test_drag_tree_widget_has_aggregated_moved_signal(self, qtbot):
+        """_DragTreeWidget must have aggregated_moved signal for forwarding."""
+        from packages.report_studio.gui.panels.data_tree import (
+            _DragTreeWidget,
+        )
+        tree = _DragTreeWidget()
+        qtbot.addWidget(tree)
+        assert hasattr(tree, "aggregated_moved")
+        # Verify it's a signal by checking we can connect to it
+        received = []
+        tree.aggregated_moved.connect(lambda uid, key: received.append((uid, key)))
+        tree.aggregated_moved.emit("test_uid", "cell_0_0")
+        assert received == [("test_uid", "cell_0_0")]
+
+    def test_find_subplot_ancestor(self, qtbot):
+        """_find_subplot_ancestor should walk up tree to find subplot root."""
+        from packages.report_studio.gui.panels.data_tree import (
+            _DragTreeWidget, _ITEM_TYPE_ROLE, _TYPE_SUBPLOT,
+            _TYPE_AGG_GROUP, _TYPE_AGG_SHADOW, _KEY_ROLE,
+        )
+        tree = _DragTreeWidget()
+        qtbot.addWidget(tree)
+
+        # Build a small tree: subplot → agg_group → shadow
+        from packages.report_studio.qt_compat import QtWidgets
+        sp_item = QtWidgets.QTreeWidgetItem(tree, ["Subplot 1"])
+        sp_item.setData(0, _ITEM_TYPE_ROLE, _TYPE_SUBPLOT)
+        sp_item.setData(0, _KEY_ROLE, "main")
+
+        agg_item = QtWidgets.QTreeWidgetItem(sp_item, ["Average"])
+        agg_item.setData(0, _ITEM_TYPE_ROLE, _TYPE_AGG_GROUP)
+
+        shadow_item = QtWidgets.QTreeWidgetItem(agg_item, ["Shadow1"])
+        shadow_item.setData(0, _ITEM_TYPE_ROLE, _TYPE_AGG_SHADOW)
+
+        # From shadow (2 levels deep), should find subplot
+        found = tree._find_subplot_ancestor(shadow_item)
+        assert found is sp_item
+        assert found.data(0, _KEY_ROLE) == "main"
+
+        # From agg_group (1 level deep), should find subplot
+        found2 = tree._find_subplot_ancestor(agg_item)
+        assert found2 is sp_item
+
+        # From subplot itself, should return itself
+        found3 = tree._find_subplot_ancestor(sp_item)
+        assert found3 is sp_item
+
+    def test_aggregated_moved_forwarded_to_panel(self, qtbot):
+        """DataTreePanel must forward _DragTreeWidget.aggregated_moved."""
+        from packages.report_studio.gui.panels.data_tree import DataTreePanel
+        panel = DataTreePanel()
+        qtbot.addWidget(panel)
+
+        received = []
+        panel.aggregated_moved.connect(
+            lambda uid, key: received.append((uid, key)))
+
+        # Emit on the inner tree widget
+        panel._tree.aggregated_moved.emit("agg123", "cell_1_0")
+        assert received == [("agg123", "cell_1_0")]

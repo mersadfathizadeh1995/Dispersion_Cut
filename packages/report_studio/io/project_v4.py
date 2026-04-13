@@ -86,7 +86,15 @@ def _curve_settings_to_dict(c: OffsetCurve) -> Dict[str, Any]:
 
 
 def _apply_curve_settings(curve: OffsetCurve, d: Dict) -> None:
-    """Apply saved settings to a reloaded curve (in-place)."""
+    """Apply saved settings to a reloaded curve (in-place).
+
+    Restores the original UID so that subplot curve_uids and
+    aggregated shadow_curve_uids (saved with the old UID) remain valid.
+    """
+    # Restore original UID so all cross-references stay consistent
+    if "uid" in d and d["uid"]:
+        curve.uid = d["uid"]
+
     for key in (
         "visible", "color", "line_width", "marker_size",
         "line_style", "marker_style", "line_visible", "marker_visible",
