@@ -802,15 +802,9 @@ class NearFieldAnalysisMixin:
     ) -> Optional[np.ndarray]:
         """Compute NACD values for a specific offset/layer.
 
-        NACD = aperture / wavelength
-        Where aperture depends on source position relative to receiver array.
-
-        Args:
-            layer_idx: Index of the layer/offset
-            config: PlotConfig instance
-
-        Returns:
-            Array of NACD values, or None if computation not possible
+        Uses x_bar (mean source-to-receiver distance) when source offset
+        is known, consistent with the Yoon & Rix / Rahimi et al. definition.
+        Falls back to array aperture when source offset cannot be parsed.
         """
         from dc_cut.core.processing.nearfield import compute_nacd_array
 
@@ -820,9 +814,7 @@ class NearFieldAnalysisMixin:
         if len(freqs) == 0:
             return None
 
-        # Get array positions
         if self.array_positions is None:
-            # Try to get default from preferences
             try:
                 from dc_cut.services.prefs import load_prefs
                 P = load_prefs()
@@ -830,39 +822,16 @@ class NearFieldAnalysisMixin:
                 dx = float(P.get('default_receiver_dx', 2.0))
                 array_pos = np.arange(0, dx * n_phones, dx)
             except Exception:
-                array_pos = np.arange(0, 48, 2.0)  # Default: 24 geophones at 2m spacing
+                array_pos = np.arange(0, 48, 2.0)
         else:
             array_pos = self.array_positions
 
-        # Try to parse source offset from label to adjust aperture calculation
         label = self.layer_labels[layer_idx]
         source_offset = self._parse_source_offset_from_label(label)
 
-        if source_offset is not None:
-            # Calculate effective aperture based on source position
-            arr_min = np.min(array_pos)
-            arr_max = np.max(array_pos)
-
-            # Source position determines the effective aperture for NACD
-            # NACD typically uses distance from source to array center or farthest receiver
-            if source_offset < arr_min:
-                # Source is before the array - use distance to farthest receiver
-                effective_aperture = arr_max - source_offset
-            elif source_offset > arr_max:
-                # Source is after the array
-                effective_aperture = source_offset - arr_min
-            else:
-                # Source is within the array - use full array aperture
-                effective_aperture = arr_max - arr_min
-
-            # Compute NACD = aperture / wavelength
-            wavelengths = vels / np.maximum(freqs, 1e-12)
-            nacd_values = effective_aperture / np.maximum(wavelengths, 1e-12)
-        else:
-            # Fall back to standard NACD computation using array aperture
-            nacd_values = compute_nacd_array(array_pos, freqs, vels)
-
-        return nacd_values
+        return compute_nacd_array(
+            array_pos, freqs, vels, source_offset=source_offset,
+        )
 
     def _parse_source_offset_from_label(self, label: str) -> Optional[float]:
         """Parse source offset distance from layer label.

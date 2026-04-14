@@ -47,6 +47,40 @@ class BaseInteractiveRemoval:
         self.offset_labels.append(self.average_label_wave)
         self.show_average = True
         self.show_average_wave = False
+
+        # Array geometry (stored for NACD / wavelength-line computations)
+        if array_positions is not None:
+            self.array_positions = np.asarray(array_positions, float)
+        else:
+            self.array_positions = np.arange(0, receiver_dx * 24, receiver_dx)
+        self.source_offsets = list(source_offsets or [])
+        self.receiver_dx = float(receiver_dx)
+
+        # Wavelength (lambda) reference lines
+        self.show_wavelength_lines: bool = False
+        self._wavelength_lines_data: List[dict] = []
+        self._wavelength_lines_artists: List = []
+        self._wavelength_lines_legend: List = []
+        self._wl_visibility: dict = {}
+        self._wl_colors: dict = {}
+        self._wl_show_labels: bool = True
+        self._wl_label_position: str = "upper"
+        self._wl_label_fontsize: int = 9
+        self._wl_label_bbox: bool = True
+        self._wl_label_bbox_alpha: float = 0.7
+
+        # NF overlay markers (geometry-only and V_R mode)
+        self._nf_point_overlay: dict = {}
+
+        # NF reference curve (for V_R mode)
+        self._nf_reference_f: Optional[np.ndarray] = None
+        self._nf_reference_v: Optional[np.ndarray] = None
+        self._nf_reference_source: str = ""
+
+        # Axis scales (log/linear)
+        self.freq_x_scale: str = "log"
+        self.vel_y_scale: str = "linear"
+        self.wave_x_scale: str = "log"
         self.avg_line_freq = None
         self.avg_line_wave = None
         self.dummy_avg_line = None
@@ -98,12 +132,12 @@ class BaseInteractiveRemoval:
         for i in range(n):
             m = markers[i % len(markers)]
             c = palette[i % len(palette)]
-            lf = self.ax_freq.semilogx(
+            lf = self.ax_freq.plot(
                 self.frequency_arrays[i], self.velocity_arrays[i],
                 marker=m, linestyle='', markerfacecolor='none',
                 markeredgecolor=c, markeredgewidth=1.5, markersize=6
             )[0]
-            lw = self.ax_wave.semilogx(
+            lw = self.ax_wave.plot(
                 self.wavelength_arrays[i], self.velocity_arrays[i],
                 marker=m, linestyle='', markerfacecolor='none',
                 markeredgecolor=c, markeredgewidth=1.5, markersize=6,
@@ -135,6 +169,8 @@ class BaseInteractiveRemoval:
         self.ax_freq.set_ylabel("Phase velocity (m/s)")
         self.ax_wave.set_xlabel("Wavelength (m)")
         self.ax_wave.set_ylabel("Phase velocity (m/s)")
+
+        self._apply_axis_scales()
 
         try:
             self.fig.canvas.draw_idle()
@@ -188,6 +224,16 @@ class BaseInteractiveRemoval:
             self.ax_freq.set_navigate(False); self.ax_wave.set_navigate(True)
         try:
             self.fig.canvas.draw_idle()
+        except Exception:
+            pass
+
+    def _apply_axis_scales(self):
+        """Apply current axis scale settings (log/linear) to both axes."""
+        try:
+            self.ax_freq.set_xscale(getattr(self, 'freq_x_scale', 'log'))
+            self.ax_freq.set_yscale(getattr(self, 'vel_y_scale', 'linear'))
+            self.ax_wave.set_xscale(getattr(self, 'wave_x_scale', 'log'))
+            self.ax_wave.set_yscale(getattr(self, 'vel_y_scale', 'linear'))
         except Exception:
             pass
 
@@ -350,7 +396,7 @@ class BaseInteractiveRemoval:
 
     # State API for history
     def get_current_state(self) -> dict:
-        return {
+        state = {
             'velocity_arrays':   [np.asarray(a, float) for a in self.velocity_arrays],
             'frequency_arrays':  [np.asarray(a, float) for a in self.frequency_arrays],
             'wavelength_arrays': [np.asarray(a, float) for a in self.wavelength_arrays],
@@ -360,7 +406,27 @@ class BaseInteractiveRemoval:
             'show_k_guides':     bool(self.show_k_guides),
             'freq_tick_style':   getattr(self, 'freq_tick_style', 'decades'),
             'freq_custom_ticks': list(getattr(self, 'freq_custom_ticks', [])),
+            'show_wavelength_lines': bool(self.show_wavelength_lines),
+            'wavelength_lines_data': [
+                {k: (v.tolist() if hasattr(v, 'tolist') else v)
+                 for k, v in d.items()}
+                for d in self._wavelength_lines_data
+            ],
+            'wl_visibility': dict(self._wl_visibility),
+            'wl_colors': dict(self._wl_colors),
+            'wl_show_labels': self._wl_show_labels,
+            'wl_label_position': self._wl_label_position,
+            'wl_label_fontsize': self._wl_label_fontsize,
+            'wl_label_bbox': self._wl_label_bbox,
+            'wl_label_bbox_alpha': self._wl_label_bbox_alpha,
+            'freq_x_scale': getattr(self, 'freq_x_scale', 'log'),
+            'vel_y_scale': getattr(self, 'vel_y_scale', 'linear'),
+            'wave_x_scale': getattr(self, 'wave_x_scale', 'log'),
+            'nf_reference_f': self._nf_reference_f.tolist() if self._nf_reference_f is not None else None,
+            'nf_reference_v': self._nf_reference_v.tolist() if self._nf_reference_v is not None else None,
+            'nf_reference_source': self._nf_reference_source,
         }
+        return state
 
     def apply_state(self, S: dict) -> None:
         try:
@@ -383,8 +449,40 @@ class BaseInteractiveRemoval:
         self.show_k_guides = bool(S.get('show_k_guides', self.show_k_guides))
         self.freq_tick_style = S.get('freq_tick_style', self.freq_tick_style)
         self.freq_custom_ticks = S.get('freq_custom_ticks', self.freq_custom_ticks)
+        self.show_wavelength_lines = bool(S.get('show_wavelength_lines', self.show_wavelength_lines))
+        raw_wl = S.get('wavelength_lines_data', [])
+        if raw_wl:
+            restored = []
+            for d in raw_wl:
+                rd = dict(d)
+                for key in ('f_curve', 'v_curve'):
+                    if key in rd and isinstance(rd[key], list):
+                        rd[key] = np.asarray(rd[key], float)
+                restored.append(rd)
+            self._wavelength_lines_data = restored
+        self._wl_visibility = dict(S.get('wl_visibility', self._wl_visibility))
+        self._wl_colors = dict(S.get('wl_colors', self._wl_colors))
+        self._wl_show_labels = bool(S.get('wl_show_labels', self._wl_show_labels))
+        self._wl_label_position = S.get('wl_label_position', self._wl_label_position)
+        self._wl_label_fontsize = int(S.get('wl_label_fontsize', self._wl_label_fontsize))
+        self._wl_label_bbox = bool(S.get('wl_label_bbox', self._wl_label_bbox))
+        self._wl_label_bbox_alpha = float(S.get('wl_label_bbox_alpha', self._wl_label_bbox_alpha))
+        self.freq_x_scale = S.get('freq_x_scale', getattr(self, 'freq_x_scale', 'log'))
+        self.vel_y_scale = S.get('vel_y_scale', getattr(self, 'vel_y_scale', 'linear'))
+        self.wave_x_scale = S.get('wave_x_scale', getattr(self, 'wave_x_scale', 'log'))
+        ref_f = S.get('nf_reference_f')
+        ref_v = S.get('nf_reference_v')
+        if ref_f is not None and ref_v is not None:
+            self._nf_reference_f = np.asarray(ref_f, float)
+            self._nf_reference_v = np.asarray(ref_v, float)
+        else:
+            self._nf_reference_f = None
+            self._nf_reference_v = None
+        self._nf_reference_source = S.get('nf_reference_source', '')
         try:
-            self._apply_frequency_ticks(); self._refresh()
+            self._apply_axis_scales()
+            self._apply_frequency_ticks()
+            self._refresh()
         except Exception:
             pass
 

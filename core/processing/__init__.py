@@ -25,6 +25,14 @@ from dc_cut.core.processing.nearfield import compute_nacd, compute_nacd_array
 from dc_cut.core.processing.limits import compute_padded_limits
 from dc_cut.core.processing.guides import compute_k_guides
 from dc_cut.core.processing.ticks import make_freq_ticks
+from dc_cut.core.processing.wavelength_lines import (
+    compute_x_bar,
+    compute_lambda_max,
+    compute_wavelength_line,
+    compute_wavelength_lines_batch,
+    compute_lambda_max_manual,
+    parse_source_offset_from_label,
+)
 
 __all__ = [
     "box_mask_freq",
@@ -44,4 +52,10 @@ __all__ = [
     "compute_padded_limits",
     "compute_k_guides",
     "make_freq_ticks",
+    "compute_x_bar",
+    "compute_lambda_max",
+    "compute_wavelength_line",
+    "compute_wavelength_lines_batch",
+    "compute_lambda_max_manual",
+    "parse_source_offset_from_label",
 ]

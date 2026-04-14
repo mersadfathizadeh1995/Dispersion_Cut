@@ -42,7 +42,7 @@ class FileExplorerDock(QtWidgets.QDockWidget):
             self.setWidget(lst)
 from dc_cut.gui.views.layers_dock import LayersDock
 from dc_cut.gui.views.spectrum_dock import SpectrumDock
-from dc_cut.gui.views.nf_eval_dock import NFEvalDock
+from dc_cut.gui.views.nearfield_dock import NearFieldAnalysisDock
 from dc_cut.gui.views.quick_actions import QuickActionsDock
 from dc_cut.gui.views.layer_tree_dock import LayerTreeDock
 from dc_cut.packages.theoretical_curves import TheoreticalCurveRenderer, TheoreticalCurvesDock
@@ -89,7 +89,16 @@ class MainWindow(QtWidgets.QMainWindow):
             self.tabifyDockWidget(self.spectrum, self.theoretical)
         except Exception:
             pass
-        
+
+        # Unified Near-Field Analysis dock (right side, tabbed after theoretical)
+        try:
+            self.nf_analysis = NearFieldAnalysisDock(self.controller, self)
+            self.addDockWidget(area, self.nf_analysis)
+            last_right = getattr(self, 'theoretical', self.spectrum)
+            self.tabifyDockWidget(last_right, self.nf_analysis)
+        except Exception:
+            pass
+
         # Layer Tree dock (left side, with files)
         self.layer_tree = LayerTreeDock(self.controller, self)
         try:
@@ -116,11 +125,8 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
 
-        self.nf_eval = NFEvalDock(self.controller, self)
-        try:
-            self.addDockWidget(left_area, self.nf_eval)
-        except Exception:
-            pass
+        # nf_eval is now part of the unified NearFieldAnalysisDock on the right side
+        self.nf_eval = getattr(self, 'nf_analysis', None)
 
         self.quick = QuickActionsDock(self.controller, self)
         try:
@@ -1040,7 +1046,7 @@ class MainWindow(QtWidgets.QMainWindow):
             label = ctrl.offset_labels[idx] if idx < len(ctrl.offset_labels) else f"Offset {idx + 1}"
             
             # Create frequency plot line - match original style (hollow markers)
-            line_freq, = ctrl.ax_freq.semilogx(
+            line_freq, = ctrl.ax_freq.plot(
                 f, v,
                 marker=marker, linestyle='', markerfacecolor='none',
                 markeredgecolor=color, markeredgewidth=1.5, markersize=6,
@@ -1049,7 +1055,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ctrl.lines_freq.append(line_freq)
             
             # Create wavelength plot line - match original style (hollow markers)
-            line_wave, = ctrl.ax_wave.semilogx(
+            line_wave, = ctrl.ax_wave.plot(
                 w, v,
                 marker=marker, linestyle='', markerfacecolor='none',
                 markeredgecolor=color, markeredgewidth=1.5, markersize=6,

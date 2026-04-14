@@ -28,6 +28,7 @@ def assemble_legend(
     avg_wave_handle: Optional[object],
     avg_wave_label: str,
     k_guides_legend: Optional[List[object]] = None,
+    wl_legend: Optional[List[object]] = None,
 ) -> Tuple[List[object], List[str]]:
     """Assemble legend handles and labels in a backend-agnostic way.
 
@@ -47,18 +48,25 @@ def assemble_legend(
                 out_labels.append(d.get_label())
         except Exception:
             pass
+    if wl_legend:
+        try:
+            for d in wl_legend:
+                handles.append(d)
+                out_labels.append(d.get_label())
+        except Exception:
+            pass
     return handles, out_labels
 
 
 def create_offset_lines(ax_freq, ax_wave, f_arr, v_arr, w_arr, *, marker: str, color, label: str):
     """Create left/right lines for an offset with consistent styling."""
-    lf = ax_freq.semilogx(
+    lf = ax_freq.plot(
         f_arr, v_arr,
         marker=marker, linestyle='',
         markerfacecolor='none', markeredgecolor=color,
         markeredgewidth=1.5
     )[0]
-    lw = ax_wave.semilogx(
+    lw = ax_wave.plot(
         w_arr, v_arr,
         marker=marker, linestyle='',
         markerfacecolor='none', markeredgecolor=color,

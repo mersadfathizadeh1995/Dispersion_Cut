@@ -44,10 +44,16 @@ def apply_filters(v: np.ndarray, f: np.ndarray, w: np.ndarray,
     return v[keep], f[keep], w[keep]
 
 
-def apply_nacd_filter(v: np.ndarray, f: np.ndarray, w: np.ndarray, array_positions: np.ndarray, *, threshold: float = 1.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def apply_nacd_filter(
+    v: np.ndarray, f: np.ndarray, w: np.ndarray,
+    array_positions: np.ndarray,
+    *,
+    threshold: float = 1.0,
+    source_offset: float | None = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Filter out picks that are near-field according to NACD threshold."""
     from dc_cut.core.processing.nearfield import compute_nacd_array
-    nacd = compute_nacd_array(array_positions, f, v)
+    nacd = compute_nacd_array(array_positions, f, v, source_offset=source_offset)
     keep = np.isfinite(nacd) & (nacd >= float(threshold))
     return v[keep], f[keep], w[keep]
 

@@ -396,6 +396,18 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):
         """Clear k-guides (delegates to viz handler)."""
         self.viz.clear_k_guides()
 
+    def _apply_axis_scales(self) -> None:
+        """Apply axis scales (delegates to base)."""
+        super()._apply_axis_scales()
+
+    def _draw_wavelength_lines(self) -> None:
+        """Draw wavelength (lambda) reference lines (delegates to viz handler)."""
+        self.viz.draw_wavelength_lines()
+
+    def _clear_wavelength_lines(self) -> None:
+        """Clear wavelength (lambda) reference lines (delegates to viz handler)."""
+        self.viz.clear_wavelength_lines()
+
     def _enable_save_added(self, enable: bool) -> None:
         """Enable/disable save button (delegates to add handler)."""
         self.add.enable_save_button(enable)

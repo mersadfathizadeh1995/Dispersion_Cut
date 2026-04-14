@@ -161,13 +161,11 @@ class NFEvalDock(QtWidgets.QDockWidget):
             i = int(it.data(role_user))
             
             if it.checkState() == chk_on:
-                # RED overlay for near-field flagged points (checked)
-                lf = c.ax_freq.semilogx([f_arr[i]], [v_arr[i]], 'o', linestyle='None', mfc='none', mec='red', mew=1.6, ms=6, zorder=10, label='_nf_overlay')[0]
-                lw = c.ax_wave.semilogx([w_arr[i]], [v_arr[i]], 'o', linestyle='None', mfc='none', mec='red', mew=1.6, ms=6, zorder=10, label='_nf_overlay')[0]
+                lf = c.ax_freq.plot([f_arr[i]], [v_arr[i]], 'o', linestyle='None', mfc='none', mec='red', mew=1.6, ms=6, zorder=10, label='_nf_overlay')[0]
+                lw = c.ax_wave.plot([w_arr[i]], [v_arr[i]], 'o', linestyle='None', mfc='none', mec='red', mew=1.6, ms=6, zorder=10, label='_nf_overlay')[0]
             else:
-                # BLUE overlay for normal points (unchecked)
-                lf = c.ax_freq.semilogx([f_arr[i]], [v_arr[i]], 'o', linestyle='None', mfc='none', mec='blue', mew=1.6, ms=6, zorder=10, label='_nf_overlay')[0]
-                lw = c.ax_wave.semilogx([w_arr[i]], [v_arr[i]], 'o', linestyle='None', mfc='none', mec='blue', mew=1.6, ms=6, zorder=10, label='_nf_overlay')[0]
+                lf = c.ax_freq.plot([f_arr[i]], [v_arr[i]], 'o', linestyle='None', mfc='none', mec='blue', mew=1.6, ms=6, zorder=10, label='_nf_overlay')[0]
+                lw = c.ax_wave.plot([w_arr[i]], [v_arr[i]], 'o', linestyle='None', mfc='none', mec='blue', mew=1.6, ms=6, zorder=10, label='_nf_overlay')[0]
             
             c._nf_point_overlay[i] = (lf, lw)
         c.fig.canvas.draw_idle()

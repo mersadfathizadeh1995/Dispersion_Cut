@@ -372,10 +372,10 @@ class AddHandler:
     ) -> None:
         """Legacy fallback for starting add-to-offset session."""
         mkr, col = 'x', 'purple'
-        lf = self._ctrl.ax_freq.semilogx(
+        lf = self._ctrl.ax_freq.plot(
             f_new, v_new, mkr, color=col, markersize=6, label="added"
         )[0]
-        lw = self._ctrl.ax_wave.semilogx(
+        lw = self._ctrl.ax_wave.plot(
             w_new, v_new, mkr, color=col, markersize=6, label="added"
         )[0]
 
@@ -398,7 +398,7 @@ class AddHandler:
         w_new: np.ndarray,
     ) -> None:
         """Legacy fallback for starting add-new-layer session."""
-        lf = self._ctrl.ax_freq.semilogx(
+        lf = self._ctrl.ax_freq.plot(
             f_new,
             v_new,
             marker=marker,
@@ -408,7 +408,7 @@ class AddHandler:
             markeredgewidth=1.5,
             markersize=6,
         )[0]
-        lw = self._ctrl.ax_wave.semilogx(
+        lw = self._ctrl.ax_wave.plot(
             w_new,
             v_new,
             marker=marker,

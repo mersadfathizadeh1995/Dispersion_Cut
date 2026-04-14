@@ -215,7 +215,7 @@ class TheoreticalCurveRenderer:
             )
         
         if curve.median_visible and np.any(valid_freq):
-            line, = ax_freq.semilogx(
+            line, = ax_freq.plot(
                 freq[valid_freq],
                 vel_median[valid_freq],
                 color=style.median_color,
@@ -228,7 +228,7 @@ class TheoreticalCurveRenderer:
             curve._median_line_freq = line
         
         if curve.median_visible and np.any(valid_wave):
-            line, = ax_wave.semilogx(
+            line, = ax_wave.plot(
                 wavelengths[valid_wave],
                 vel_median[valid_wave],
                 color=style.median_color,

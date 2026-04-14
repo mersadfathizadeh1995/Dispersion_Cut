@@ -15,6 +15,7 @@ from dc_cut.visualization.plot_helpers import assemble_legend, set_line_xy
 from dc_cut.core.processing.averages import compute_avg_by_frequency, compute_avg_by_wavelength
 from dc_cut.core.processing.limits import compute_padded_limits as _compute_padded_limits
 from dc_cut.core.processing.guides import compute_k_guides
+from dc_cut.core.processing.wavelength_lines import compute_wavelength_line
 from dc_cut.services.prefs import get_pref
 
 
@@ -26,6 +27,19 @@ def _compute_limits_with_prefs(v, f, w, pad_frac=0.08):
         robust_upper_pct=get_pref('robust_upper_pct', 99.5),
     )
 from dc_cut.services import log
+
+
+def _nudge_along_curve(item: dict, delta_v: float) -> None:
+    """Move a label candidate along its lambda curve by *delta_v* in velocity."""
+    f_curve = item.get('f_curve')
+    v_curve = item.get('v_curve')
+    if f_curve is None or v_curve is None or len(f_curve) == 0:
+        item['v'] = item['v'] + delta_v
+        return
+    target = item['v'] + delta_v
+    idx = int(np.argmin(np.abs(v_curve - target)))
+    item['f'] = float(f_curve[idx])
+    item['v'] = float(v_curve[idx])
 
 if TYPE_CHECKING:
     from dc_cut.gui.controller.base import BaseInteractiveRemoval
@@ -75,6 +89,11 @@ class VisualizationHandler:
                 k_guides_legend=(
                     self._ctrl._k_guides_legend
                     if bool(getattr(self._ctrl, 'show_k_guides', False))
+                    else None
+                ),
+                wl_legend=(
+                    self._ctrl._wavelength_lines_legend
+                    if bool(getattr(self._ctrl, 'show_wavelength_lines', False))
                     else None
                 ),
             )
@@ -308,6 +327,11 @@ class VisualizationHandler:
 
     def apply_axis_limits(self) -> None:
         """Apply auto-scaled axis limits with padding."""
+        try:
+            self._ctrl._apply_axis_scales()
+        except Exception:
+            pass
+
         if not bool(getattr(self._ctrl, 'auto_limits', True)):
             return
 
@@ -339,6 +363,11 @@ class VisualizationHandler:
 
         try:
             self._ctrl._draw_k_guides()
+        except Exception:
+            pass
+
+        try:
+            self._ctrl._draw_wavelength_lines()
         except Exception:
             pass
 
@@ -503,32 +532,32 @@ class VisualizationHandler:
                 self._fallback_k_guides(kmin, kmax, fmin, fmax)
             )
 
-        # Draw on frequency axis
-        ln_ap = self._ctrl.ax_freq.semilogx(
+        # Draw on frequency axis (scale-agnostic: axis scale set via set_xscale)
+        ln_ap = self._ctrl.ax_freq.plot(
             f_curve, v_ap, '-', color=col_ap, lw=1.2, label='_kguide'
         )[0]
-        ln_ap2 = self._ctrl.ax_freq.semilogx(
+        ln_ap2 = self._ctrl.ax_freq.plot(
             f_curve, v_ap2, '--', color=col_ap2, lw=1.2, label='_kguide'
         )[0]
-        ln_al = self._ctrl.ax_freq.semilogx(
+        ln_al = self._ctrl.ax_freq.plot(
             f_curve, v_al, '-', color=col_al, lw=1.2, label='_kguide'
         )[0]
-        ln_al2 = self._ctrl.ax_freq.semilogx(
+        ln_al2 = self._ctrl.ax_freq.plot(
             f_curve, v_al2, '--', color=col_al2, lw=1.2, label='_kguide'
         )[0]
 
         # Draw on wavelength axis
         y0, y1 = self._ctrl.ax_wave.get_ylim()
-        ln_w_ap = self._ctrl.ax_wave.semilogx(
+        ln_w_ap = self._ctrl.ax_wave.plot(
             [w_ap, w_ap], [y0, y1], '-', color=col_ap, lw=1.2, label='_kguide'
         )[0]
-        ln_w_ap2 = self._ctrl.ax_wave.semilogx(
+        ln_w_ap2 = self._ctrl.ax_wave.plot(
             [w_ap2, w_ap2], [y0, y1], '--', color=col_ap2, lw=1.2, label='_kguide'
         )[0]
-        ln_w_al = self._ctrl.ax_wave.semilogx(
+        ln_w_al = self._ctrl.ax_wave.plot(
             [w_al, w_al], [y0, y1], '-', color=col_al, lw=1.2, label='_kguide'
         )[0]
-        ln_w_al2 = self._ctrl.ax_wave.semilogx(
+        ln_w_al2 = self._ctrl.ax_wave.plot(
             [w_al2, w_al2], [y0, y1], '--', color=col_al2, lw=1.2, label='_kguide'
         )[0]
 
@@ -583,31 +612,31 @@ class VisualizationHandler:
             w_al = 2 * np.pi / float(kmax)
             w_al2 = 2 * np.pi / (float(kmax) / 2.0)
 
-            # Frequency axis
-            ln_ap = self._ctrl.ax_freq.semilogx(
+            # Frequency axis (scale-agnostic)
+            ln_ap = self._ctrl.ax_freq.plot(
                 f_curve, v_ap, '-', color=base_color, lw=1.5, label='_kguide'
             )[0]
-            ln_ap2 = self._ctrl.ax_freq.semilogx(
+            ln_ap2 = self._ctrl.ax_freq.plot(
                 f_curve, v_ap2, '--', color=base_color, lw=1.2, label='_kguide'
             )[0]
-            ln_al = self._ctrl.ax_freq.semilogx(
+            ln_al = self._ctrl.ax_freq.plot(
                 f_curve, v_al, '-', color=base_color, lw=1.5, alpha=0.6, label='_kguide'
             )[0]
-            ln_al2 = self._ctrl.ax_freq.semilogx(
+            ln_al2 = self._ctrl.ax_freq.plot(
                 f_curve, v_al2, '--', color=base_color, lw=1.2, alpha=0.6, label='_kguide'
             )[0]
 
-            # Wavelength axis
-            ln_w_ap = self._ctrl.ax_wave.semilogx(
+            # Wavelength axis (scale-agnostic)
+            ln_w_ap = self._ctrl.ax_wave.plot(
                 [w_ap, w_ap], [y0, y1], '-', color=base_color, lw=1.5, label='_kguide'
             )[0]
-            ln_w_ap2 = self._ctrl.ax_wave.semilogx(
+            ln_w_ap2 = self._ctrl.ax_wave.plot(
                 [w_ap2, w_ap2], [y0, y1], '--', color=base_color, lw=1.2, label='_kguide'
             )[0]
-            ln_w_al = self._ctrl.ax_wave.semilogx(
+            ln_w_al = self._ctrl.ax_wave.plot(
                 [w_al, w_al], [y0, y1], '-', color=base_color, lw=1.5, alpha=0.6, label='_kguide'
             )[0]
-            ln_w_al2 = self._ctrl.ax_wave.semilogx(
+            ln_w_al2 = self._ctrl.ax_wave.plot(
                 [w_al2, w_al2], [y0, y1], '--', color=base_color, lw=1.2, alpha=0.6, label='_kguide'
             )[0]
 
@@ -655,3 +684,256 @@ class VisualizationHandler:
         w_al2 = 2 * np.pi / (kmax / 2.0)
 
         return f_curve, v_ap, v_ap2, v_al, v_al2, w_ap, w_ap2, w_al, w_al2
+
+    # ───── Wavelength (λ) reference lines ─────────────────────────
+
+    WL_COLORS = [
+        '#e6194b', '#3cb44b', '#4363d8', '#f58231',
+        '#911eb4', '#42d4f4', '#f032e6', '#bfef45',
+        '#fabed4', '#469990',
+    ]
+
+    OFFSET_PALETTE = [
+        '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+    ]
+
+    def _resolve_wl_default_color(self, entry: dict, line_idx: int) -> str:
+        """Resolve default lambda line colour, preferring offset-matched colour."""
+        so = entry.get('source_offset')
+        if so is not None:
+            from dc_cut.core.processing.wavelength_lines import parse_source_offset_from_label
+            n_data = min(len(self._ctrl.velocity_arrays), len(self._ctrl.frequency_arrays))
+            labels = self._ctrl.offset_labels[:n_data]
+            for i, lbl in enumerate(labels):
+                parsed = parse_source_offset_from_label(lbl)
+                if parsed is not None and abs(parsed - so) < 0.01:
+                    return self.OFFSET_PALETTE[i % len(self.OFFSET_PALETTE)]
+        return self.WL_COLORS[line_idx % len(self.WL_COLORS)]
+
+    def clear_wavelength_lines(self) -> None:
+        """Remove all wavelength-line artists from the plot."""
+        for artist in getattr(self._ctrl, '_wavelength_lines_artists', []):
+            try:
+                artist.remove()
+            except Exception:
+                pass
+        self._ctrl._wavelength_lines_artists = []
+        self._ctrl._wavelength_lines_legend = []
+
+    def draw_wavelength_lines(self) -> None:
+        """Draw constant-wavelength reference lines on both axes.
+
+        Uses a two-pass approach for "auto" label mode:
+        Pass 1: draw curves and collect candidate label positions.
+        Pass 2: resolve collisions, then place labels.
+        """
+        if not bool(getattr(self._ctrl, 'show_wavelength_lines', False)):
+            self.clear_wavelength_lines()
+            return
+
+        self.clear_wavelength_lines()
+
+        wl_data = getattr(self._ctrl, '_wavelength_lines_data', [])
+        if not wl_data:
+            return
+
+        visibility = getattr(self._ctrl, '_wl_visibility', {})
+        wl_colors_map = getattr(self._ctrl, '_wl_colors', {})
+        show_labels = bool(getattr(self._ctrl, '_wl_show_labels', True))
+        label_pos = getattr(self._ctrl, '_wl_label_position', 'upper')
+        label_fontsize = int(getattr(self._ctrl, '_wl_label_fontsize', 9))
+        show_bbox = bool(getattr(self._ctrl, '_wl_label_bbox', True))
+        bbox_alpha = float(getattr(self._ctrl, '_wl_label_bbox_alpha', 0.7))
+
+        fmin, fmax = self._ctrl.ax_freq.get_xlim()
+        y_lo_f, y_hi_f = self._ctrl.ax_freq.get_ylim()
+        y_lo_w, y_hi_w = self._ctrl.ax_wave.get_ylim()
+
+        legend_items = []
+        freq_label_candidates = []
+
+        for i, entry in enumerate(wl_data):
+            label = entry.get('label', f"λ {i}")
+            lam = entry.get('lambda_max', 0.0)
+            if lam <= 0:
+                continue
+            if not visibility.get(label, True):
+                continue
+
+            default_color = self._resolve_wl_default_color(entry, i)
+            color = wl_colors_map.get(label, default_color)
+
+            f_curve, v_curve = compute_wavelength_line(lam, fmin, fmax)
+
+            ln = self._ctrl.ax_freq.plot(
+                f_curve, v_curve, '--', color=color, lw=1.2,
+                alpha=0.85, label='_wl_line', zorder=3,
+            )[0]
+            self._ctrl._wavelength_lines_artists.append(ln)
+
+            if show_labels:
+                fmid, vmid = self._pick_label_pos(
+                    f_curve, v_curve, y_lo_f, y_hi_f, label_pos,
+                )
+                if fmid is not None:
+                    freq_label_candidates.append({
+                        'f': fmid, 'v': vmid, 'lam': lam,
+                        'color': color, 'f_curve': f_curve,
+                        'v_curve': v_curve,
+                    })
+
+            ln_w = self._ctrl.ax_wave.plot(
+                [lam, lam], [y_lo_w, y_hi_w], '--', color=color, lw=1.2,
+                alpha=0.85, label='_wl_line', zorder=3,
+            )[0]
+            self._ctrl._wavelength_lines_artists.append(ln_w)
+
+            if show_labels:
+                try:
+                    bbox_w = dict(
+                        boxstyle='round,pad=0.2', fc='white',
+                        alpha=bbox_alpha, ec=color, lw=0.5,
+                    ) if show_bbox else None
+                    txt_w = self._ctrl.ax_wave.text(
+                        lam, y_lo_w + 0.95 * (y_hi_w - y_lo_w),
+                        f"  λ={lam:.0f} m",
+                        fontsize=label_fontsize, color=color, alpha=0.9,
+                        rotation=90, ha='left', va='top', zorder=4,
+                        bbox=bbox_w,
+                    )
+                    self._ctrl._wavelength_lines_artists.append(txt_w)
+                except Exception:
+                    pass
+
+            legend_items.append(
+                mlines.Line2D(
+                    [], [], color=color, linestyle='--', lw=1.2,
+                    label=f'λ={lam:.0f} m ({label})',
+                )
+            )
+
+        # --- Pass 2: resolve collisions and place frequency-axis labels ---
+        if show_labels and freq_label_candidates:
+            resolved = self._resolve_label_collisions(
+                freq_label_candidates, y_lo_f, y_hi_f,
+                label_fontsize, label_pos,
+            )
+            for item in resolved:
+                try:
+                    if not (y_lo_f < item['v'] < y_hi_f):
+                        continue
+                    bp = dict(
+                        boxstyle='round,pad=0.2', fc='white',
+                        alpha=bbox_alpha, ec=item['color'], lw=0.5,
+                    ) if show_bbox else None
+                    txt = self._ctrl.ax_freq.text(
+                        item['f'], item['v'],
+                        f"  λ={item['lam']:.0f} m",
+                        fontsize=item.get('fontsize', label_fontsize),
+                        color=item['color'], alpha=0.9,
+                        rotation=30, rotation_mode='anchor',
+                        ha='left', va='bottom', zorder=4,
+                        bbox=bp,
+                    )
+                    self._ctrl._wavelength_lines_artists.append(txt)
+                except Exception:
+                    pass
+
+        self._ctrl._wavelength_lines_legend = legend_items
+
+    @staticmethod
+    def _pick_label_pos(
+        f_curve: np.ndarray,
+        v_curve: np.ndarray,
+        y_lo: float,
+        y_hi: float,
+        mode: str,
+    ):
+        """Return (f, v) candidate for placing a lambda label.
+
+        Modes: lower, upper, auto.
+        """
+        if len(f_curve) == 0:
+            return None, None
+
+        y_range = y_hi - y_lo
+        if y_range <= 0:
+            return None, None
+
+        if mode == 'lower':
+            idx = int(len(f_curve) * 0.4)
+            return f_curve[idx], v_curve[idx]
+
+        if mode == 'upper':
+            target = y_lo + 0.85 * y_range
+            idx = int(np.argmin(np.abs(v_curve - target)))
+            return f_curve[idx], v_curve[idx]
+
+        # auto: near the top of the visible range
+        visible = (v_curve >= y_lo) & (v_curve <= y_hi)
+        if not np.any(visible):
+            return None, None
+        vis_indices = np.where(visible)[0]
+        top_idx = vis_indices[np.argmax(v_curve[vis_indices])]
+        nudge = max(1, int(len(f_curve) * 0.05))
+        idx = max(0, top_idx - nudge)
+        return f_curve[idx], v_curve[idx]
+
+    @staticmethod
+    def _resolve_label_collisions(
+        candidates: list,
+        y_lo: float,
+        y_hi: float,
+        base_fontsize: int,
+        mode: str,
+    ) -> list:
+        """Adjust label positions to avoid vertical overlapping.
+
+        Strategy:
+        1. Sort candidates by their velocity (y) position.
+        2. Enforce minimum vertical separation (8% of y-range).
+        3. If two labels overlap, nudge them apart along their curves.
+        4. If space is still tight, reduce font size for crowded labels.
+        """
+        if not candidates:
+            return candidates
+
+        y_range = y_hi - y_lo
+        if y_range <= 0:
+            return candidates
+
+        min_sep = y_range * 0.08
+
+        items = sorted(candidates, key=lambda c: c['v'])
+
+        for item in items:
+            item['fontsize'] = base_fontsize
+
+        for attempt in range(3):
+            collisions = False
+            for j in range(1, len(items)):
+                gap = items[j]['v'] - items[j - 1]['v']
+                if gap < min_sep:
+                    collisions = True
+                    shift = (min_sep - gap) / 2.0
+
+                    # Try to nudge apart by moving along their curves
+                    _nudge_along_curve(items[j - 1], -shift)
+                    _nudge_along_curve(items[j], shift)
+
+            if not collisions:
+                break
+
+            # Shrink font for still-overlapping labels
+            for j in range(1, len(items)):
+                if items[j]['v'] - items[j - 1]['v'] < min_sep:
+                    items[j - 1]['fontsize'] = max(6, base_fontsize - 2)
+                    items[j]['fontsize'] = max(6, base_fontsize - 2)
+
+        # Clamp within bounds
+        margin = y_range * 0.02
+        for item in items:
+            item['v'] = max(y_lo + margin, min(item['v'], y_hi - margin))
+
+        return items
