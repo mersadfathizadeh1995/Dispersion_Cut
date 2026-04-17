@@ -69,6 +69,8 @@ def refresh_offset_checks(
     dock,
     checks_list: list,
     layout: QtWidgets.QVBoxLayout,
+    *,
+    default_checked: bool = True,
 ) -> None:
     """Rebuild offset checkboxes in ``layout``.
 
@@ -77,6 +79,13 @@ def refresh_offset_checks(
     list (``dock._m1_offset_checks``) the per-checkbox toggle is
     wired into ``dock._m1_apply_range_gate`` and the gate is
     re-applied once.
+
+    Parameters
+    ----------
+    default_checked : bool, default ``True``
+        Initial state for every rebuilt checkbox.  The NACD-Only
+        page passes ``False`` so the user has to opt-in per offset
+        (prevents an accidental full-batch run after loading data).
     """
     for chk in checks_list:
         chk.setParent(None)
@@ -91,7 +100,7 @@ def refresh_offset_checks(
 
     for lbl in labels:
         chk = QtWidgets.QCheckBox(lbl)
-        chk.setChecked(True)
+        chk.setChecked(bool(default_checked))
         layout.addWidget(chk)
         checks_list.append(chk)
 

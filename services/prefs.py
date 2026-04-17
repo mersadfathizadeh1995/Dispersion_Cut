@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 
 _DEFAULTS: Dict[str, Any] = {
-    "freq_tick_style": "decades",
+    "freq_tick_style": "ruler",
     "freq_custom_ticks": [1,2,3,4,5,6,7,8,9,10,15,20,30,40,50,60,80,100],
     "show_k_guides_default": True,
     "nacd_thresh": 1.0,

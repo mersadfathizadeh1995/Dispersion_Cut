@@ -330,7 +330,8 @@ class NearFieldEvalDock(QtWidgets.QDockWidget):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         refresh_offset_checks(
-            self, self._nacd_tab.offset_checks, self._nacd_tab.offset_layout
+            self, self._nacd_tab.offset_checks, self._nacd_tab.offset_layout,
+            default_checked=False,
         )
         refresh_offset_checks(
             self, self._reference_tab.offset_checks, self._reference_tab.offset_layout

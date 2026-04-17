@@ -91,7 +91,7 @@ class BaseInteractiveRemoval:
         # Preferences/state
         self.view_mode = 'freq_only'
         self.auto_limits = False
-        self.freq_tick_style = 'decades'
+        self.freq_tick_style = 'ruler'
         self.freq_custom_ticks: List[float] = []
         self.kmin: Optional[float] = None
         self.kmax: Optional[float] = None

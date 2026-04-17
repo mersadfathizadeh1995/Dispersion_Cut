@@ -193,13 +193,21 @@ def _draw_freq_marker(
     artists_out: list,
     nf_key,
 ) -> None:
-    """Draw a single vertical f-line on ``ax_freq``."""
+    """Draw a single vertical f-line on ``ax_freq`` spanning the full
+    current y-range.  The y-span is set 10× wider than the current
+    ``ylim`` so later autoscaling can't shrink the line short of the
+    axis edges (clip_on=True at the axes handles the visible trim).
+    """
     y_lo, y_hi = ax_freq.get_ylim()
+    y_span = max(y_hi - y_lo, 1.0)
+    y_lo_ext = y_lo - 5 * y_span
+    y_hi_ext = y_hi + 5 * y_span
     ln = ax_freq.plot(
-        [f_edge, f_edge], [y_lo, y_hi],
+        [f_edge, f_edge], [y_lo_ext, y_hi_ext],
         linestyle=linestyle, color=color,
         lw=linewidth, alpha=alpha,
         zorder=zorder, label="_nf_limit",
+        scalex=False, scaley=False,
     )[0]
     _tag(ln, nf_key)
     artists_out.append(ln)
@@ -232,26 +240,39 @@ def _draw_single_limit(
     nf_key,
 ) -> None:
     """Draw one constant-wavelength hyperbola on ``ax_freq`` and the
-    matching vertical on ``ax_wave``."""
+    matching vertical on ``ax_wave``.
+
+    The ``f`` domain is padded one decade past the current ``xlim``
+    on each side and ``scalex=scaley=False`` is passed to ``plot`` so
+    the curve always reaches the visible frame even after later
+    autoscaling.  Clip-on at the axes trims the excess for display.
+    """
     fmin, fmax = ax_freq.get_xlim()
     fmin = max(fmin, 1e-6)
     fmax = max(fmax, fmin * 1.1)
-    f_curve = np.logspace(np.log10(fmin), np.log10(fmax), 300)
+    f_lo = fmin / 10.0
+    f_hi = fmax * 10.0
+    f_curve = np.logspace(np.log10(f_lo), np.log10(f_hi), 600)
     v_curve = lam * f_curve
 
     ln_f = ax_freq.plot(
         f_curve, v_curve, linestyle=linestyle,
         color=color, lw=linewidth, alpha=alpha,
         zorder=zorder, label="_nf_limit",
+        scalex=False, scaley=False,
     )[0]
     _tag(ln_f, nf_key)
     artists_out.append(ln_f)
 
     y_lo, y_hi = ax_wave.get_ylim()
+    y_span = max(y_hi - y_lo, 1.0)
+    y_lo_ext = y_lo - 5 * y_span
+    y_hi_ext = y_hi + 5 * y_span
     ln_w = ax_wave.plot(
-        [lam, lam], [y_lo, y_hi], linestyle=linestyle,
+        [lam, lam], [y_lo_ext, y_hi_ext], linestyle=linestyle,
         color=color, lw=linewidth, alpha=alpha,
         zorder=zorder, label="_nf_limit",
+        scalex=False, scaley=False,
     )[0]
     _tag(ln_w, nf_key)
     artists_out.append(ln_w)

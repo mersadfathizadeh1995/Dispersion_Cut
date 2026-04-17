@@ -283,15 +283,30 @@ class MainWindow(QtWidgets.QMainWindow):
             except Exception:
                 pass
 
-        # Raise Layers tab on right, NF Eval on left
-        if hasattr(self, 'layers'):
-            self.layers.raise_()
-            try:
-                self.layers._tabs.setCurrentIndex(0)
-            except Exception:
-                pass
-        if hasattr(self, 'nf_analysis'):
-            self.nf_analysis.raise_()
+        # Raise Layers tab on right, NF Eval on left.  Also schedule a
+        # deferred raise/select so tabify ordering performed elsewhere
+        # after the event loop starts can't steal focus from Layers→Data.
+        def _raise_defaults() -> None:
+            if hasattr(self, 'layers'):
+                try:
+                    self.layers.raise_()
+                except Exception:
+                    pass
+                try:
+                    self.layers._tabs.setCurrentIndex(0)
+                except Exception:
+                    pass
+            if hasattr(self, 'nf_analysis'):
+                try:
+                    self.nf_analysis.raise_()
+                except Exception:
+                    pass
+
+        _raise_defaults()
+        try:
+            QtCore.QTimer.singleShot(0, _raise_defaults)
+        except Exception:
+            pass
 
     # ──────────────────────────────────────────────────────────────
     #  Left-edge collapse strip

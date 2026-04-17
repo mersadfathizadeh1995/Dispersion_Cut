@@ -132,15 +132,8 @@ class NacdTab(QtWidgets.QWidget):
         color_sec.add_layout(color_form)
         layout.addWidget(color_sec)
 
-        # ── Evaluation Ranges (collapsible) ──
-        lim_sec = CollapsibleSection(
-            "Evaluation Ranges (f bands + λ bounds)", initially_expanded=True
-        )
-        self.ranges_widget = NFEvalRangesWidget()
-        lim_sec.add_widget(self.ranges_widget)
-        layout.addWidget(lim_sec)
-
-        # ── Offset Selection ──
+        # ── Offset Selection (BEFORE Evaluation Ranges — the range
+        #    editor is only meaningful once a single offset is picked).
         offset_sec = CollapsibleSection("Offset Selection", initially_expanded=True)
         self.offset_layout = QtWidgets.QVBoxLayout()
         btn_row = QtWidgets.QHBoxLayout()
@@ -158,6 +151,14 @@ class NacdTab(QtWidgets.QWidget):
         self.offset_checks: List[QtWidgets.QCheckBox] = []
         offset_sec.add_layout(self.offset_layout)
         layout.addWidget(offset_sec)
+
+        # ── Evaluation Ranges (collapsible) ──
+        lim_sec = CollapsibleSection(
+            "Evaluation Ranges (f bands + λ bounds)", initially_expanded=True
+        )
+        self.ranges_widget = NFEvalRangesWidget()
+        lim_sec.add_widget(self.ranges_widget)
+        layout.addWidget(lim_sec)
 
         # ── Run Button ──
         run_btn = QtWidgets.QPushButton("▶  Run NACD Evaluation")
@@ -229,8 +230,17 @@ class NacdTab(QtWidgets.QWidget):
     def run(self) -> None:
         """Run NACD-only evaluation on selected offsets.
 
-        Contamination rule per point:
-            contaminated = (NACD >= thr)  OR  (point outside user's EvaluationRange)
+        Contamination rule per point (Rahimi et al. 2022; see
+        ``nearfield/criteria.py`` — "NACD threshold *below* which data
+        is considered near-field contaminated"):
+
+            contaminated = (NACD < thr)  OR  (point outside user's EvaluationRange)
+
+        In words: a point is contaminated when the source-to-array mean
+        distance x\u0305 is *small* compared to the pick's wavelength
+        (\u03bb >= x\u0305), i.e. the array can't resolve that long a
+        wavelength.  Short wavelengths (\u03bb < x\u0305, NACD >= thr)
+        are well resolved and stay clean.
         """
         dock = self.dock
         dock._clear_nf_overlays()
@@ -268,7 +278,7 @@ class NacdTab(QtWidgets.QWidget):
             so = parse_source_offset_from_label(lbl)
             nacd = compute_nacd_array(recv, f, v, source_offset=so)
             in_range = compute_range_mask(f, v, eval_range)
-            mask = (nacd >= thr) | (~in_range)
+            mask = (nacd < thr) | (~in_range)
             x_bar = float(np.mean(np.abs(recv - (so if so is not None else 0.0))))
             lam_max = x_bar / max(thr, 1e-12)
             n_contam = int(np.sum(mask))

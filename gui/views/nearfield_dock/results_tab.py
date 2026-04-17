@@ -66,6 +66,9 @@ class ResultsTab(QtWidgets.QWidget):
         layout.addWidget(batch_sec)
 
         # ── Inspect Offset (collapsible) ──
+        # The points table, auto-select filter and Delete/Cancel
+        # actions all belong to this section, so they collapse and
+        # expand together with the header.
         inspect_sec = CollapsibleSection("Inspect Offset", initially_expanded=True)
         inspect_form = QtWidgets.QFormLayout()
 
@@ -77,9 +80,8 @@ class ResultsTab(QtWidgets.QWidget):
         inspect_form.addRow(self.inspect_summary)
 
         inspect_sec.add_layout(inspect_form)
-        layout.addWidget(inspect_sec)
 
-        # ── Points table ──
+        # Points table (inside the collapsible)
         self.points_table = QtWidgets.QTableWidget()
         self.points_table.setColumnCount(7)
         self.points_table.setHorizontalHeaderLabels(
@@ -103,9 +105,9 @@ class ResultsTab(QtWidgets.QWidget):
             )
         self.points_table.setMinimumHeight(180)
         self.points_table.itemChanged.connect(self.on_flag_toggled)
-        layout.addWidget(self.points_table, stretch=1)
+        inspect_sec.add_widget(self.points_table)
 
-        # ── Filter + Actions ──
+        # Filter + actions (inside the same collapsible)
         filt_row = QtWidgets.QHBoxLayout()
         filt_row.addWidget(QtWidgets.QLabel("Auto-select:"))
         self.del_filter = QtWidgets.QComboBox()
@@ -118,7 +120,7 @@ class ResultsTab(QtWidgets.QWidget):
         select_btn = QtWidgets.QPushButton("Select")
         select_btn.clicked.connect(self.on_auto_select)
         filt_row.addWidget(select_btn)
-        layout.addLayout(filt_row)
+        inspect_sec.add_layout(filt_row)
 
         action_row = QtWidgets.QHBoxLayout()
         self.btn_apply = QtWidgets.QPushButton("Delete")
@@ -128,7 +130,9 @@ class ResultsTab(QtWidgets.QWidget):
         self.btn_cancel = QtWidgets.QPushButton("Cancel / Clear")
         self.btn_cancel.clicked.connect(self.on_cancel)
         action_row.addWidget(self.btn_cancel)
-        layout.addLayout(action_row)
+        inspect_sec.add_layout(action_row)
+
+        layout.addWidget(inspect_sec, stretch=1)
 
         # ── Export ──
         export_sec = CollapsibleSection("Export", initially_expanded=False)

@@ -82,7 +82,7 @@ class ViewConfig:
     show_average: bool = True
     show_average_wave: bool = False
     show_k_guides: bool = False
-    freq_tick_style: str = "decades"
+    freq_tick_style: str = "ruler"
     freq_custom_ticks: List[float] = field(default_factory=list)
     robust_lower_pct: float = 0.5
     robust_upper_pct: float = 99.5
