@@ -10,7 +10,7 @@ QtWidgets = qt_compat.QtWidgets
 QtGui     = qt_compat.QtGui
 QtCore    = qt_compat.QtCore
 
-from dc_cut.gui.properties import PropertiesDock
+from dc_cut.gui.views.properties import PropertiesDock
 # Optional file explorer is not essential; keep simple fallback
 class FileExplorerDock(QtWidgets.QDockWidget):
     def __init__(self, start_path: str | None = None, parent: Optional[QtWidgets.QWidget] = None) -> None:
@@ -40,12 +40,13 @@ class FileExplorerDock(QtWidgets.QDockWidget):
         else:
             lst = QtWidgets.QListWidget(self); [lst.addItem(name) for name in sorted(os.listdir(root))]
             self.setWidget(lst)
-from dc_cut.gui.layers_dock import LayersDock
-from dc_cut.gui.spectrum_dock import SpectrumDock
-from dc_cut.gui.nf_eval_dock import NFEvalDock
-from dc_cut.gui.quick_actions import QuickActionsDock
-from dc_cut.gui.layer_tree_dock import LayerTreeDock
-from dc_cut.theoretical_curves import TheoreticalCurveRenderer, TheoreticalCurvesDock
+from dc_cut.gui.views.layers_dock import LayersDock
+from dc_cut.gui.views.nearfield_dock import NearFieldAnalysisDock
+from dc_cut.gui.views.tools_dock import ToolsDock
+from dc_cut.gui.views.quick_actions import QuickActionsDock
+from dc_cut.gui.views.layer_tree_dock import LayerTreeDock
+from dc_cut.gui.widgets.side_strip import LeftEdgeStrip, LeftEdgeStripToolBar
+from dc_cut.packages.theoretical_curves import TheoreticalCurveRenderer, TheoreticalCurvesDock
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -67,42 +68,109 @@ class MainWindow(QtWidgets.QMainWindow):
         except AttributeError:
             left_area = QtCore.Qt.DockWidgetArea.LeftDockWidgetArea
 
+        # Layers dock (4-tab: Data | Spectrum | λ Lines | K-Limits)
         self.layers = LayersDock(self.controller, self)
         try:
             self.addDockWidget(area, self.layers)
             self.tabifyDockWidget(self.props, self.layers)
-            self.props.raise_()
+            self.layers.raise_()  # Layers tab active by default
+            # Force the Data sub-tab (index 0) as the default view.
+            try:
+                self.layers._tabs.setCurrentIndex(0)
+            except Exception:
+                pass
         except Exception:
             pass
-        self.spectrum = SpectrumDock(self.controller, self)
-        try:
-            self.addDockWidget(area, self.spectrum)
-            self.tabifyDockWidget(self.layers, self.spectrum)
-        except Exception:
-            pass
-        
-        # Theoretical curves dock (right side, tabbed with spectrum)
+
+        # Backward-compat: point self.spectrum at the embedded spectrum panel
+        self.spectrum = getattr(self.layers, '_spectrum_dock', None)
+
+        # Theoretical curves dock (right side, tabbed after layers)
         try:
             self.theoretical_renderer = TheoreticalCurveRenderer(self.controller)
             self.theoretical = TheoreticalCurvesDock(self.theoretical_renderer, self)
             self.addDockWidget(area, self.theoretical)
-            self.tabifyDockWidget(self.spectrum, self.theoretical)
+            self.tabifyDockWidget(self.layers, self.theoretical)
         except Exception:
             pass
-        
-        # Layer Tree dock (left side, with files)
+
+        # NF Evaluation dock (left side, collapsed by default)
+        try:
+            self.nf_analysis = NearFieldAnalysisDock(self.controller, self)
+            self.addDockWidget(left_area, self.nf_analysis)
+        except Exception:
+            pass
+
+        # Tools dock (left side, collapsed by default, tabbed with NF Eval)
+        try:
+            self.tools = ToolsDock(self.controller, self)
+            self.addDockWidget(left_area, self.tools)
+            if hasattr(self, 'nf_analysis'):
+                self.tabifyDockWidget(self.nf_analysis, self.tools)
+        except Exception:
+            pass
+
+        # Layer Tree dock (left side, hidden by default, tabbed with NF Eval)
         self.layer_tree = LayerTreeDock(self.controller, self)
         try:
             self.addDockWidget(left_area, self.layer_tree)
+            last_left = getattr(self, 'tools', getattr(self, 'nf_analysis', None))
+            if last_left:
+                self.tabifyDockWidget(last_left, self.layer_tree)
+            if hasattr(self, 'nf_analysis'):
+                self.nf_analysis.raise_()  # NF Eval tab active when opened
+            self.layer_tree.setVisible(False)  # hidden by default
         except Exception:
             pass
+
+        # ── Left-edge collapse strip ───────────────────────────────
+        # A slim vertical toolbar with a single arrow button that hides
+        # or shows the entire left dock column at once.  Using a
+        # toolbar (not a dock) keeps the strip in its own column to the
+        # LEFT of the dock area, so the NF Evaluation / Tools docks
+        # retain their original full height, draggable width and
+        # bottom-tab layout.
+        try:
+            self._left_strip = LeftEdgeStrip(self)
+            self._left_strip_bar = LeftEdgeStripToolBar(
+                self._left_strip, self
+            )
+            try:
+                _left_tb_area = QtCore.Qt.LeftToolBarArea
+            except AttributeError:
+                _left_tb_area = QtCore.Qt.ToolBarArea.LeftToolBarArea
+            self.addToolBar(_left_tb_area, self._left_strip_bar)
+            self._left_strip.toggled.connect(self._on_left_strip_toggled)
+            # Remember which left docks were visible before collapsing
+            # so we can restore exactly the same set later.
+            self._left_hidden_by_strip: list = []
+            self._left_strip_collapsed: bool = False
+        except Exception:
+            self._left_strip = None
+            self._left_strip_bar = None
+
+        # Collapse the left column on startup (user preference: panel
+        # starts hidden; the thin strip stays visible so the user can
+        # expand it again).  Honours persisted ``left_strip_collapsed``;
+        # defaults to True (collapsed) when the key is missing.
+        try:
+            from dc_cut.services.prefs import load_prefs
+            _collapsed_pref = bool(
+                load_prefs().get("left_strip_collapsed", True)
+            )
+        except Exception:
+            _collapsed_pref = True
+        self._apply_left_strip_collapsed(_collapsed_pref, emit=False)
 
         # Set up rebuild hooks for all docks when layers change
         try:
             def on_layers_changed():
                 self.layers.rebuild()
-                self.spectrum.rebuild()
-                if hasattr(self, 'layer_tree'):
+                # Rebuild embedded spectrum panel
+                spec = getattr(self.layers, '_spectrum_dock', None)
+                if spec and hasattr(spec, 'rebuild'):
+                    spec.rebuild()
+                if hasattr(self, 'layer_tree') and self.layer_tree.isVisible():
                     self.layer_tree._populate_tree()
             setattr(self.controller, 'on_layers_changed', on_layers_changed)
         except Exception:
@@ -111,16 +179,15 @@ class MainWindow(QtWidgets.QMainWindow):
         # Set up rebuild hook for spectrum dock when spectrum is loaded
         try:
             def on_spectrum_loaded():
-                self.spectrum.rebuild()
+                spec = getattr(self.layers, '_spectrum_dock', None)
+                if spec and hasattr(spec, 'rebuild'):
+                    spec.rebuild()
             setattr(self.controller, 'on_spectrum_loaded', on_spectrum_loaded)
         except Exception:
             pass
 
-        self.nf_eval = NFEvalDock(self.controller, self)
-        try:
-            self.addDockWidget(left_area, self.nf_eval)
-        except Exception:
-            pass
+        # backward compat alias
+        self.nf_eval = getattr(self, 'nf_analysis', None)
 
         self.quick = QuickActionsDock(self.controller, self)
         try:
@@ -136,6 +203,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_toolbar()
         self._install_shortcuts()
 
+        # Apply default view mode (freq_only) after everything is built
+        try:
+            self.controller._apply_view_mode(
+                getattr(self.controller, 'view_mode', 'freq_only')
+            )
+        except Exception:
+            pass
+
     def _central_placeholder(self):
         label = QtWidgets.QLabel("Shell window is running. Use the toolbar/menu to control the plot window.")
         try:
@@ -144,6 +219,162 @@ class MainWindow(QtWidgets.QMainWindow):
             align_center = QtCore.Qt.AlignmentFlag.AlignCenter
         label.setAlignment(align_center)
         self.setCentralWidget(label)
+
+    def _sync_panel_checkmarks(self) -> None:
+        """Sync panel action checkmarks with actual dock visibility.
+
+        Called via aboutToShow on the Panels submenu so checkmarks are
+        always correct when the user opens the menu.
+        For tabified docks, a dock is considered 'visible' if it has been
+        added to the window (not explicitly hidden by the user).
+        """
+        for act, dock in getattr(self, '_panel_actions', []):
+            act.blockSignals(True)
+            # A dock is 'present' if it's not explicitly hidden
+            # (tabified docks behind another tab still report isVisible=False
+            #  but they are not "hidden by user")
+            visible = not dock.isHidden()
+            act.setChecked(visible)
+            act.blockSignals(False)
+
+    def _reset_panels_to_default(self) -> None:
+        """Reset all panels to their default positions and visibility."""
+        try:
+            area_r = QtCore.Qt.RightDockWidgetArea
+        except AttributeError:
+            area_r = QtCore.Qt.DockWidgetArea.RightDockWidgetArea
+        try:
+            area_l = QtCore.Qt.LeftDockWidgetArea
+        except AttributeError:
+            area_l = QtCore.Qt.DockWidgetArea.LeftDockWidgetArea
+
+        left_names = {"NF Evaluation", "Tools", "Layer Tree"}
+        right_docks = []
+        left_docks = []
+
+        for name, dock, default_vis in getattr(self, '_panel_defs', []):
+            if dock is None:
+                continue
+            dock.setFloating(False)
+            if name in left_names:
+                self.addDockWidget(area_l, dock)
+                if name == "Layer Tree":
+                    dock.setVisible(False)
+                else:
+                    dock.setVisible(True)
+                left_docks.append((name, dock))
+            else:
+                self.addDockWidget(area_r, dock)
+                dock.setVisible(True)
+                right_docks.append(dock)
+
+        # Tabify right-side docks together
+        for i in range(1, len(right_docks)):
+            try:
+                self.tabifyDockWidget(right_docks[0], right_docks[i])
+            except Exception:
+                pass
+
+        # Tabify left-side docks together
+        left_visible = [d for _, d in left_docks]
+        for i in range(1, len(left_visible)):
+            try:
+                self.tabifyDockWidget(left_visible[0], left_visible[i])
+            except Exception:
+                pass
+
+        # Raise Layers tab on right, NF Eval on left.  Also schedule a
+        # deferred raise/select so tabify ordering performed elsewhere
+        # after the event loop starts can't steal focus from Layers→Data.
+        def _raise_defaults() -> None:
+            if hasattr(self, 'layers'):
+                try:
+                    self.layers.raise_()
+                except Exception:
+                    pass
+                try:
+                    self.layers._tabs.setCurrentIndex(0)
+                except Exception:
+                    pass
+            if hasattr(self, 'nf_analysis'):
+                try:
+                    self.nf_analysis.raise_()
+                except Exception:
+                    pass
+
+        _raise_defaults()
+        try:
+            QtCore.QTimer.singleShot(0, _raise_defaults)
+        except Exception:
+            pass
+
+    # ──────────────────────────────────────────────────────────────
+    #  Left-edge collapse strip
+    # ──────────────────────────────────────────────────────────────
+    def _left_side_docks(self) -> list:
+        """Return the user-facing docks living in the left column
+        (excluding the strip itself)."""
+        out = []
+        for attr in ('nf_analysis', 'tools', 'layer_tree'):
+            dock = getattr(self, attr, None)
+            if dock is not None:
+                out.append(dock)
+        return out
+
+    def _on_left_strip_toggled(self, collapsed: bool) -> None:
+        """React to clicks on the arrow button."""
+        self._apply_left_strip_collapsed(collapsed, emit=False)
+        try:
+            from dc_cut.services.prefs import load_prefs, save_prefs
+            prefs = load_prefs()
+            prefs["left_strip_collapsed"] = bool(collapsed)
+            save_prefs(prefs)
+        except Exception:
+            pass
+
+    def _apply_left_strip_collapsed(self, collapsed: bool, *, emit: bool) -> None:
+        """Hide or restore the entire left dock column."""
+        if not hasattr(self, '_left_strip') or self._left_strip is None:
+            return
+        strip = self._left_strip
+        if collapsed:
+            # Remember which docks were visible so we can bring back
+            # only those.
+            self._left_hidden_by_strip = [
+                d for d in self._left_side_docks() if not d.isHidden()
+            ]
+            for d in self._left_hidden_by_strip:
+                d.setVisible(False)
+        else:
+            hidden = getattr(self, '_left_hidden_by_strip', [])
+            if hidden:
+                for d in hidden:
+                    d.setVisible(True)
+                    try:
+                        d.raise_()
+                    except Exception:
+                        pass
+            else:
+                # First-time expand: show the canonical default set.
+                for attr in ('nf_analysis', 'tools'):
+                    d = getattr(self, attr, None)
+                    if d is not None:
+                        d.setVisible(True)
+                nf = getattr(self, 'nf_analysis', None)
+                if nf is not None:
+                    try:
+                        nf.raise_()
+                    except Exception:
+                        pass
+        self._left_strip_collapsed = bool(collapsed)
+        strip.set_collapsed(collapsed, emit=emit)
+
+    def toggle_left_strip(self) -> None:
+        """Keyboard-shortcut entry point (Ctrl+B)."""
+        if not hasattr(self, '_left_strip') or self._left_strip is None:
+            return
+        new_state = not self._left_strip.is_collapsed()
+        self._on_left_strip_toggled(new_state)
 
     def adopt_controller(self, controller):
         self.controller = controller
@@ -186,7 +417,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         
         try:
-            from dc_cut.circular_array.workflow_dock import CircularArrayWorkflowDock
+            from dc_cut.packages.circular_array.workflow_dock import CircularArrayWorkflowDock
             
             if hasattr(self, 'workflow_dock') and self.workflow_dock is not None:
                 return
@@ -270,7 +501,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if reply == yes_btn:
             try:
-                from dc_cut.io.state import load_session
+                from dc_cut.core.io.state import load_session
                 S = load_session(str(prev_path))
                 
                 if 'velocity_arrays' in S and 'frequency_arrays' in S:
@@ -335,10 +566,10 @@ class MainWindow(QtWidgets.QMainWindow):
         act_prefs.triggered.connect(self._show_preferences)
         m_file.addAction(act_prefs)
 
-        # Export Publication Figure
-        act_pub_fig = QtGui.QAction("Export Publication Figure...", self)
-        act_pub_fig.triggered.connect(self._show_pub_figure_dialog)
-        m_file.addAction(act_pub_fig)
+        # Report Generation
+        act_report = QtGui.QAction("Report Generation...", self)
+        act_report.triggered.connect(self._show_report_dialog)
+        m_file.addAction(act_report)
 
         m_file.addSeparator()
 
@@ -355,9 +586,37 @@ class MainWindow(QtWidgets.QMainWindow):
             view_wave = QtGui.QAction("Wave vs Vel", self); view_wave.triggered.connect(lambda: self.controller._apply_view_mode('wave_only'))
         sub_fig = m_view.addMenu("Figure"); sub_fig.addActions([view_both, view_freq, view_wave])
         sub_pan = m_view.addMenu("Panels")
-        try:
-            sub_pan.addAction(self.files.toggleViewAction()); sub_pan.addAction(self.props.toggleViewAction()); sub_pan.addAction(self.layers.toggleViewAction()); sub_pan.addAction(self.spectrum.toggleViewAction())
-        except Exception: pass
+        # Build panel toggle actions
+        self._panel_defs = [
+            ("Properties", getattr(self, 'props', None), True),
+            ("Layers", getattr(self, 'layers', None), True),
+            ("Theoretical", getattr(self, 'theoretical', None), True),
+            ("NF Evaluation", getattr(self, 'nf_analysis', None), True),
+            ("Tools", getattr(self, 'tools', None), True),
+            ("Layer Tree", getattr(self, 'layer_tree', None), False),
+        ]
+        self._panel_actions = []
+        for name, dock, default_vis in self._panel_defs:
+            if dock is None:
+                continue
+            act = QtGui.QAction(name, self)
+            act.setCheckable(True)
+            act.setChecked(default_vis)  # set from known defaults
+            def _make_toggle(d):
+                def _toggle(checked):
+                    d.setVisible(checked)
+                    if checked:
+                        d.raise_()
+                return _toggle
+            act.toggled.connect(_make_toggle(dock))
+            sub_pan.addAction(act)
+            self._panel_actions.append((act, dock))
+        # Sync checkmarks dynamically right before the menu opens
+        sub_pan.aboutToShow.connect(self._sync_panel_checkmarks)
+        sub_pan.addSeparator()
+        act_reset = QtGui.QAction("Reset to Default", self)
+        act_reset.triggered.connect(self._reset_panels_to_default)
+        sub_pan.addAction(act_reset)
         if reg is not None:
             a_undo = reg.get('edit.undo'); undo = QtGui.QAction(a_undo.text, self); 
             if a_undo.shortcut: undo.setShortcut(a_undo.shortcut)
@@ -485,25 +744,28 @@ class MainWindow(QtWidgets.QMainWindow):
     def _show_preferences(self):
         """Show the preferences dialog."""
         try:
-            from dc_cut.gui.preferences_dialog import PreferencesDialog
+            from dc_cut.gui.dialogs.preferences_dialog import PreferencesDialog
             dlg = PreferencesDialog(self)
             dlg.exec()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open preferences:\n{e}")
 
-    def _show_pub_figure_dialog(self):
-        """Show the publication figure export dialog."""
+    def _show_report_dialog(self):
+        """Open the Report Studio v2 window."""
         try:
-            from dc_cut.gui.pub_figures_dialog import PublicationFigureDialog
-            dlg = PublicationFigureDialog(self.controller, self)
-            dlg.exec()
+            from dc_cut.packages.report_studio.app import launch_studio
+            win = launch_studio(controller=self.controller, parent=self)
+            try:
+                win.setAttribute(QtCore.Qt.WA_DeleteOnClose)
+            except AttributeError:
+                win.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open publication figure dialog:\n{e}")
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open Report Studio:\n{e}")
 
     def _add_point_to_layer(self):
         """Show dialog to add a point to a specific layer."""
         try:
-            from dc_cut.gui.add_point_dialog import AddPointDialog
+            from dc_cut.gui.dialogs.add_point_dialog import AddPointDialog
             import numpy as np
             
             ctrl = self.controller
@@ -585,7 +847,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _open_export_wizard(self):
         """Open the Export Wizard - prompts user to select a file to load."""
         try:
-            from dc_cut.export_wizard import ExportWizardWindow
+            from dc_cut.packages.export_wizard import ExportWizardWindow
             
             # Get suggested file path (last saved file if available)
             suggested_file = None
@@ -606,7 +868,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _open_data_append(self):
         """Open data dialog to append data to the current session."""
         try:
-            from dc_cut.gui.open_data import OpenDataDialog
+            from dc_cut.gui.dialogs.open_data import OpenDataDialog
             dlg = OpenDataDialog(self)
             if dlg.exec() != 1 or not dlg.result:
                 return
@@ -635,7 +897,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _append_active_data(self, spec: dict):
         """Append active data to the current session."""
         import numpy as np
-        from dc_cut.io.universal import parse_any_file, parse_combined_csv
+        from dc_cut.core.io.universal import parse_any_file, parse_combined_csv
         import os
         
         files = spec.get('files', [])
@@ -739,7 +1001,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _append_passive_data(self, spec: dict):
         """Append passive data to the current session (multi-file or legacy)."""
         import numpy as np
-        from dc_cut.io.max import parse_max_file
+        from dc_cut.core.io.max_parser import parse_max_file
         import os
 
         vcut = spec.get('vcut', spec.get('velocity_cutoff', 2000))
@@ -840,7 +1102,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _append_state_data(self, spec: dict):
         """Append state file(s) to the current session."""
         import numpy as np
-        from dc_cut.io.state import load_session
+        from dc_cut.core.io.state import load_session
 
         # Support both multi-file and legacy single-file spec
         if 'files' in spec:
@@ -880,13 +1142,13 @@ class MainWindow(QtWidgets.QMainWindow):
             set_leg = S.get("set_leg", [f"Layer {i}" for i in range(len(v))])
 
             start_idx = len(ctrl.velocity_arrays)
-            prefixed_labels = []
+            clean_labels = []
             for i in range(len(v)):
                 ctrl.velocity_arrays.append(v[i])
                 ctrl.frequency_arrays.append(f[i])
                 ctrl.wavelength_arrays.append(w[i])
                 orig = set_leg[i] if i < len(set_leg) else f"Layer {i}"
-                prefixed_labels.append(f"{label}/{orig}")
+                clean_labels.append(orig)
             end_idx = len(ctrl.velocity_arrays)
 
             # Deduplicate group label
@@ -899,6 +1161,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
             ctrl._file_boundaries.append((dedup_label, start_idx, end_idx))
 
+            # Track groups for each new layer
+            if not hasattr(ctrl, '_layer_groups') or ctrl._layer_groups is None:
+                ctrl._layer_groups = [""] * start_idx
+            ctrl._layer_groups.extend([dedup_label] * len(v))
+
             # Insert labels before average labels
             avg_labels = [
                 getattr(ctrl, 'average_label', 'Average (Freq)'),
@@ -906,7 +1173,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ]
             while ctrl.offset_labels and ctrl.offset_labels[-1] in avg_labels:
                 ctrl.offset_labels.pop()
-            ctrl.offset_labels.extend(prefixed_labels)
+            ctrl.offset_labels.extend(clean_labels)
             ctrl.offset_labels.append(avg_labels[0])
             ctrl.offset_labels.append(avg_labels[1])
 
@@ -914,16 +1181,23 @@ class MainWindow(QtWidgets.QMainWindow):
             self._create_lines_for_new_data(start_idx, end_idx, v, f, w)
             total_layers += len(v)
 
-            # Load spectrum if provided
+            # Collect spectrum path for loading after model rebuild
             if spectrum_path:
-                try:
-                    if hasattr(ctrl, 'load_combined_spectrum_for_layers'):
-                        ctrl.load_combined_spectrum_for_layers(spectrum_path)
-                except Exception:
-                    pass
+                if not hasattr(ctrl, '_spectrum_files') or ctrl._spectrum_files is None:
+                    ctrl._spectrum_files = {}
+                ctrl._spectrum_files[dedup_label] = spectrum_path
 
         if total_layers > 0:
             self._update_layers_model()
+
+            # Load spectra after model rebuild so matching runs against correct layers
+            if hasattr(ctrl, '_spectrum_files') and hasattr(ctrl, 'load_combined_spectrum_for_layers'):
+                for _lbl, sp in list(getattr(ctrl, '_spectrum_files', {}).items()):
+                    try:
+                        ctrl.load_combined_spectrum_for_layers(sp)
+                    except Exception:
+                        pass
+
             if hasattr(ctrl, '_update_average_line'):
                 ctrl._update_average_line()
             if hasattr(ctrl, 'on_layers_changed') and ctrl.on_layers_changed:
@@ -939,7 +1213,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _do_append_data(self, spec: dict) -> bool:
         """Actually append the data to the controller."""
         import numpy as np
-        from dc_cut.io.universal import parse_any_file, parse_combined_csv
+        from dc_cut.core.io.universal import parse_any_file, parse_combined_csv
         import os
         
         path = spec.get('path')
@@ -1025,7 +1299,7 @@ class MainWindow(QtWidgets.QMainWindow):
             label = ctrl.offset_labels[idx] if idx < len(ctrl.offset_labels) else f"Offset {idx + 1}"
             
             # Create frequency plot line - match original style (hollow markers)
-            line_freq, = ctrl.ax_freq.semilogx(
+            line_freq, = ctrl.ax_freq.plot(
                 f, v,
                 marker=marker, linestyle='', markerfacecolor='none',
                 markeredgecolor=color, markeredgewidth=1.5, markersize=6,
@@ -1034,7 +1308,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ctrl.lines_freq.append(line_freq)
             
             # Create wavelength plot line - match original style (hollow markers)
-            line_wave, = ctrl.ax_wave.semilogx(
+            line_wave, = ctrl.ax_wave.plot(
                 w, v,
                 marker=marker, linestyle='', markerfacecolor='none',
                 markeredgecolor=color, markeredgewidth=1.5, markersize=6,
@@ -1048,17 +1322,32 @@ class MainWindow(QtWidgets.QMainWindow):
         ctrl.fig.canvas.draw_idle()
     
     def _update_layers_model(self):
-        """Rebuild layers model from controller arrays."""
+        """Rebuild layers model from controller arrays, preserving spectrum data."""
         ctrl = self.controller
-        from dc_cut.core.model import LayersModel
-        
-        # Always rebuild the model from current arrays
+        from dc_cut.core.models import LayersModel
+
+        # Snapshot spectrum state before rebuild
+        old_spectrum = {}
+        if hasattr(ctrl, '_layers_model') and ctrl._layers_model:
+            for i, layer in enumerate(ctrl._layers_model.layers):
+                if layer.spectrum_data is not None:
+                    old_spectrum[i] = (layer.spectrum_data, layer.spectrum_visible, layer.spectrum_alpha)
+
+        groups = getattr(ctrl, '_layer_groups', None)
         ctrl._layers_model = LayersModel.from_arrays(
             ctrl.velocity_arrays,
             ctrl.frequency_arrays,
             ctrl.wavelength_arrays,
-            ctrl.offset_labels
+            ctrl.offset_labels,
+            groups=groups,
         )
+
+        # Restore spectrum state
+        for i, (sd, sv, sa) in old_spectrum.items():
+            if i < len(ctrl._layers_model.layers):
+                ctrl._layers_model.layers[i].spectrum_data = sd
+                ctrl._layers_model.layers[i].spectrum_visible = sv
+                ctrl._layers_model.layers[i].spectrum_alpha = sa
 
     def _switch_tool(self, tool_name: str) -> None:
         """Switch to the specified selection tool."""
@@ -1154,7 +1443,9 @@ class MainWindow(QtWidgets.QMainWindow):
                         )
                         # Refresh spectrum dock to show new controls
                         try:
-                            self.spectrum.rebuild()
+                            spec = getattr(self.layers, '_spectrum_dock', self.spectrum)
+                            if spec and hasattr(spec, 'rebuild'):
+                                spec.rebuild()
                         except Exception:
                             pass
                     else:
@@ -1224,6 +1515,20 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             print(f"Warning: Could not install view shortcuts: {e}")
 
+        # Ctrl+B — toggle left panel
+        try:
+            sc_left = QtGui.QShortcut(QtGui.QKeySequence('Ctrl+B'), self)
+            sc_left.setContext(
+                QtCore.Qt.WindowShortcut
+                if hasattr(QtCore.Qt, 'WindowShortcut')
+                else QtCore.Qt.ShortcutContext.WindowShortcut
+            )
+            sc_left.activated.connect(self.toggle_left_strip)
+            sc_left.setEnabled(True)
+            self._left_strip_shortcut = sc_left
+        except Exception as e:
+            print(f"Warning: Could not install Ctrl+B shortcut: {e}")
+
         # Undo/Redo shortcuts
         try:
             sc_undo = QtGui.QShortcut(QtGui.QKeySequence('Ctrl+Z'), self)
@@ -1259,6 +1564,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
 def show_shell(controller):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+
+    # Force Fusion as the base style for the shell too — see gui/app.py
+    # for rationale.  Safe to call even if main() already installed it.
+    try:
+        fusion = QtWidgets.QStyleFactory.create("Fusion")
+        if fusion is not None:
+            app.setStyle(fusion)
+    except Exception:
+        pass
 
     # Apply theme from preferences
     try:

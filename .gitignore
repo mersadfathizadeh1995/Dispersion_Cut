@@ -7,7 +7,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
-
+Love01.pkl
+combined_fdbf_spectrum.npz
 # ---- Distribution / packaging ----
 .Python
 build/
@@ -31,7 +32,7 @@ MANIFEST
 # ---- PyInstaller ----
 *.manifest
 *.spec
-
+/Files/
 # ---- Installer logs ----
 pip-log.txt
 pip-delete-this-directory.txt

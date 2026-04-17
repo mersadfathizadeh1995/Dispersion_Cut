@@ -19,7 +19,7 @@ os.chdir(repo_root)
 try:
     # Launch the DC Cut application
     print("Starting DC Cut application...")
-    from dc_cut.app import main
+    from dc_cut.gui.app import main
     main()
     
 except ImportError as e:

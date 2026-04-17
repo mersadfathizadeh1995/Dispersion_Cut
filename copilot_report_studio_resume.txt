@@ -1,0 +1,285 @@
+================================================================================
+  DC Cut — Report Studio Context File (Last updated: 2026-04-13)
+================================================================================
+
+SESSION ID: copilot --resume=e0575210-7625-43cd-9ca2-173152026868
+BRANCH: dc_cut_api
+LATEST COMMIT: 3492e6f — v2.8.3
+TESTS: 260 passing (tests/test_report_studio.py)
+PYTHON: D:\Research\Softwars\Geopsy\Land_streamer\.venv\Scripts\python.exe
+RUN TESTS: python -m pytest tests/test_report_studio.py -x -q --tb=short
+
+================================================================================
+  1. PROJECT OVERVIEW
+================================================================================
+
+DC Cut is a seismic dispersion curve analysis app (PySide6 + matplotlib).
+Report Studio (packages/report_studio/) is the plotting/figure sub-app
+with a composable multi-sheet canvas, hierarchical layer tree, and
+GeoFigure-style project persistence.
+
+The user wants a Photoshop/AutoCAD-like GUI: center canvas with sheets,
+side panels for data tree (left) and settings (right), top menu bar.
+
+================================================================================
+  2. ARCHITECTURE
+================================================================================
+
+packages/report_studio/
+├── app.py                          # Entry point, launches ReportStudioWindow
+├── qt_compat.py                    # Qt6/5 compatibility shim
+├── core/
+│   ├── models.py                   # Data models: SheetState, OffsetCurve,
+│   │                               #   AggregatedCurve, SubplotState,
+│   │                               #   SpectrumData, LegendConfig, TypographyConfig
+│   ├── figure_types.py             # FigureTypeRegistry — plugin system
+│   ├── subplot_types.py            # Subplot type definitions
+│   ├── plugins/
+│   │   ├── source_offset.py        # "Source Offset" figure plugin
+│   │   └── average_curve.py        # "Average with Uncertainty (Frequency/Wavelength)"
+│   └── exporters/                  # Export backends (PDF, PNG, SVG, data)
+├── gui/
+│   ├── main_window.py              # ReportStudioWindow — signal wiring hub
+│   ├── main_window_modules/
+│   │   ├── menu_setup.py           # Menu bar construction
+│   │   ├── file_actions.py         # Open/save project/sheet, recent menu
+│   │   ├── data_handlers.py        # Curve/spectrum/aggregated event handlers
+│   │   └── subplot_handlers.py     # Grid/subplot management handlers
+│   ├── canvas/                     # Matplotlib FigureCanvas wrapper
+│   ├── panels/
+│   │   ├── data_tree.py            # Left dock: hierarchical QTreeWidget with
+│   │   │                           #   drag-drop, checkboxes, context menus
+│   │   ├── right_panel.py          # Right dock: properties router
+│   │   ├── curve_settings.py       # Curve style panel
+│   │   ├── subplot_settings.py     # Subplot axis/label settings
+│   │   ├── aggregated_settings.py  # Aggregated curve settings panel
+│   │   ├── spectrum_settings.py    # Spectrum colormap settings
+│   │   ├── global_panel.py         # Figure-wide settings
+│   │   ├── sheet_panel.py          # Sheet management (tabs)
+│   │   ├── export_panel.py         # Export controls
+│   │   ├── export_dialog.py        # Export dialog
+│   │   ├── project_dialog.py       # New/open project dialog
+│   │   ├── project_start_dialog.py # Startup project chooser
+│   │   ├── add_data_dialog.py      # Data loading dialog
+│   │   ├── assignment_dialog.py    # Subplot assignment dialog
+│   │   └── collapsible.py          # Collapsible section widget
+├── io/
+│   ├── pkl_reader.py               # Read .pkl dispersion curve files
+│   ├── spectrum_reader.py          # Read .npz spectrum files
+│   ├── project.py                  # Legacy project I/O (v1-v3)
+│   └── project_v4.py               # Current project persistence (v4)
+│                                   #   Directory-based: project.json + sheets/*.json
+│                                   #   Saves settings only, reloads data from PKL/NPZ
+└── rendering/
+    ├── renderer.py                 # Main SheetRenderer — orchestrates full render
+    ├── layout_builder.py           # GridSpec layout from SheetState
+    ├── curve_drawer.py             # Draw individual offset curves
+    ├── aggregated_drawer.py        # Draw average + uncertainty + shadows
+    ├── spectrum_drawer.py          # Draw spectrum heatmaps
+    ├── spectrum_cache.py           # LRU downsampling cache for spectra
+    └── style.py                    # SubplotStyle — axis labels, fonts, scales
+
+================================================================================
+  3. KEY DATA MODELS (core/models.py)
+================================================================================
+
+OffsetCurve:
+  - uid (auto-generated via _short_uid() in __post_init__ if empty)
+  - name, frequency, velocity, wavelength (numpy arrays)
+  - Style: color, line_width, marker_size, line_style, marker_style, etc.
+  - spectrum_uid -> links to SpectrumData
+  - subplot_key -> which subplot it belongs to
+  - point_mask -> boolean mask for toggling individual points
+
+AggregatedCurve:
+  - uid, name
+  - bin_centers, avg_vals, std_vals (numpy arrays — recomputed, not saved)
+  - shadow_curve_uids: List[str] — UIDs of component OffsetCurves
+  - Style: avg_color, avg_line_width, uncertainty_mode, uncertainty_alpha, etc.
+  - Visibility: avg_visible, uncertainty_visible, shadow_visible, shadow_alpha
+  - Config: num_bins, log_bias, x_domain ("frequency" | "wavelength")
+  - subplot_key
+
+SubplotState:
+  - key, name, stype
+  - curve_uids: List[str], aggregated_uid: str
+  - Axis: x_domain, x_range, y_range, auto_x, auto_y, x_scale, y_scale
+  - Typography: font_family, title_font_size, axis_label_font_size, tick_label_font_size
+  - Tick format: x_tick_format, y_tick_format
+  - Labels: x_label, y_label
+  - Legend: legend_visible, legend_position, legend_font_size, legend_frame_on
+
+SheetState:
+  - name, curves: Dict[uid->OffsetCurve], spectra: Dict[uid->SpectrumData]
+  - aggregated: Dict[uid->AggregatedCurve]
+  - subplots: Dict[key->SubplotState]
+  - Grid: grid_rows, grid_cols, col_ratios, row_ratios, hspace, wspace
+  - Figure: figure_width, figure_height, canvas_dpi
+  - Paths: pkl_path, npz_path
+  - legend: LegendConfig, typography: TypographyConfig
+  - Methods: add_curve(), remove_curve(), move_curve(), add_aggregated(),
+    remove_aggregated(), move_aggregated()
+
+================================================================================
+  4. KEY PATTERNS & CRITICAL KNOWLEDGE
+================================================================================
+
+UID PERSISTENCE (v2.8.3 fix — CRITICAL):
+  - OffsetCurve.__post_init__ generates new UID if uid is empty
+  - When PKL data is reloaded, fresh OffsetCurve objects get NEW UIDs
+  - project_v4._apply_curve_settings() MUST restore saved UID so that
+    subplot.curve_uids and aggregated.shadow_curve_uids references match
+  - Without this, aggregated figures disappear after save/load
+
+SIGNAL FORWARDING (data_tree.py):
+  - _DragTreeWidget (inner) has its own signals: curve_moved, aggregated_moved
+  - DataTreePanel (outer) has matching signals
+  - Inner signals MUST be forwarded: _tree.signal.connect(panel.signal.emit)
+  - Both must declare the signal — forgetting on inner widget causes silent fail
+
+SUBPLOT x_domain SYNC:
+  - SubplotState.x_domain controls ALL rendering (axis labels, shadow curves)
+  - AggregatedCurve.x_domain controls which binning function is used
+  - MUST stay in sync: set sp.x_domain = agg.x_domain when adding or changing
+
+PLUGIN SYSTEM:
+  - Plugins auto-register on import (module-level code in each plugin file)
+  - Registry: core/figure_types.py -> FigureTypeRegistry
+  - Each plugin has: type_id, display_name, load_data(pkl_path) method
+  - load_data returns {"curves": [...], "aggregated": AggregatedCurve|None}
+
+PLOT REGISTRATION CHECKLIST (when adding new figure types):
+  1. Plugin in core/plugins/ (inherit FigureTypePlugin, implement load_data)
+  2. Register in figure_types registry (auto via module-level code)
+  3. Serialization in project_v4.py (save/load must handle new curve types)
+  4. Tree display in data_tree.py (item types, checkbox propagation, context menu)
+  5. Drag-drop support (both inner widget + panel signals)
+  6. Settings panel (if new settings are needed)
+  7. Tests covering all the above
+
+PROJECT PERSISTENCE (project_v4.py):
+  - Directory-based: project_dir/project.json + sheets/*.json
+  - Saves settings ONLY — no numpy arrays (prevents 500MB+ files)
+  - On load: skeleton from JSON + reload arrays from PKL/NPZ + match by name
+  - Flow: save_sheet() -> load_sheet_skeleton() -> reload_and_apply()
+          -> _restore_aggregated()
+  - Recent projects tracked in QSettings
+
+RENDERING PIPELINE:
+  - SheetRenderer.render_sheet(sheet, fig) -> clears fig -> LayoutBuilder ->
+    for each subplot: CurveDrawer + AggregatedDrawer + SpectrumDrawer
+  - renderer.py uses sp.x_domain to decide x-axis data and labels
+  - aggregated_drawer.py handles avg line, uncertainty band/sticks, shadow curves
+
+DATA TREE HIERARCHY:
+  Subplot 1 (_TYPE_SUBPLOT)
+    +-- Average (_TYPE_AGG_GROUP, draggable)
+    |   +-- Average Line (_TYPE_AGG_AVG, checkable)
+    |   +-- Uncertainty (_TYPE_AGG_UNC, checkable)
+    |   +-- Shadow Curves (_TYPE_AGG_SHADOW_GROUP)
+    |       +-- Offset +5m (_TYPE_AGG_SHADOW, checkable)
+    |       +-- Offset +10m (_TYPE_AGG_SHADOW, checkable)
+    +-- Offset +15m (_TYPE_CURVE, draggable, checkable)
+    +-- Offset +20m (_TYPE_CURVE, draggable, checkable)
+
+  _find_subplot_ancestor() walks up tree to find subplot root for drag targets
+
+NUMPY SAFETY:
+  - Never use `np_array or fallback` — truth value is ambiguous
+  - Use helpers like `_ndarray_or_empty(result)` that check `if result is None`
+
+QT COMPATIBILITY:
+  - DC Cut uses matplotlib.backends.qt_compat (not PySide6 directly)
+  - Studio has its own qt_compat.py for enum wrappers across PyQt5/6/PySide2/6
+
+TESTING:
+  - pytest-qt with matplotlib FigureCanvasQTAgg
+  - Call qapp.processEvents() at end of test to flush draw_idle timers
+  - matplotlib Agg backend for headless testing
+
+================================================================================
+  5. VERSION HISTORY (most recent first)
+================================================================================
+
+v2.8.3 (3492e6f) — Fix aggregated save/load UID persistence + drag-drop signal
+  - _apply_curve_settings restores saved UID onto reloaded curves
+  - Added aggregated_moved signal to _DragTreeWidget + forwarding
+  - _find_subplot_ancestor() for deep ancestor walk in drag events
+  - 4 new tests (260 total)
+
+v2.8.2 (79eb1fd + 53ef9ba) — Wavelength plugin, x_domain recompute, drag-drop
+  - AverageCurveWavelengthPlugin (x_domain="wavelength")
+  - x_domain triggers recompute; sp.x_domain synced from agg.x_domain
+  - move_aggregated() model method + drag-drop for agg groups
+  - Fixed project open/recent (_open_project_dir)
+
+v2.8.1 (ec6ed9f) — Hierarchical layer tree for aggregated figures
+  - Rewrote populate() with group/sub-layer tree nodes
+  - Checkbox propagation, context menu, visibility signals
+
+v2.8 (b9d5485) — Average with Uncertainty figure type
+  - AggregatedCurve model, AverageCurvePlugin, aggregated_drawer.py
+  - Binned average with band/sticks uncertainty modes
+  - aggregated_settings.py panel
+
+v2.7 (c7dab30) — Sheet-centric persistence workflow
+v2.6 (5b9e284) — GeoFigure-style project flow
+v2.5 (1cc612c) — Lightweight project system
+v2.4 (3bbca88) — Project persistence v3, figure type registry
+v2.3 (3135ad9) — Panel polish & curve display
+v2.2 — Spectrum loading, dual-DPI rendering, 3-tab right panel
+v2.1 — Assignment dialog, Qt6 fixes, multi-select
+
+================================================================================
+  6. TEST DATA
+================================================================================
+
+PKL: Files\Test_Files\Rayleigh01.pkl (dispersion curves)
+NPZ: Files\Test_Files\combined_fdbf_spectrum.npz (spectrum data)
+Target: Example_file\output\run_10.target (Dinver target file)
+Test projects: Files\Test_Files\Naple5\, Files\Test_Files\Naple11\
+
+================================================================================
+  7. ENVIRONMENT
+================================================================================
+
+Python: 3.13.0 (D:\Research\Softwars\Geopsy\Land_streamer\.venv\Scripts\python.exe)
+PySide6: 6.9.0
+pytest: 8.4.1, pytest-qt: 4.5.0
+matplotlib: Agg backend (for tests), Qt backend (in GUI)
+Working dir: D:\Research\Narm_Afzar\DC_Cut\dc_cut
+Branch: dc_cut_api (ahead of origin)
+
+Run tests:  python -m pytest tests/test_report_studio.py -x -q --tb=short
+Run GUI:    python -m packages.report_studio.app
+            OR: gui.bat at D:\Research\Narm_Afzar\DC_Cut\
+
+================================================================================
+  8. KNOWN ISSUES / FUTURE WORK
+================================================================================
+
+- Push dc_cut_api branch to origin (currently ahead)
+- Fingerprint mismatch warning on reload (cosmetic — not blocking)
+- More figure types planned (Vs profile, DC Compare)
+- Point mask editing UI (toggle individual points)
+- Experimental curve loading from Dinver .target files
+- Export menu sync with available subplots
+- Multiple curve removal via right-click context menu
+- Subplot renaming from context menu
+
+================================================================================
+  HOW TO RESUME
+================================================================================
+
+1. Read this file first (copilot_report_studio_resume.txt)
+2. Read plan.md in session folder for latest task state
+3. Run tests to verify baseline: 260 passing
+4. Check git log for any commits since this file was written
+5. Key files to understand the app:
+   - core/models.py (data models)
+   - gui/main_window.py (signal wiring)
+   - io/project_v4.py (persistence)
+   - gui/panels/data_tree.py (tree widget)
+   - rendering/renderer.py (render pipeline)
+   - tests/test_report_studio.py (260 tests)
+================================================================================

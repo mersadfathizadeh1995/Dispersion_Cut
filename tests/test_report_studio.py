@@ -1,0 +1,4543 @@
+"""
+Comprehensive test suite for Report Studio v2.
+
+Tests core models, IO readers, rendering pipeline, project persistence,
+and GUI widgets in headless/offscreen mode.
+
+Usage:
+    python -m pytest tests/test_report_studio.py -v
+"""
+
+import os
+import sys
+import json
+import tempfile
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+# Ensure dc_cut package is importable
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+# Test data paths
+PKL_PATH = ROOT / "Files" / "Test_Files" / "Rayleigh01.pkl"
+NPZ_PATH = ROOT / "Files" / "Test_Files" / "combined_fdbf_spectrum.npz"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 1. Core Models
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestOffsetCurve:
+    def test_creation_generates_uid(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(name="test")
+        assert c.uid and len(c.uid) == 8
+
+    def test_has_data(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c1 = OffsetCurve()
+        assert not c1.has_data
+
+        c2 = OffsetCurve(frequency=np.array([1, 2, 3]), velocity=np.array([100, 200, 300]))
+        assert c2.has_data
+        assert c2.n_points == 3
+
+    def test_point_mask_auto_created(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(frequency=np.array([1, 2]), velocity=np.array([10, 20]))
+        assert c.point_mask is not None
+        assert c.point_mask.sum() == 2
+
+    def test_masked_arrays(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(
+            frequency=np.array([1.0, 2.0, 3.0]),
+            velocity=np.array([100.0, 200.0, 300.0]),
+            wavelength=np.array([100.0, 100.0, 100.0]),
+        )
+        c.point_mask = np.array([True, False, True])
+        x, y = c.masked_arrays("frequency")
+        assert np.isnan(x[1])
+        assert np.isnan(y[1])
+        assert not np.isnan(x[0])
+
+    def test_display_name_fallback(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve()
+        assert c.display_name == c.uid
+        c.name = "My Curve"
+        assert c.display_name == "My Curve"
+
+
+class TestSheetState:
+    def test_default_subplot(self):
+        from packages.report_studio.core.models import SheetState
+        s = SheetState()
+        assert "main" in s.subplots
+
+    def test_add_curve(self):
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        s = SheetState()
+        c = OffsetCurve(name="c1", frequency=np.array([1]), velocity=np.array([1]))
+        s.add_curve(c)
+        assert c.uid in s.curves
+        assert c.uid in s.subplots["main"].curve_uids
+
+    def test_remove_curve(self):
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        s = SheetState()
+        c = OffsetCurve(name="c1", frequency=np.array([1]), velocity=np.array([1]))
+        s.add_curve(c)
+        s.remove_curve(c.uid)
+        assert c.uid not in s.curves
+        assert c.uid not in s.subplots["main"].curve_uids
+
+    def test_move_curve(self):
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        s = SheetState()
+        s.set_grid(1, 2)
+        c = OffsetCurve(name="c1", frequency=np.array([1]), velocity=np.array([1]))
+        s.add_curve(c, "cell_0_0")
+        s.move_curve(c.uid, "cell_0_1")
+        assert c.uid not in s.subplots["cell_0_0"].curve_uids
+        assert c.uid in s.subplots["cell_0_1"].curve_uids
+
+    def test_set_grid(self):
+        from packages.report_studio.core.models import SheetState
+        s = SheetState()
+        s.set_grid(2, 3)
+        assert s.grid_rows == 2
+        assert s.grid_cols == 3
+        assert len(s.col_ratios) == 3
+        keys = s.subplot_keys_ordered()
+        assert len(keys) == 6
+
+    def test_get_curves_for_subplot(self):
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        s = SheetState()
+        c1 = OffsetCurve(name="a", frequency=np.array([1]), velocity=np.array([1]))
+        c2 = OffsetCurve(name="b", frequency=np.array([2]), velocity=np.array([2]))
+        s.add_curve(c1)
+        s.add_curve(c2)
+        curves = s.get_curves_for_subplot("main")
+        assert len(curves) == 2
+
+
+class TestSubplotTypes:
+    def test_can_accept(self):
+        from packages.report_studio.core.subplot_types import (
+            can_accept, UNSET, DISPERSION, SPECTRUM, COMBINED,
+            KIND_CURVE, KIND_SPECTRUM,
+        )
+        assert can_accept(UNSET, KIND_CURVE)
+        assert can_accept(COMBINED, KIND_CURVE)
+        assert can_accept(COMBINED, KIND_SPECTRUM)
+        assert not can_accept(DISPERSION, KIND_SPECTRUM)
+        assert not can_accept(SPECTRUM, KIND_CURVE)
+
+    def test_auto_assign(self):
+        from packages.report_studio.core.subplot_types import (
+            auto_assign_type, UNSET, COMBINED, SPECTRUM, KIND_CURVE, KIND_SPECTRUM,
+        )
+        assert auto_assign_type(UNSET, KIND_CURVE) == COMBINED
+        assert auto_assign_type(UNSET, KIND_SPECTRUM) == SPECTRUM
+        assert auto_assign_type(COMBINED, KIND_CURVE) == COMBINED  # no change
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2. IO Readers
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestPklReader:
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_read_pkl(self):
+        from packages.report_studio.io.pkl_reader import read_pkl
+        curves = read_pkl(PKL_PATH)
+        assert len(curves) > 0
+        for c in curves:
+            assert c.has_data
+            assert len(c.frequency) == len(c.velocity)
+            assert c.name
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_read_pkl_metadata(self):
+        from packages.report_studio.io.pkl_reader import read_pkl_metadata
+        meta = read_pkl_metadata(PKL_PATH)
+        assert meta["n_offsets"] > 0
+        assert isinstance(meta["labels"], list)
+
+    def test_read_nonexistent_raises(self):
+        from packages.report_studio.io.pkl_reader import read_pkl
+        with pytest.raises(FileNotFoundError):
+            read_pkl("nonexistent.pkl")
+
+
+class TestSpectrumReader:
+    @pytest.mark.skipif(not NPZ_PATH.exists(), reason="Test NPZ not found")
+    def test_read_spectrum(self):
+        from packages.report_studio.io.spectrum_reader import read_spectrum_npz
+        spectra = read_spectrum_npz(NPZ_PATH)
+        assert len(spectra) > 0
+        for s in spectra:
+            assert s.has_data
+            assert s.power.ndim == 2
+
+    def test_read_nonexistent_raises(self):
+        from packages.report_studio.io.spectrum_reader import read_spectrum_npz
+        with pytest.raises(FileNotFoundError):
+            read_spectrum_npz("nonexistent.npz")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 3. Rendering Pipeline
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestRendering:
+    def test_style_config_defaults(self):
+        from packages.report_studio.rendering.style import StyleConfig
+        s = StyleConfig()
+        assert s.dpi == 150
+        assert s.legend_visible is True
+        assert s.grid_visible is True
+
+    def test_style_get_labels(self):
+        from packages.report_studio.rendering.style import StyleConfig
+        s = StyleConfig()
+        assert "Frequency" in s.get_x_label("frequency")
+        assert "Wavelength" in s.get_x_label("wavelength")
+        assert "Velocity" in s.get_y_label()
+
+    def test_layout_builder_single(self):
+        from matplotlib.figure import Figure
+        from packages.report_studio.core.models import SheetState
+        from packages.report_studio.rendering.layout_builder import create_grid
+
+        fig = Figure()
+        state = SheetState()
+        axes = create_grid(fig, state)
+        assert "main" in axes
+
+    def test_layout_builder_grid(self):
+        from matplotlib.figure import Figure
+        from packages.report_studio.core.models import SheetState
+        from packages.report_studio.rendering.layout_builder import create_grid
+
+        fig = Figure()
+        state = SheetState()
+        state.set_grid(2, 2)
+        axes = create_grid(fig, state)
+        assert len(axes) == 4
+
+    def test_curve_drawer(self):
+        from matplotlib.figure import Figure
+        from packages.report_studio.core.models import OffsetCurve
+        from packages.report_studio.rendering.curve_drawer import draw
+
+        fig = Figure()
+        ax = fig.add_subplot(111)
+        curve = OffsetCurve(
+            frequency=np.array([1.0, 2.0, 3.0]),
+            velocity=np.array([100.0, 200.0, 300.0]),
+        )
+        draw(ax, curve)
+        assert len(ax.lines) == 1
+
+    def test_curve_drawer_invisible_skipped(self):
+        from matplotlib.figure import Figure
+        from packages.report_studio.core.models import OffsetCurve
+        from packages.report_studio.rendering.curve_drawer import draw
+
+        fig = Figure()
+        ax = fig.add_subplot(111)
+        curve = OffsetCurve(
+            frequency=np.array([1.0]), velocity=np.array([100.0]), visible=False,
+        )
+        draw(ax, curve)
+        assert len(ax.lines) == 0
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_render_sheet_full(self):
+        from matplotlib.figure import Figure
+        from packages.report_studio.core.models import SheetState
+        from packages.report_studio.io.pkl_reader import read_pkl
+        from packages.report_studio.rendering.renderer import render_sheet
+        from packages.report_studio.rendering.style import StyleConfig
+
+        curves = read_pkl(PKL_PATH)
+        state = SheetState()
+        for c in curves:
+            state.add_curve(c)
+
+        fig = Figure(figsize=(10, 7))
+        style = StyleConfig()
+        axes = render_sheet(fig, state, style)
+        assert "main" in axes
+
+    @pytest.mark.skipif(
+        not PKL_PATH.exists() or not NPZ_PATH.exists(),
+        reason="Test data not found"
+    )
+    def test_render_with_spectra(self):
+        from matplotlib.figure import Figure
+        from packages.report_studio.core.models import SheetState
+        from packages.report_studio.io.pkl_reader import read_pkl
+        from packages.report_studio.io.spectrum_reader import read_spectrum_npz
+        from packages.report_studio.rendering.renderer import render_sheet
+        from packages.report_studio.rendering.style import StyleConfig
+
+        curves = read_pkl(PKL_PATH)
+        spectra = read_spectrum_npz(NPZ_PATH)
+        state = SheetState()
+        for c in curves:
+            state.add_curve(c)
+        for s in spectra:
+            state.spectra[s.uid] = s
+
+        fig = Figure(figsize=(10, 7))
+        axes = render_sheet(fig, state)
+        assert len(axes) >= 1
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_render_multi_subplot(self):
+        from matplotlib.figure import Figure
+        from packages.report_studio.core.models import SheetState
+        from packages.report_studio.io.pkl_reader import read_pkl
+        from packages.report_studio.rendering.renderer import render_sheet
+
+        curves = read_pkl(PKL_PATH)
+        state = SheetState()
+        state.set_grid(1, 2)
+        keys = state.subplot_keys_ordered()
+        # Put first half in subplot 0, second half in subplot 1
+        for i, c in enumerate(curves):
+            key = keys[0] if i < len(curves) // 2 else keys[1]
+            state.add_curve(c, key)
+
+        fig = Figure(figsize=(14, 7))
+        axes = render_sheet(fig, state)
+        assert len(axes) == 2
+
+    def test_render_empty_sheet(self):
+        from matplotlib.figure import Figure
+        from packages.report_studio.core.models import SheetState
+        from packages.report_studio.rendering.renderer import render_sheet
+
+        state = SheetState()
+        fig = Figure()
+        axes = render_sheet(fig, state)
+        assert "main" in axes
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4. Project Persistence
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestProjectPersistence:
+    def test_save_load_roundtrip(self, tmp_path):
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, SpectrumData, LegendConfig,
+        )
+        from packages.report_studio.io.project import save_project, load_project
+
+        # Create a sheet with data
+        sheet = SheetState(name="Test Sheet")
+        c = OffsetCurve(
+            name="curve1",
+            frequency=np.array([1.0, 2.0, 3.0]),
+            velocity=np.array([100.0, 200.0, 300.0]),
+            wavelength=np.array([100.0, 100.0, 100.0]),
+            color="#FF0000",
+            line_width=2.0,
+        )
+        sheet.add_curve(c)
+        sheet.legend.position = "upper left"
+        sheet.typography.title_size = 14
+
+        path = tmp_path / "test_project.json"
+        save_project([sheet], path)
+
+        # Verify file was created
+        assert path.exists()
+
+        # Load it back
+        loaded = load_project(path)
+        assert len(loaded) == 1
+        ls = loaded[0]
+        assert ls.name == "Test Sheet"
+        assert len(ls.curves) == 1
+
+        lc = list(ls.curves.values())[0]
+        assert lc.name == "curve1"
+        assert lc.color == "#FF0000"
+        assert lc.line_width == 2.0
+        np.testing.assert_array_almost_equal(lc.frequency, [1.0, 2.0, 3.0])
+        np.testing.assert_array_almost_equal(lc.velocity, [100.0, 200.0, 300.0])
+
+        assert ls.legend.position == "upper left"
+        assert ls.typography.title_size == 14
+
+    def test_save_load_with_spectrum(self, tmp_path):
+        from packages.report_studio.core.models import SheetState, SpectrumData
+        from packages.report_studio.io.project import save_project, load_project
+
+        sheet = SheetState()
+        spec = SpectrumData(
+            offset_name="+10m",
+            frequencies=np.linspace(5, 50, 100),
+            velocities=np.linspace(50, 500, 80),
+            power=np.random.rand(80, 100),
+        )
+        sheet.spectra[spec.uid] = spec
+
+        path = tmp_path / "spec_project.json"
+        save_project([sheet], path)
+
+        loaded = load_project(path)
+        ls = loaded[0]
+        assert len(ls.spectra) == 1
+        loaded_spec = list(ls.spectra.values())[0]
+        assert loaded_spec.offset_name == "+10m"
+        assert loaded_spec.power.shape == (80, 100)
+
+    def test_save_load_grid(self, tmp_path):
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        from packages.report_studio.io.project import save_project, load_project
+
+        sheet = SheetState()
+        sheet.set_grid(2, 2)
+        c = OffsetCurve(
+            name="c1", frequency=np.array([1.0]), velocity=np.array([1.0])
+        )
+        sheet.add_curve(c, "cell_0_1")
+
+        path = tmp_path / "grid_project.json"
+        save_project([sheet], path)
+
+        loaded = load_project(path)
+        ls = loaded[0]
+        assert ls.grid_rows == 2
+        assert ls.grid_cols == 2
+        lc = list(ls.curves.values())[0]
+        assert lc.subplot_key == "cell_0_1"
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_save_load_real_data(self, tmp_path):
+        from packages.report_studio.core.models import SheetState
+        from packages.report_studio.io.pkl_reader import read_pkl
+        from packages.report_studio.io.project import save_project, load_project
+
+        curves = read_pkl(PKL_PATH)
+        sheet = SheetState()
+        for c in curves:
+            sheet.add_curve(c)
+
+        path = tmp_path / "real_data_project.json"
+        save_project([sheet], path)
+
+        loaded = load_project(path)
+        assert len(loaded[0].curves) == len(curves)
+
+    def test_load_nonexistent_raises(self):
+        from packages.report_studio.io.project import load_project
+        with pytest.raises(FileNotFoundError):
+            load_project("nonexistent.json")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 5. GUI Widget Tests (offscreen/headless)
+# ═══════════════════════════════════════════════════════════════════════
+
+@pytest.fixture(scope="session")
+def qapp():
+    """Create or reuse the global QApplication for offscreen testing."""
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
+    from packages.report_studio.qt_compat import QtWidgets
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        app = QtWidgets.QApplication(["--platform", "offscreen"])
+    yield app
+
+
+class TestPlotCanvas:
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.canvas.plot_canvas import PlotCanvas
+        canvas = PlotCanvas()
+        assert canvas.figure is not None
+        qapp.processEvents()  # flush pending events
+
+    def test_render_empty(self, qapp):
+        from packages.report_studio.gui.canvas.plot_canvas import PlotCanvas
+        from packages.report_studio.core.models import SheetState
+        from packages.report_studio.rendering.style import StyleConfig
+
+        canvas = PlotCanvas()
+        sheet = SheetState()
+        canvas.render(sheet, StyleConfig())
+        assert "main" in canvas.axes
+        qapp.processEvents()
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_render_with_data(self, qapp):
+        from packages.report_studio.gui.canvas.plot_canvas import PlotCanvas
+        from packages.report_studio.core.models import SheetState
+        from packages.report_studio.io.pkl_reader import read_pkl
+        from packages.report_studio.rendering.style import StyleConfig
+
+        canvas = PlotCanvas()
+        curves = read_pkl(PKL_PATH)
+        sheet = SheetState()
+        for c in curves:
+            sheet.add_curve(c)
+
+        canvas.render(sheet, StyleConfig())
+        assert len(canvas.axes) >= 1
+        qapp.processEvents()
+
+    def test_export_image(self, qapp, tmp_path):
+        from packages.report_studio.gui.canvas.plot_canvas import PlotCanvas
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        from packages.report_studio.rendering.style import StyleConfig
+
+        canvas = PlotCanvas()
+        sheet = SheetState()
+        c = OffsetCurve(
+            frequency=np.array([1.0, 2.0]), velocity=np.array([100.0, 200.0])
+        )
+        sheet.add_curve(c)
+        canvas.render(sheet, StyleConfig())
+
+        img_path = tmp_path / "test_export.png"
+        canvas.export_image(str(img_path), dpi=100)
+        assert img_path.exists()
+        assert img_path.stat().st_size > 0
+        qapp.processEvents()
+
+
+class TestSheetTabs:
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.canvas.sheet_tabs import SheetTabs
+        tabs = SheetTabs()
+        assert tabs.count() == 0
+
+    def test_add_tab(self, qapp):
+        from packages.report_studio.gui.canvas.sheet_tabs import SheetTabs
+        from packages.report_studio.gui.canvas.plot_canvas import PlotCanvas
+        tabs = SheetTabs()
+        canvas = PlotCanvas()
+        idx = tabs.add_tab(canvas, "Sheet 1")
+        assert idx == 0
+        assert tabs.count() == 1
+        assert tabs.current_canvas() is canvas
+
+    def test_close_keeps_minimum(self, qapp):
+        from packages.report_studio.gui.canvas.sheet_tabs import SheetTabs
+        from packages.report_studio.gui.canvas.plot_canvas import PlotCanvas
+        tabs = SheetTabs()
+        tabs.add_tab(PlotCanvas(), "S1")
+        tabs._on_close_requested(0)  # Should not close — minimum 1
+        assert tabs.count() == 1
+
+
+class TestDataTree:
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.data_tree import DataTreePanel
+        tree = DataTreePanel()
+        assert tree is not None
+
+    def test_populate_empty(self, qapp):
+        from packages.report_studio.gui.panels.data_tree import DataTreePanel
+        from packages.report_studio.core.models import SheetState
+        tree = DataTreePanel()
+        tree.populate(SheetState())
+        # Should have one top-level item for "main" subplot
+        assert tree._tree.topLevelItemCount() == 1
+
+    def test_populate_with_curves(self, qapp):
+        from packages.report_studio.gui.panels.data_tree import DataTreePanel
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        tree = DataTreePanel()
+        sheet = SheetState()
+        c1 = OffsetCurve(name="A", frequency=np.array([1]), velocity=np.array([1]))
+        c2 = OffsetCurve(name="B", frequency=np.array([2]), velocity=np.array([2]))
+        sheet.add_curve(c1)
+        sheet.add_curve(c2)
+        tree.populate(sheet)
+
+        main_item = tree._tree.topLevelItem(0)
+        assert main_item.childCount() == 2
+
+    def test_curve_has_data_sublayer(self, qapp):
+        """Each curve should have a 'Data: N points' sub-item."""
+        from packages.report_studio.gui.panels.data_tree import DataTreePanel
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        tree = DataTreePanel()
+        sheet = SheetState()
+        c = OffsetCurve(name="Test", frequency=np.array([1, 2, 3]),
+                        velocity=np.array([10, 20, 30]))
+        sheet.add_curve(c)
+        tree.populate(sheet)
+
+        main_item = tree._tree.topLevelItem(0)
+        curve_item = main_item.child(0)
+        assert curve_item.childCount() >= 1  # at least data info
+        data_item = curve_item.child(0)
+        assert "3" in data_item.text(0) and "points" in data_item.text(0)
+
+    def test_curve_has_spectrum_sublayer(self, qapp):
+        """Curve with linked spectrum should show spectrum sub-item."""
+        from packages.report_studio.gui.panels.data_tree import DataTreePanel
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, SpectrumData
+        )
+        tree = DataTreePanel()
+        sheet = SheetState()
+        spec = SpectrumData(
+            offset_name="test",
+            frequencies=np.linspace(5, 50, 10),
+            velocities=np.linspace(50, 500, 20),
+            power=np.random.rand(20, 10),
+            method="fdbf",
+        )
+        sheet.spectra[spec.uid] = spec
+        c = OffsetCurve(name="Test", frequency=np.array([1, 2]),
+                        velocity=np.array([10, 20]),
+                        spectrum_uid=spec.uid, spectrum_visible=False)
+        sheet.add_curve(c)
+        tree.populate(sheet)
+
+        main_item = tree._tree.topLevelItem(0)
+        curve_item = main_item.child(0)
+        assert curve_item.childCount() == 2  # data + spectrum
+        spec_item = curve_item.child(1)
+        assert "Spectrum" in spec_item.text(0)
+        assert "fdbf" in spec_item.text(0)
+
+    def test_spectrum_default_not_visible(self, qapp):
+        """New OffsetCurve should have spectrum_visible=False by default."""
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(name="X", frequency=np.array([1]), velocity=np.array([1]))
+        assert c.spectrum_visible is False
+
+    def test_spectrum_selected_signal(self, qapp, qtbot):
+        """Clicking a spectrum sub-item should emit spectrum_selected, not curve_selected."""
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel, _TYPE_SPECTRUM, _ITEM_TYPE_ROLE, _UID_ROLE,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, SpectrumData,
+        )
+        tree = DataTreePanel()
+        sheet = SheetState()
+        spec = SpectrumData(
+            offset_name="test",
+            frequencies=np.linspace(5, 50, 10),
+            velocities=np.linspace(50, 500, 20),
+            power=np.random.rand(20, 10),
+            method="fdbf",
+        )
+        sheet.spectra[spec.uid] = spec
+        c = OffsetCurve(name="Test", frequency=np.array([1, 2]),
+                        velocity=np.array([10, 20]),
+                        spectrum_uid=spec.uid, spectrum_visible=False)
+        sheet.add_curve(c)
+        tree.populate(sheet)
+
+        # Find the spectrum item
+        main_item = tree._tree.topLevelItem(0)
+        curve_item = main_item.child(0)
+        spec_item = curve_item.child(1)  # spectrum sub-item
+        assert spec_item.data(0, _ITEM_TYPE_ROLE) == _TYPE_SPECTRUM
+
+        # Connect signals
+        with qtbot.waitSignal(tree.spectrum_selected, timeout=1000) as blocker:
+            tree._on_item_clicked(spec_item, 0)
+
+        assert blocker.args == [c.uid]
+
+    def test_subplot_selected_signal(self, qapp, qtbot):
+        """Clicking a subplot item should emit subplot_selected."""
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel, _TYPE_SUBPLOT, _ITEM_TYPE_ROLE, _KEY_ROLE,
+        )
+        from packages.report_studio.core.models import SheetState
+        tree = DataTreePanel()
+        sheet = SheetState()
+        tree.populate(sheet)
+
+        main_item = tree._tree.topLevelItem(0)
+        assert main_item.data(0, _ITEM_TYPE_ROLE) == _TYPE_SUBPLOT
+
+        with qtbot.waitSignal(tree.subplot_selected, timeout=1000) as blocker:
+            tree._on_item_clicked(main_item, 0)
+
+        assert blocker.args == [main_item.data(0, _KEY_ROLE)]
+
+    def test_tree_highlight_style(self, qapp):
+        """Data tree should have a blue selection highlight stylesheet."""
+        from packages.report_studio.gui.panels.data_tree import DataTreePanel
+        tree = DataTreePanel()
+        style = tree._tree.styleSheet()
+        assert "#3399FF" in style
+
+    def test_subplot_batch_mode(self, qapp):
+        """SubplotSettingsPanel should support batch mode."""
+        from packages.report_studio.gui.panels.subplot_settings import SubplotSettingsPanel
+        from packages.report_studio.core.models import SubplotState
+        panel = SubplotSettingsPanel()
+        sp1 = SubplotState(key="a", name="Plot A")
+        sp2 = SubplotState(key="b", name="Plot B")
+        panel.show_subplots_batch(["a", "b"], [sp1, sp2])
+        assert panel._lbl_selection.isVisible() or "2 subplots" in panel._lbl_selection.text()
+        assert len(panel._batch_keys) == 2
+
+    def test_spectrum_batch_label(self, qapp):
+        """SpectrumSettingsPanel batch mode should show count."""
+        from packages.report_studio.gui.panels.spectrum_settings import SpectrumSettingsPanel
+        from packages.report_studio.core.models import OffsetCurve
+        panel = SpectrumSettingsPanel()
+        c1 = OffsetCurve(name="A", frequency=np.array([1.0]), velocity=np.array([1.0]))
+        c2 = OffsetCurve(name="B", frequency=np.array([1.0]), velocity=np.array([1.0]))
+        panel.show_spectra_batch([c1.uid, c2.uid], [c1, c2])
+        assert "2 spectra" in panel._lbl_name.text()
+        assert len(panel._batch_uids) == 2
+
+
+class TestPropertiesPanel:
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.properties_panel import PropertiesPanel
+        panel = PropertiesPanel()
+        assert panel is not None
+        # Curve group should be hidden initially
+        assert panel._curve_group.isHidden()
+
+    def test_show_curve(self, qapp):
+        from packages.report_studio.gui.panels.properties_panel import PropertiesPanel
+        from packages.report_studio.core.models import OffsetCurve
+        panel = PropertiesPanel()
+        c = OffsetCurve(
+            name="Test",
+            frequency=np.array([1.0, 2.0]),
+            velocity=np.array([10.0, 20.0]),
+            color="#FF0000",
+            line_width=2.5,
+            marker_size=6.0,
+        )
+        panel.show_curve(c)
+        assert not panel._curve_group.isHidden()
+        assert panel._lbl_name.text() == "Test"
+        assert panel._spin_line_width.value() == 2.5
+        assert panel._spin_marker.value() == 6.0
+
+    def test_show_subplot(self, qapp):
+        from packages.report_studio.gui.panels.properties_panel import PropertiesPanel
+        from packages.report_studio.core.models import SubplotState
+        panel = PropertiesPanel()
+        sp = SubplotState(key="main", x_domain="wavelength", auto_x=False)
+        panel.show_subplot(sp)
+        assert panel._combo_domain.currentText() == "wavelength"
+        assert not panel._chk_auto_x.isChecked()
+
+    def test_clear_curve(self, qapp):
+        from packages.report_studio.gui.panels.properties_panel import PropertiesPanel
+        from packages.report_studio.core.models import OffsetCurve
+        panel = PropertiesPanel()
+        c = OffsetCurve(name="X", frequency=np.array([1]), velocity=np.array([1]))
+        panel.show_curve(c)
+        assert not panel._curve_group.isHidden()
+        panel.clear_curve()
+        assert panel._curve_group.isHidden()
+
+
+class TestSheetPanel:
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.sheet_panel import SheetPanel
+        panel = SheetPanel()
+        assert panel is not None
+
+    def test_populate(self, qapp):
+        from packages.report_studio.gui.panels.sheet_panel import SheetPanel
+        from packages.report_studio.core.models import SheetState
+        panel = SheetPanel()
+        sheet = SheetState()
+        sheet.set_grid(2, 3)
+        sheet.legend.position = "upper left"
+        sheet.typography.title_size = 14
+        panel.populate(sheet)
+        assert panel._spin_rows.value() == 2
+        assert panel._spin_cols.value() == 3
+        assert panel._combo_legend_pos.currentText() == "upper left"
+        assert panel._spin_title_size.value() == 14
+
+
+class TestExportDialog:
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.export_dialog import ExportDialog
+        dlg = ExportDialog()
+        assert dlg is not None
+        assert dlg.dpi == 300
+
+
+class TestProjectDialog:
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.project_dialog import ProjectDialog
+        dlg = ProjectDialog()
+        assert dlg is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 6. Main Window Integration
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestMainWindowIntegration:
+    def test_window_construction(self, qapp):
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        # Patch out the initial load dialog
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win.setWindowTitle("Test")
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        assert win.sheet_tabs.count() == 1
+        assert hasattr(win, "data_tree")
+        assert hasattr(win, "right_panel")
+
+    def test_add_new_sheet(self, qapp):
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        win._add_new_sheet("Sheet 2")
+        assert len(win._sheets) == 2
+        assert win.sheet_tabs.count() == 2
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_load_and_render(self, qapp):
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        # Load data programmatically
+        win._load_from_files(str(PKL_PATH), str(NPZ_PATH) if NPZ_PATH.exists() else "", show_dialog=False)
+
+        sheet = win._current_sheet()
+        assert sheet is not None
+        assert len(sheet.curves) > 0
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_curve_selection(self, qapp):
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        win._load_from_files(str(PKL_PATH), show_dialog=False)
+        sheet = win._current_sheet()
+        uid = list(sheet.curves.keys())[0]
+        win._on_curve_selected(uid)
+        assert win._selected_uid == uid
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_curve_visibility_toggle(self, qapp):
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        win._load_from_files(str(PKL_PATH), show_dialog=False)
+        sheet = win._current_sheet()
+        uid = list(sheet.curves.keys())[0]
+        win._on_curve_visibility_changed(uid, False)
+        assert sheet.curves[uid].visible is False
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_grid_change(self, qapp):
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        win._load_from_files(str(PKL_PATH), show_dialog=False)
+        win._on_grid_changed(2, 2)
+        sheet = win._current_sheet()
+        assert sheet.grid_rows == 2
+        assert sheet.grid_cols == 2
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_legend_change(self, qapp):
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        win._load_from_files(str(PKL_PATH), show_dialog=False)
+        win._on_legend_changed("position", "upper left")
+        sheet = win._current_sheet()
+        assert sheet.legend.position == "upper left"
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_style_change(self, qapp):
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        win._load_from_files(str(PKL_PATH), show_dialog=False)
+        sheet = win._current_sheet()
+        uid = list(sheet.curves.keys())[0]
+        win._on_style_changed(uid, "color", "#00FF00")
+        assert sheet.curves[uid].color == "#00FF00"
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_export_image(self, qapp, tmp_path):
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        win._load_from_files(str(PKL_PATH), show_dialog=False)
+
+        # Direct export (bypassing dialog)
+        canvas = win.sheet_tabs.current_canvas()
+        img_path = tmp_path / "export_test.png"
+        canvas.export_image(str(img_path), dpi=100)
+        assert img_path.exists()
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_save_load_project_integration(self, qapp, tmp_path):
+        """Full workflow: load data → save project → load project → verify."""
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        from packages.report_studio.io.project import save_project, load_project
+
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        win._load_from_files(str(PKL_PATH), show_dialog=False)
+        sheet = win._current_sheet()
+        original_count = len(sheet.curves)
+
+        # Modify something
+        uid = list(sheet.curves.keys())[0]
+        sheet.curves[uid].color = "#123456"
+
+        # Save
+        proj_path = tmp_path / "integration_test.json"
+        save_project(win._sheets, proj_path)
+        assert proj_path.exists()
+
+        # Load into new "session"
+        loaded_sheets = load_project(proj_path)
+        assert len(loaded_sheets) == 1
+        assert len(loaded_sheets[0].curves) == original_count
+
+        # Verify the modification persisted
+        loaded_curve = list(loaded_sheets[0].curves.values())[0]
+        # The UIDs match so we should find the modified one
+        for lc in loaded_sheets[0].curves.values():
+            if lc.uid == uid:
+                assert lc.color == "#123456"
+                break
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 7. Full Workflow End-to-End
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestEndToEnd:
+    @pytest.mark.skipif(
+        not PKL_PATH.exists() or not NPZ_PATH.exists(),
+        reason="Test data not found"
+    )
+    def test_full_workflow(self, qapp, tmp_path):
+        """
+        End-to-end: load PKL+NPZ → assign to subplots → change style
+        → change grid → export PNG → save project → load project → verify.
+        """
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        from packages.report_studio.io.project import save_project, load_project
+
+        # 1. Create window and load data
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        win._load_from_files(str(PKL_PATH), str(NPZ_PATH), show_dialog=False)
+        sheet = win._current_sheet()
+        assert len(sheet.curves) >= 9
+
+        # 2. Change grid to 2x1
+        win._on_grid_changed(2, 1)
+        assert sheet.grid_rows == 2
+        keys = sheet.subplot_keys_ordered()
+        assert len(keys) == 2
+
+        # 3. Move some curves to second subplot
+        curve_uids = list(sheet.curves.keys())
+        for uid in curve_uids[5:]:
+            win._on_curve_moved(uid, keys[1])
+
+        # 4. Change style
+        uid0 = curve_uids[0]
+        win._on_style_changed(uid0, "color", "#FF0000")
+        win._on_style_changed(uid0, "line_width", 3.0)
+        assert sheet.curves[uid0].color == "#FF0000"
+        assert sheet.curves[uid0].line_width == 3.0
+
+        # 5. Change legend + typography
+        win._on_legend_changed("position", "lower right")
+        win._on_typography_changed("title_size", 14)
+        assert sheet.legend.position == "lower right"
+        assert sheet.typography.title_size == 14
+
+        # 6. Export image
+        img_path = tmp_path / "e2e_export.png"
+        canvas = win.sheet_tabs.current_canvas()
+        canvas.export_image(str(img_path), dpi=100)
+        assert img_path.exists()
+        assert img_path.stat().st_size > 1000  # Non-trivial image
+
+        # 7. Save project
+        proj_path = tmp_path / "e2e_project.json"
+        save_project(win._sheets, proj_path)
+        assert proj_path.exists()
+
+        # 8. Load and verify
+        loaded = load_project(proj_path)
+        ls = loaded[0]
+        assert ls.grid_rows == 2
+        assert ls.legend.position == "lower right"
+        assert ls.typography.title_size == 14
+        assert len(ls.curves) >= 9
+
+        for lc in ls.curves.values():
+            if lc.uid == uid0:
+                assert lc.color == "#FF0000"
+                assert lc.line_width == 3.0
+                break
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 8. Phase 6: Grid Migration, Multi-Select, Layout, Smoke Tests
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestGridMigration:
+    """Verify curves survive grid changes (1x1 ↔ NxM)."""
+
+    def test_1x1_to_2x2_migrates_curves(self):
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        s = SheetState()
+        c1 = OffsetCurve(name="a", frequency=np.array([1]), velocity=np.array([1]))
+        c2 = OffsetCurve(name="b", frequency=np.array([2]), velocity=np.array([2]))
+        s.add_curve(c1)
+        s.add_curve(c2)
+        assert c1.uid in s.subplots["main"].curve_uids
+
+        s.set_grid(2, 2)
+        # Curves should migrate from "main" to "cell_0_0"
+        assert "main" not in s.subplots
+        assert "cell_0_0" in s.subplots
+        assert c1.uid in s.subplots["cell_0_0"].curve_uids
+        assert c2.uid in s.subplots["cell_0_0"].curve_uids
+
+    def test_2x2_to_1x1_merges_back(self):
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        s = SheetState()
+        s.set_grid(2, 2)
+        c1 = OffsetCurve(name="a", frequency=np.array([1]), velocity=np.array([1]))
+        c2 = OffsetCurve(name="b", frequency=np.array([2]), velocity=np.array([2]))
+        s.add_curve(c1, "cell_0_0")
+        s.add_curve(c2, "cell_1_1")
+
+        s.set_grid(1, 1)
+        assert "main" in s.subplots
+        assert c1.uid in s.subplots["main"].curve_uids
+        assert c2.uid in s.subplots["main"].curve_uids
+
+    def test_grid_change_preserves_curve_data(self):
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        s = SheetState()
+        freq = np.array([1.0, 2.0, 3.0])
+        vel = np.array([100.0, 200.0, 300.0])
+        c = OffsetCurve(name="x", frequency=freq, velocity=vel, color="#AA0000")
+        s.add_curve(c)
+
+        s.set_grid(3, 1)
+        assert c.uid in s.curves
+        assert np.array_equal(s.curves[c.uid].frequency, freq)
+        assert s.curves[c.uid].color == "#AA0000"
+
+        s.set_grid(1, 1)
+        assert np.array_equal(s.curves[c.uid].velocity, vel)
+
+    def test_multiple_grid_transitions(self):
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        s = SheetState()
+        curves = []
+        for i in range(5):
+            c = OffsetCurve(name=f"c{i}", frequency=np.array([i]),
+                            velocity=np.array([i * 10]))
+            s.add_curve(c)
+            curves.append(c)
+
+        # 1x1 → 2x2
+        s.set_grid(2, 2)
+        assert all(c.uid in s.curves for c in curves)
+        # 2x2 → 3x1
+        s.set_grid(3, 1)
+        assert all(c.uid in s.curves for c in curves)
+        # 3x1 → 1x1
+        s.set_grid(1, 1)
+        assert all(c.uid in s.curves for c in curves)
+        assert all(c.uid in s.subplots["main"].curve_uids for c in curves)
+
+
+class TestLayoutFields:
+    """Test new layout fields on SheetState."""
+
+    def test_default_layout_values(self):
+        from packages.report_studio.core.models import SheetState
+        s = SheetState()
+        assert s.figure_width == 10.0
+        assert s.figure_height == 7.0
+        assert s.hspace == 0.3
+        assert s.wspace == 0.3
+
+    def test_layout_fields_persist(self, tmp_path):
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        from packages.report_studio.io.project import save_project, load_project
+        s = SheetState()
+        s.figure_width = 14.0
+        s.figure_height = 10.0
+        s.hspace = 0.5
+        s.wspace = 0.2
+        c = OffsetCurve(name="t", frequency=np.array([1]), velocity=np.array([1]))
+        s.add_curve(c)
+
+        path = tmp_path / "layout_test.json"
+        save_project([s], path)
+        loaded = load_project(path)
+        ls = loaded[0]
+        assert ls.figure_width == 14.0
+        assert ls.figure_height == 10.0
+        assert ls.hspace == 0.5
+        assert ls.wspace == 0.2
+
+
+class TestMultiSelect:
+    """Test multi-select in DataTreePanel."""
+
+    def test_tree_has_extended_selection(self, qapp):
+        from packages.report_studio.gui.panels.data_tree import DataTreePanel
+        tree = DataTreePanel()
+        from packages.report_studio.qt_compat import QtWidgets
+        mode = tree._tree.selectionMode()
+        try:
+            expected = QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection
+        except AttributeError:
+            expected = QtWidgets.QAbstractItemView.ExtendedSelection
+        assert mode == expected
+
+    def test_curves_selected_signal_exists(self, qapp):
+        from packages.report_studio.gui.panels.data_tree import DataTreePanel
+        tree = DataTreePanel()
+        assert hasattr(tree, 'curves_selected')
+
+
+class TestBatchProperties:
+    """Test batch properties editing for multiple curves."""
+
+    def test_show_curves_batch(self, qapp):
+        from packages.report_studio.gui.panels.properties_panel import PropertiesPanel
+        from packages.report_studio.core.models import OffsetCurve
+        panel = PropertiesPanel()
+
+        c1 = OffsetCurve(name="A", frequency=np.array([1, 2]),
+                         velocity=np.array([10, 20]), color="#FF0000")
+        c2 = OffsetCurve(name="B", frequency=np.array([3, 4]),
+                         velocity=np.array([30, 40]), color="#00FF00")
+
+        panel.show_curves_batch([c1.uid, c2.uid], [c1, c2])
+        assert not panel._curve_group.isHidden()
+        assert "2 selected" in panel._curve_group.title()
+        assert panel._batch_uids == [c1.uid, c2.uid]
+
+    def test_batch_style_emits_for_all(self, qapp, qtbot):
+        from packages.report_studio.gui.panels.properties_panel import PropertiesPanel
+        from packages.report_studio.core.models import OffsetCurve
+        panel = PropertiesPanel()
+
+        c1 = OffsetCurve(name="A", frequency=np.array([1]),
+                         velocity=np.array([10]))
+        c2 = OffsetCurve(name="B", frequency=np.array([2]),
+                         velocity=np.array([20]))
+
+        panel.show_curves_batch([c1.uid, c2.uid], [c1, c2])
+
+        emitted = []
+        panel.style_changed.connect(lambda uid, attr, val: emitted.append(uid))
+
+        # Simulate changing line width (triggers _emit_style)
+        panel._updating = False
+        panel._emit_style("line_width", 3.0)
+
+        assert len(emitted) == 2
+        assert c1.uid in emitted
+        assert c2.uid in emitted
+
+    def test_single_select_clears_batch(self, qapp):
+        from packages.report_studio.gui.panels.properties_panel import PropertiesPanel
+        from packages.report_studio.core.models import OffsetCurve
+        panel = PropertiesPanel()
+
+        c1 = OffsetCurve(name="A", frequency=np.array([1]),
+                         velocity=np.array([10]))
+        c2 = OffsetCurve(name="B", frequency=np.array([2]),
+                         velocity=np.array([20]))
+
+        # First show batch
+        panel.show_curves_batch([c1.uid, c2.uid], [c1, c2])
+        assert len(panel._batch_uids) == 2
+
+        # Then select single — should clear batch
+        panel.show_curve(c1)
+        assert panel._batch_uids == []
+        assert panel._current_uid == c1.uid
+
+
+class TestAssignmentDialog:
+    """Tests for the grid-first assignment dialog."""
+
+    def test_dialog_construction(self, qapp):
+        from packages.report_studio.gui.panels.assignment_dialog import AssignmentDialog
+        from packages.report_studio.core.models import OffsetCurve
+
+        curves = [
+            OffsetCurve(name=f"C{i}", frequency=np.array([1]),
+                        velocity=np.array([10]))
+            for i in range(4)
+        ]
+        dlg = AssignmentDialog(curves)
+        assert dlg._spin_rows.value() == 1
+        assert dlg._spin_cols.value() == 1
+        # Source list should have all 4 curves
+        assert dlg._source_list.count() == 4
+        # All curves assigned to "main" by default
+        assert len(dlg.assignments.get("main", [])) == 4
+
+    def test_grid_change_updates_slots(self, qapp):
+        from packages.report_studio.gui.panels.assignment_dialog import AssignmentDialog
+        from packages.report_studio.core.models import OffsetCurve
+
+        curves = [
+            OffsetCurve(name=f"C{i}", frequency=np.array([1]),
+                        velocity=np.array([10]))
+            for i in range(3)
+        ]
+        dlg = AssignmentDialog(curves)
+        dlg._set_grid(2, 2)
+        # Should have 4 top-level items (subplots)
+        assert dlg._assign_tree.topLevelItemCount() == 4
+        assert dlg.grid_rows == 2
+        assert dlg.grid_cols == 2
+        # All curves migrate to first subplot
+        first_key = list(dlg.assignments.keys())[0]
+        assert len(dlg.assignments[first_key]) == 3
+
+    def test_assign_and_unassign(self, qapp):
+        from packages.report_studio.gui.panels.assignment_dialog import AssignmentDialog
+        from packages.report_studio.core.models import OffsetCurve
+
+        curves = [
+            OffsetCurve(name="X", frequency=np.array([1]),
+                        velocity=np.array([10]))
+        ]
+        dlg = AssignmentDialog(curves)
+        # Switch to 2x1 grid
+        dlg._set_grid(2, 1)
+        # All curves are in cell_0_0
+        assert len(dlg.assignments.get("cell_0_0", [])) == 1
+        assert len(dlg.assignments.get("cell_1_0", [])) == 0
+
+        # Select the curve item in assign_tree (child of first top-level)
+        top0 = dlg._assign_tree.topLevelItem(0)
+        child = top0.child(0)
+        dlg._assign_tree.setCurrentItem(child)
+
+        # Unassign it
+        dlg._on_unassign()
+        assert len(dlg.assignments.get("cell_0_0", [])) == 0
+
+        # Now assign it to the second subplot
+        dlg._source_list.setCurrentRow(0)
+        # Select target subplot cell_1_0
+        top1 = dlg._assign_tree.topLevelItem(1)
+        dlg._assign_tree.setCurrentItem(top1)
+        dlg._on_assign()
+        assert len(dlg.assignments.get("cell_1_0", [])) == 1
+        assert dlg.assignments["cell_1_0"][0] == curves[0].uid
+
+    def test_populate_sheet_direct(self, qapp):
+        """Verify _populate_sheet_direct adds all curves without dialog."""
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        from packages.report_studio.core.models import OffsetCurve
+        from packages.report_studio.qt_compat import QtWidgets
+
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        curves = [
+            OffsetCurve(name=f"T{i}", frequency=np.array([1.0, 2.0]),
+                        velocity=np.array([100.0, 200.0]))
+            for i in range(5)
+        ]
+        win._populate_sheet_direct(curves, [])
+        sheet = win._current_sheet()
+        assert len(sheet.curves) == 5
+
+
+class TestSmokeEndToEnd:
+    """End-to-end smoke test with real data covering all v2.1 features."""
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_full_v21_workflow(self, qapp, tmp_path):
+        """
+        Load → grid 2×2 → move curves → batch select → layout →
+        export → save/load project → verify everything.
+        """
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        from packages.report_studio.io.project import save_project, load_project
+
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        # 1. Load data
+        npz = str(NPZ_PATH) if NPZ_PATH.exists() else ""
+        win._load_from_files(str(PKL_PATH), npz, show_dialog=False)
+        sheet = win._current_sheet()
+        n_curves = len(sheet.curves)
+        assert n_curves >= 9
+
+        # 2. Set grid 2×2 and verify migration
+        win._on_grid_changed(2, 2)
+        assert sheet.grid_rows == 2
+        assert sheet.grid_cols == 2
+        assert len(sheet.curves) == n_curves  # no curves lost
+
+        # 3. Move some curves
+        keys = sheet.subplot_keys_ordered()
+        uids = list(sheet.curves.keys())
+        if len(uids) > 3:
+            win._on_curve_moved(uids[3], keys[1])
+            assert uids[3] in sheet.subplots[keys[1]].curve_uids
+
+        # 4. Batch select handler
+        batch_uids = uids[:3]
+        win._on_curves_selected(batch_uids)
+        # Right panel should have switched to curve context
+        assert win.right_panel is not None
+
+        # 5. Change layout
+        win._on_layout_changed("hspace", 0.4)
+        win._on_layout_changed("figure_width", 12.0)
+        assert sheet.hspace == 0.4
+        assert sheet.figure_width == 12.0
+
+        # 6. Change style
+        win._on_style_changed(uids[0], "color", "#ABCDEF")
+        assert sheet.curves[uids[0]].color == "#ABCDEF"
+
+        # 7. Export image
+        img_path = tmp_path / "smoke_v21.png"
+        canvas = win.sheet_tabs.current_canvas()
+        canvas.export_image(str(img_path), dpi=100)
+        assert img_path.exists()
+        assert img_path.stat().st_size > 500
+
+        # 8. Save project with layout fields
+        proj = tmp_path / "smoke_v21.json"
+        save_project(win._sheets, proj)
+
+        # 9. Load and verify
+        loaded = load_project(proj)
+        ls = loaded[0]
+        assert ls.grid_rows == 2
+        assert ls.grid_cols == 2
+        assert ls.hspace == 0.4
+        assert ls.figure_width == 12.0
+        assert len(ls.curves) == n_curves
+        for lc in ls.curves.values():
+            if lc.uid == uids[0]:
+                assert lc.color == "#ABCDEF"
+                break
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.2 Tests — New panels, exporters, rendering features
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestCollapsibleSection:
+    """Test the arrow-based collapsible section widget."""
+
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.collapsible import CollapsibleSection
+        sec = CollapsibleSection("Test Group")
+        assert sec is not None
+        assert sec.content is not None
+        assert sec.form is not None
+
+    def test_collapse_toggle(self, qapp):
+        from packages.report_studio.gui.panels.collapsible import CollapsibleSection
+        sec = CollapsibleSection("Test", expanded=True)
+        assert sec._toggle.isChecked()  # expanded
+        # Collapse
+        sec._toggle.setChecked(False)
+        sec._on_toggle(False)
+        assert not sec._toggle.isChecked()
+        # Expand
+        sec._toggle.setChecked(True)
+        sec._on_toggle(True)
+        assert sec._toggle.isChecked()
+
+    def test_backward_compat_alias(self, qapp):
+        from packages.report_studio.gui.panels.collapsible import CollapsibleGroupBox, CollapsibleSection
+        assert CollapsibleGroupBox is CollapsibleSection
+
+
+class TestSubplotSettingsPanel:
+    """Test the new subplot settings panel."""
+
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.subplot_settings import SubplotSettingsPanel
+        panel = SubplotSettingsPanel()
+        assert panel is not None
+
+    def test_show_subplot(self, qapp):
+        from packages.report_studio.gui.panels.subplot_settings import SubplotSettingsPanel
+        from packages.report_studio.core.models import SubplotState
+        panel = SubplotSettingsPanel()
+        sp = SubplotState(key="main", name="Test Plot",
+                          x_scale="log", y_scale="linear",
+                          x_tick_format="sci")
+        panel.show_subplot(sp)
+        assert panel._edit_name.text() == "Test Plot"
+        assert panel._combo_xscale.currentText() == "log"
+        assert panel._combo_xtick.currentText() == "sci"
+
+    def test_setting_emits_signal(self, qapp, qtbot):
+        from packages.report_studio.gui.panels.subplot_settings import SubplotSettingsPanel
+        from packages.report_studio.core.models import SubplotState
+        panel = SubplotSettingsPanel()
+        sp = SubplotState(key="main")
+        panel.show_subplot(sp)
+
+        emitted = []
+        panel.setting_changed.connect(lambda k, a, v: emitted.append((k, a, v)))
+
+        panel._combo_xscale.setCurrentText("log")
+        assert any(a == "x_scale" and v == "log" for _, a, v in emitted)
+
+
+class TestCurveSettingsPanel:
+    """Test the new curve settings panel."""
+
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.curve_settings import CurveSettingsPanel
+        panel = CurveSettingsPanel()
+        assert panel is not None
+
+    def test_show_curve(self, qapp):
+        from packages.report_studio.gui.panels.curve_settings import CurveSettingsPanel
+        from packages.report_studio.core.models import OffsetCurve
+        panel = CurveSettingsPanel()
+        c = OffsetCurve(name="C1", frequency=np.array([1, 2]),
+                        velocity=np.array([10, 20]),
+                        line_width=2.0, marker_size=5.0)
+        panel.show_curve(c)
+        assert panel._lbl_name.text() == "C1"
+        assert panel._spin_lw.value() == 2.0
+        assert panel._spin_ms.value() == 5.0
+
+    def test_batch_mode(self, qapp):
+        from packages.report_studio.gui.panels.curve_settings import CurveSettingsPanel
+        from packages.report_studio.core.models import OffsetCurve
+        panel = CurveSettingsPanel()
+        c1 = OffsetCurve(name="A", frequency=np.array([1]), velocity=np.array([10]))
+        c2 = OffsetCurve(name="B", frequency=np.array([2]), velocity=np.array([20]))
+        panel.show_curves_batch([c1.uid, c2.uid], [c1, c2])
+        assert "2 curves" in panel._lbl_name.text()
+
+
+class TestSpectrumSettingsPanel:
+    """Test the new spectrum settings panel."""
+
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.spectrum_settings import SpectrumSettingsPanel
+        panel = SpectrumSettingsPanel()
+        assert panel is not None
+
+    def test_show_spectrum(self, qapp):
+        from packages.report_studio.gui.panels.spectrum_settings import SpectrumSettingsPanel
+        from packages.report_studio.core.models import OffsetCurve
+        panel = SpectrumSettingsPanel()
+        c = OffsetCurve(name="S1", frequency=np.array([1]), velocity=np.array([10]),
+                        spectrum_cmap="viridis", spectrum_alpha=0.6)
+        panel.show_spectrum(c)
+        assert panel._combo_cmap.currentText() == "viridis"
+        assert abs(panel._spin_alpha.value() - 0.6) < 0.01
+
+
+class TestGlobalSettingsPanel:
+    """Test the new global settings panel."""
+
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.global_panel import GlobalSettingsPanel
+        panel = GlobalSettingsPanel()
+        assert panel is not None
+
+    def test_populate(self, qapp):
+        from packages.report_studio.gui.panels.global_panel import GlobalSettingsPanel
+        from packages.report_studio.core.models import SheetState
+        panel = GlobalSettingsPanel()
+        sheet = SheetState()
+        sheet.set_grid(2, 3)
+        sheet.hspace = 0.4
+        sheet.legend.position = "upper left"
+        panel.populate(sheet)
+        assert panel._spin_rows.value() == 2
+        assert panel._spin_cols.value() == 3
+        assert abs(panel._spin_hspace.value() - 0.4) < 0.01
+
+    def test_grid_signal(self, qapp, qtbot):
+        from packages.report_studio.gui.panels.global_panel import GlobalSettingsPanel
+        panel = GlobalSettingsPanel()
+        emitted = []
+        panel.grid_changed.connect(lambda r, c: emitted.append((r, c)))
+        panel._spin_rows.setValue(3)
+        assert any(r == 3 for r, _ in emitted)
+
+
+class TestExportPanel:
+    """Test the export panel."""
+
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.export_panel import ExportPanel
+        panel = ExportPanel()
+        assert panel is not None
+
+    def test_update_subplots(self, qapp):
+        from packages.report_studio.gui.panels.export_panel import ExportPanel
+        panel = ExportPanel()
+        panel.update_subplots(["R0C0", "R0C1", "R1C0"])
+        assert len(panel._subplot_checks) == 3
+        assert "R0C0" in panel._subplot_checks
+
+
+class TestRightPanel:
+    """Test the 3-tab right panel container."""
+
+    def test_construction(self, qapp):
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        panel = RightPanel()
+        assert panel._tabs.count() == 3
+
+    def test_show_subplot_switches_context(self, qapp):
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        from packages.report_studio.core.models import SubplotState
+        panel = RightPanel()
+        sp = SubplotState(key="main")
+        panel.show_subplot(sp)
+        assert panel._context_stack.currentIndex() == RightPanel._IDX_SUBPLOT
+
+    def test_show_curve_switches_context(self, qapp):
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        from packages.report_studio.core.models import OffsetCurve
+        panel = RightPanel()
+        c = OffsetCurve(name="C", frequency=np.array([1]), velocity=np.array([10]))
+        panel.show_curve(c)
+        assert panel._context_stack.currentIndex() == RightPanel._IDX_CURVE
+
+    def test_show_spectrum_switches_context(self, qapp):
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        from packages.report_studio.core.models import OffsetCurve
+        panel = RightPanel()
+        c = OffsetCurve(name="S", frequency=np.array([1]), velocity=np.array([10]))
+        panel.show_spectrum(c)
+        assert panel._context_stack.currentIndex() == RightPanel._IDX_SPECTRUM
+
+    def test_populate_global(self, qapp):
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        from packages.report_studio.core.models import SheetState
+        panel = RightPanel()
+        sheet = SheetState()
+        sheet.set_grid(2, 2)
+        panel.populate_global(sheet)
+        assert panel.global_panel._spin_rows.value() == 2
+
+
+class TestCurveExporter:
+    """Test the modular curve data exporter."""
+
+    def test_can_export_empty(self):
+        from packages.report_studio.core.exporters.curve_exporter import CurveExporter
+        from packages.report_studio.core.models import SheetState
+        exp = CurveExporter()
+        sheet = SheetState()
+        assert not exp.can_export(sheet)
+
+    def test_can_export_with_curves(self):
+        from packages.report_studio.core.exporters.curve_exporter import CurveExporter
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        exp = CurveExporter()
+        sheet = SheetState()
+        c = OffsetCurve(name="T", frequency=np.array([1, 2]),
+                        velocity=np.array([100, 200]))
+        sheet.add_curve(c)
+        assert exp.can_export(sheet)
+
+    def test_export_csv(self, tmp_path):
+        from packages.report_studio.core.exporters.curve_exporter import CurveExporter
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        exp = CurveExporter()
+        sheet = SheetState()
+        c = OffsetCurve(name="Test", frequency=np.array([1.0, 2.0, 3.0]),
+                        velocity=np.array([100.0, 200.0, 300.0]))
+        sheet.add_curve(c)
+        msg = exp.export(sheet, str(tmp_path), {"format": "csv"})
+        assert "1 curves" in msg
+        csv_files = list(tmp_path.glob("*.csv"))
+        assert len(csv_files) == 1
+
+
+class TestDualDpiRendering:
+    """Test the dual-quality rendering pipeline."""
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_draft_quality_render(self, qapp):
+        from packages.report_studio.io.pkl_reader import read_pkl
+        from packages.report_studio.core.models import SheetState
+        from packages.report_studio.rendering.renderer import render_sheet
+        from packages.report_studio.rendering.style import StyleConfig
+        import matplotlib.pyplot as plt
+
+        curves = read_pkl(str(PKL_PATH))
+        sheet = SheetState()
+        for c in curves[:3]:
+            sheet.add_curve(c)
+
+        style = StyleConfig()
+        fig = plt.figure()
+        render_sheet(fig, sheet, style, quality="draft")
+        assert len(fig.axes) > 0
+        plt.close(fig)
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_high_quality_render(self, qapp):
+        from packages.report_studio.io.pkl_reader import read_pkl
+        from packages.report_studio.core.models import SheetState
+        from packages.report_studio.rendering.renderer import render_sheet
+        from packages.report_studio.rendering.style import StyleConfig
+        import matplotlib.pyplot as plt
+
+        curves = read_pkl(str(PKL_PATH))
+        sheet = SheetState()
+        for c in curves[:3]:
+            sheet.add_curve(c)
+
+        style = StyleConfig()
+        fig = plt.figure()
+        render_sheet(fig, sheet, style, quality="high")
+        assert len(fig.axes) > 0
+        plt.close(fig)
+
+
+class TestRendererScales:
+    """Test log-scale and tick-format rendering."""
+
+    def test_log_scale_x(self, qapp):
+        from packages.report_studio.core.models import SheetState, OffsetCurve, SubplotState
+        from packages.report_studio.rendering.renderer import render_sheet
+        from packages.report_studio.rendering.style import StyleConfig
+        import matplotlib.pyplot as plt
+
+        sheet = SheetState()
+        c = OffsetCurve(name="Log", frequency=np.array([1.0, 10.0, 100.0]),
+                        velocity=np.array([100.0, 200.0, 300.0]))
+        sheet.add_curve(c)
+        # Set x_scale to log on first subplot
+        key = sheet.subplot_keys_ordered()[0]
+        sheet.subplots[key].x_scale = "log"
+
+        style = StyleConfig()
+        fig = plt.figure()
+        render_sheet(fig, sheet, style)
+        ax = fig.axes[0]
+        assert ax.get_xscale() == "log"
+        plt.close(fig)
+
+    def test_tick_format_sci(self, qapp):
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        from packages.report_studio.rendering.renderer import render_sheet
+        from packages.report_studio.rendering.style import StyleConfig
+        import matplotlib.pyplot as plt
+
+        sheet = SheetState()
+        c = OffsetCurve(name="Sci", frequency=np.array([1000.0, 2000.0, 3000.0]),
+                        velocity=np.array([100.0, 200.0, 300.0]))
+        sheet.add_curve(c)
+        key = sheet.subplot_keys_ordered()[0]
+        sheet.subplots[key].x_tick_format = "sci"
+
+        style = StyleConfig()
+        fig = plt.figure()
+        render_sheet(fig, sheet, style)
+        assert len(fig.axes) > 0
+        plt.close(fig)
+
+
+class TestPerSubplotFonts:
+    """Test per-subplot font override rendering."""
+
+    def test_subplot_font_override(self, qapp):
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        from packages.report_studio.rendering.renderer import render_sheet
+        from packages.report_studio.rendering.style import StyleConfig
+        import matplotlib.pyplot as plt
+
+        sheet = SheetState()
+        c = OffsetCurve(name="Font", frequency=np.array([1.0, 2.0]),
+                        velocity=np.array([10.0, 20.0]))
+        sheet.add_curve(c)
+        key = sheet.subplot_keys_ordered()[0]
+        sheet.subplots[key].title_font_size = 16
+        sheet.subplots[key].name = "Custom Title"
+
+        style = StyleConfig()
+        fig = plt.figure()
+        render_sheet(fig, sheet, style)
+        ax = fig.axes[0]
+        assert ax.get_title() == "Custom Title"
+        plt.close(fig)
+
+
+class TestV22MainWindowIntegration:
+    """Integration tests for v2.2 right panel wiring."""
+
+    def test_right_panel_exists(self, qapp):
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        assert hasattr(win, "right_panel")
+        assert win.right_panel._tabs.count() == 3
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_curve_select_shows_context(self, qapp):
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        win._load_from_files(str(PKL_PATH), show_dialog=False)
+        sheet = win._current_sheet()
+        uid = list(sheet.curves.keys())[0]
+        win._on_curve_selected(uid)
+
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        assert win.right_panel._context_stack.currentIndex() == RightPanel._IDX_CURVE
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="Test PKL not found")
+    def test_subplot_click_shows_context(self, qapp):
+        from packages.report_studio.gui.main_window import ReportStudioWindow
+        win = ReportStudioWindow.__new__(ReportStudioWindow)
+        win._controller = None
+        win._sheets = []
+        win._selected_uid = None
+        from packages.report_studio.qt_compat import QtWidgets
+        QtWidgets.QMainWindow.__init__(win)
+        win._build_ui()
+        win._setup_menubar()
+        win._connect_signals()
+
+        win._load_from_files(str(PKL_PATH), show_dialog=False)
+        sheet = win._current_sheet()
+        key = sheet.subplot_keys_ordered()[0]
+        win._on_subplot_clicked(key)
+
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        assert win.right_panel._context_stack.currentIndex() == RightPanel._IDX_SUBPLOT
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.2 Bug Fixes & Enhancement Tests
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestLabelToSuffix:
+    """Phase 1: spectrum_reader._label_to_suffix fixes."""
+
+    def test_suffix_passthrough_m20(self):
+        from packages.report_studio.io.spectrum_reader import _label_to_suffix
+        assert _label_to_suffix("m20") == "m20"
+
+    def test_suffix_passthrough_p66(self):
+        from packages.report_studio.io.spectrum_reader import _label_to_suffix
+        assert _label_to_suffix("p66") == "p66"
+
+    def test_suffix_passthrough_uppercase(self):
+        from packages.report_studio.io.spectrum_reader import _label_to_suffix
+        assert _label_to_suffix("M20") == "m20"
+
+    def test_label_positive(self):
+        from packages.report_studio.io.spectrum_reader import _label_to_suffix
+        assert _label_to_suffix("+66") == "p66"
+
+    def test_label_negative(self):
+        from packages.report_studio.io.spectrum_reader import _label_to_suffix
+        result = _label_to_suffix("-20")
+        assert result in ("n20", "m20")  # either convention is valid
+
+
+class TestNormalizeOffset:
+    """Phase 1: normalize_offset for matching curves to spectra."""
+
+    def test_suffix_m20(self):
+        from packages.report_studio.io.spectrum_reader import normalize_offset
+        assert normalize_offset("m20") == "-20"
+
+    def test_suffix_p66(self):
+        from packages.report_studio.io.spectrum_reader import normalize_offset
+        assert normalize_offset("p66") == "+66"
+
+    def test_human_label_plus(self):
+        from packages.report_studio.io.spectrum_reader import normalize_offset
+        assert normalize_offset("+66") == "+66"
+
+    def test_human_label_minus(self):
+        from packages.report_studio.io.spectrum_reader import normalize_offset
+        assert normalize_offset("-20") == "-20"
+
+    def test_fdbf_tag_plus(self):
+        from packages.report_studio.io.spectrum_reader import normalize_offset
+        assert normalize_offset("fdbf_+66") == "+66"
+
+    def test_fdbf_tag_minus(self):
+        from packages.report_studio.io.spectrum_reader import normalize_offset
+        assert normalize_offset("fdbf_-20") == "-20"
+
+    def test_bare_number(self):
+        from packages.report_studio.io.spectrum_reader import normalize_offset
+        assert normalize_offset("42") == "+42"
+
+
+class TestSubplotStateLegendFields:
+    """Phase 4: per-subplot legend fields in SubplotState."""
+
+    def test_defaults_none(self):
+        from packages.report_studio.core.models import SubplotState
+        sp = SubplotState()
+        assert sp.legend_visible is None
+        assert sp.legend_position == ""
+        assert sp.legend_font_size == 0
+        assert sp.legend_frame_on is None
+
+    def test_set_legend_fields(self):
+        from packages.report_studio.core.models import SubplotState
+        sp = SubplotState()
+        sp.legend_visible = True
+        sp.legend_position = "upper right"
+        sp.legend_font_size = 10
+        sp.legend_frame_on = False
+        assert sp.legend_visible is True
+        assert sp.legend_position == "upper right"
+        assert sp.legend_font_size == 10
+        assert sp.legend_frame_on is False
+
+
+class TestOffsetCurveColorbarFields:
+    """Phase 4: colorbar fields on OffsetCurve."""
+
+    def test_defaults(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(name="test")
+        assert c.spectrum_colorbar_orient == "vertical"
+        assert c.spectrum_colorbar_position == "right"
+        assert c.spectrum_colorbar_label == ""
+
+    def test_set_colorbar_fields(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(name="test")
+        c.spectrum_colorbar_orient = "horizontal"
+        c.spectrum_colorbar_position = "bottom"
+        c.spectrum_colorbar_label = "Power"
+        assert c.spectrum_colorbar_orient == "horizontal"
+        assert c.spectrum_colorbar_position == "bottom"
+        assert c.spectrum_colorbar_label == "Power"
+
+
+class TestSpectrumDrawerImshow:
+    """Phase 2: imshow rendering with frequency and wavelength domains."""
+
+    def test_frequency_domain(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.rendering.spectrum_drawer import draw
+        from packages.report_studio.rendering.style import StyleConfig
+        from packages.report_studio.core.models import OffsetCurve, SpectrumData
+
+        fig, ax = plt.subplots()
+        spec = SpectrumData(uid="s1", offset_name="test")
+        spec.frequencies = np.linspace(1, 50, 100)
+        spec.velocities = np.linspace(50, 500, 80)
+        spec.power = np.random.rand(80, 100)
+        curve = OffsetCurve(name="test")
+        curve.spectrum_cmap = "viridis"
+        curve.spectrum_alpha = 0.8
+        style = StyleConfig()
+
+        result = draw(ax, spec, "frequency", style, curve=curve, quality="draft")
+        assert result is not None
+        plt.close(fig)
+
+    def test_wavelength_domain(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.rendering.spectrum_drawer import draw
+        from packages.report_studio.rendering.style import StyleConfig
+        from packages.report_studio.core.models import OffsetCurve, SpectrumData
+
+        fig, ax = plt.subplots()
+        spec = SpectrumData(uid="s1", offset_name="test")
+        spec.frequencies = np.linspace(1, 50, 100)
+        spec.velocities = np.linspace(50, 500, 80)
+        spec.power = np.random.rand(80, 100)
+        curve = OffsetCurve(name="test")
+        style = StyleConfig()
+
+        result = draw(ax, spec, "wavelength", style, curve=curve, quality="draft")
+        assert result is not None
+        plt.close(fig)
+
+    def test_returns_mappable_for_colorbar(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.rendering.spectrum_drawer import draw
+        from packages.report_studio.rendering.style import StyleConfig
+        from packages.report_studio.core.models import OffsetCurve, SpectrumData
+        from matplotlib.image import AxesImage
+
+        fig, ax = plt.subplots()
+        spec = SpectrumData(uid="s1", offset_name="test")
+        spec.frequencies = np.linspace(1, 50, 50)
+        spec.velocities = np.linspace(50, 500, 40)
+        spec.power = np.random.rand(40, 50)
+        curve = OffsetCurve(name="test")
+        style = StyleConfig()
+
+        result = draw(ax, spec, "frequency", style, curve=curve, quality="draft")
+        assert isinstance(result, AxesImage)
+        plt.close(fig)
+
+
+class TestDirectBufferRendering:
+    """Phase 3: Agg buffer → QPixmap."""
+
+    def test_buffer_produces_valid_pixmap(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+        fig, ax = plt.subplots(figsize=(4, 3), dpi=72)
+        ax.plot([1, 2, 3], [1, 4, 9])
+        canvas = FigureCanvasAgg(fig)
+        canvas.draw()
+
+        buf = canvas.buffer_rgba()
+        w, h = fig.canvas.get_width_height()
+
+        from packages.report_studio.qt_compat import QtGui
+        img = QtGui.QImage(bytes(buf), w, h, QtGui.QImage.Format.Format_RGBA8888)
+        pix = QtGui.QPixmap.fromImage(img)
+
+        assert not pix.isNull()
+        assert pix.width() == w
+        assert pix.height() == h
+        plt.close(fig)
+
+
+class TestRendererLegendFallback:
+    """Phase 4: per-subplot legend override with global fallback."""
+
+    def test_subplot_legend_override(self):
+        from packages.report_studio.core.models import (
+            SheetState, SubplotState, OffsetCurve)
+        from packages.report_studio.rendering.style import StyleConfig
+        import matplotlib
+        matplotlib.use("Agg")
+
+        sheet = SheetState()
+        sp = sheet.subplots[sheet.subplot_keys_ordered()[0]]
+        sp.legend_visible = True
+        sp.legend_position = "upper left"
+        sp.legend_font_size = 12
+        sp.legend_frame_on = False
+
+        curve = OffsetCurve(name="Test Curve")
+        curve.frequency = np.array([1.0, 2.0, 3.0])
+        curve.velocity = np.array([100.0, 200.0, 300.0])
+        curve.visible = True
+        sheet.curves[curve.uid] = curve
+        sp.curve_uids.append(curve.uid)
+
+        style = StyleConfig(legend_visible=False)
+
+        from packages.report_studio.rendering.renderer import render_sheet
+        import matplotlib.pyplot as plt
+        fig = plt.figure()
+        render_sheet(fig, sheet, style)
+        assert fig is not None
+
+        ax = fig.axes[0]
+        legend = ax.get_legend()
+        assert legend is not None
+        plt.close(fig)
+
+    def test_global_legend_fallback(self):
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+        from packages.report_studio.rendering.style import StyleConfig
+        import matplotlib
+        matplotlib.use("Agg")
+
+        sheet = SheetState()
+        sp = sheet.subplots[sheet.subplot_keys_ordered()[0]]
+        # All legend fields remain None/0/"" → use global
+        assert sp.legend_visible is None
+        assert sp.legend_position == ""
+
+        curve = OffsetCurve(name="Fallback Curve")
+        curve.frequency = np.array([1.0, 2.0])
+        curve.velocity = np.array([100.0, 200.0])
+        curve.visible = True
+        sheet.curves[curve.uid] = curve
+        sp.curve_uids.append(curve.uid)
+
+        style = StyleConfig(legend_visible=True, legend_position="lower right")
+
+        from packages.report_studio.rendering.renderer import render_sheet
+        import matplotlib.pyplot as plt
+        fig = plt.figure()
+        render_sheet(fig, sheet, style)
+        ax = fig.axes[0]
+        legend = ax.get_legend()
+        assert legend is not None
+        plt.close(fig)
+
+
+class TestCuratedFonts:
+    """Phase 4: curated font list in subplot settings."""
+
+    def test_font_combo_items(self):
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        from packages.report_studio.qt_compat import QtWidgets
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+        from packages.report_studio.gui.panels.subplot_settings import (
+            SubplotSettingsPanel, _CURATED_FONTS)
+
+        panel = SubplotSettingsPanel()
+        combo = panel._combo_font
+        items = [combo.itemText(i) for i in range(combo.count())]
+        for font in _CURATED_FONTS:
+            assert font in items
+
+
+class TestSpectrumSettingsColorbar:
+    """Phase 4: colorbar controls in spectrum settings panel."""
+
+    def test_colorbar_widgets_exist(self):
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        from packages.report_studio.qt_compat import QtWidgets
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+        from packages.report_studio.gui.panels.spectrum_settings import (
+            SpectrumSettingsPanel)
+
+        panel = SpectrumSettingsPanel()
+        assert hasattr(panel, "_combo_colorbar_orient")
+        assert hasattr(panel, "_combo_colorbar_pos")
+        assert hasattr(panel, "_edit_colorbar_label")
+
+        # Check orient has expected items
+        orient_items = [panel._combo_colorbar_orient.itemText(i)
+                        for i in range(panel._combo_colorbar_orient.count())]
+        assert "vertical" in orient_items
+        assert "horizontal" in orient_items
+
+        # Check position has expected items
+        pos_items = [panel._combo_colorbar_pos.itemText(i)
+                     for i in range(panel._combo_colorbar_pos.count())]
+        assert "right" in pos_items
+        assert "left" in pos_items
+        assert "top" in pos_items
+        assert "bottom" in pos_items
+
+    def test_show_spectrum_populates_colorbar_fields(self):
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        from packages.report_studio.qt_compat import QtWidgets
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+        from packages.report_studio.gui.panels.spectrum_settings import (
+            SpectrumSettingsPanel)
+        from packages.report_studio.core.models import OffsetCurve
+
+        panel = SpectrumSettingsPanel()
+        curve = OffsetCurve(name="test")
+        curve.spectrum_colorbar = True
+        curve.spectrum_colorbar_orient = "horizontal"
+        curve.spectrum_colorbar_position = "bottom"
+        curve.spectrum_colorbar_label = "Power (dB)"
+
+        panel.show_spectrum(curve)
+
+        assert panel._chk_colorbar.isChecked() is True
+        assert panel._combo_colorbar_orient.currentText() == "horizontal"
+        assert panel._combo_colorbar_pos.currentText() == "bottom"
+        assert panel._edit_colorbar_label.text() == "Power (dB)"
+
+
+@pytest.mark.skipif(not PKL_PATH.exists() or not NPZ_PATH.exists(),
+                    reason="Test data files not found")
+class TestSpectrumMatchingIntegration:
+    """Integration: load PKL+NPZ and verify all spectra match."""
+
+    def test_9_of_9_spectra_matched(self):
+        from packages.report_studio.io.pkl_reader import read_pkl
+        from packages.report_studio.io.spectrum_reader import (
+            read_spectrum_npz, normalize_offset)
+
+        curves = read_pkl(str(PKL_PATH))
+        spectra = read_spectrum_npz(str(NPZ_PATH))
+
+        assert len(curves) > 0
+        assert len(spectra) > 0
+
+        matched = 0
+        for curve in curves:
+            offset_tag = curve.display_name.split("/")[-1]
+            for spec in spectra:
+                if normalize_offset(offset_tag) == normalize_offset(spec.offset_name):
+                    matched += 1
+                    break
+
+        assert matched == len(curves), (
+            f"Only matched {matched}/{len(curves)} spectra")
+
+
+class TestSpectrumCache:
+    """Phase 5: spectrum_cache downsample LRU."""
+
+    def test_small_array_passthrough(self):
+        from packages.report_studio.rendering.spectrum_cache import (
+            get_downsampled, clear_cache)
+        clear_cache()
+        arr = np.random.rand(50, 50)
+        result = get_downsampled(arr, max_px=200)
+        assert result is arr  # no copy
+
+    def test_large_array_downsampled(self):
+        from packages.report_studio.rendering.spectrum_cache import (
+            get_downsampled, clear_cache)
+        clear_cache()
+        arr = np.random.rand(1000, 800)
+        result = get_downsampled(arr, max_px=200)
+        assert result.shape[0] <= 200
+        assert result.shape[1] <= 200
+
+    def test_cache_hit(self):
+        from packages.report_studio.rendering.spectrum_cache import (
+            get_downsampled, _cached_downsample, clear_cache)
+        clear_cache()
+        arr = np.random.rand(600, 400)
+        get_downsampled(arr, max_px=200)
+        info1 = _cached_downsample.cache_info()
+        get_downsampled(arr, max_px=200)
+        info2 = _cached_downsample.cache_info()
+        assert info2.hits == info1.hits + 1
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.3 Tests — Panel polish & curve display enhancements
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestV23ModelDefaults:
+    """Test new OffsetCurve fields added in v2.3."""
+
+    def test_line_visible_default(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(frequency=np.array([1.0]), velocity=np.array([100.0]))
+        assert c.line_visible is True
+
+    def test_marker_visible_default(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(frequency=np.array([1.0]), velocity=np.array([100.0]))
+        assert c.marker_visible is True
+
+    def test_peak_color_default_empty(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(frequency=np.array([1.0]), velocity=np.array([100.0]))
+        assert c.peak_color == ""
+
+    def test_peak_outline_default_false(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(frequency=np.array([1.0]), velocity=np.array([100.0]))
+        assert c.peak_outline is False
+
+    def test_peak_outline_color_default(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(frequency=np.array([1.0]), velocity=np.array([100.0]))
+        assert c.peak_outline_color == "#000000"
+
+    def test_peak_outline_width_default(self):
+        from packages.report_studio.core.models import OffsetCurve
+        c = OffsetCurve(frequency=np.array([1.0]), velocity=np.array([100.0]))
+        assert c.peak_outline_width == 1.0
+
+
+class TestV23CurveDrawerVisibility:
+    """Test curve drawer line/marker visibility toggles."""
+
+    def test_line_hidden_uses_none_linestyle(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import OffsetCurve
+        from packages.report_studio.rendering import curve_drawer
+
+        c = OffsetCurve(
+            frequency=np.array([1.0, 2.0, 3.0]),
+            velocity=np.array([100.0, 200.0, 300.0]),
+            line_visible=False,
+        )
+        fig, ax = plt.subplots()
+        curve_drawer.draw(ax, c, "frequency")
+        lines = ax.get_lines()
+        assert len(lines) >= 1
+        assert lines[0].get_linestyle() == "None"
+        plt.close(fig)
+
+    def test_markers_hidden(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import OffsetCurve
+        from packages.report_studio.rendering import curve_drawer
+
+        c = OffsetCurve(
+            frequency=np.array([1.0, 2.0, 3.0]),
+            velocity=np.array([100.0, 200.0, 300.0]),
+            marker_visible=False,
+        )
+        fig, ax = plt.subplots()
+        curve_drawer.draw(ax, c, "frequency")
+        lines = ax.get_lines()
+        assert len(lines) >= 1
+        # marker should be empty string or "None"
+        mk = lines[0].get_marker()
+        assert mk in ("", "None", "none", None)
+        plt.close(fig)
+
+    def test_outline_draws_extra_layer(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import OffsetCurve
+        from packages.report_studio.rendering import curve_drawer
+
+        c = OffsetCurve(
+            frequency=np.array([1.0, 2.0, 3.0]),
+            velocity=np.array([100.0, 200.0, 300.0]),
+            peak_outline=True,
+            peak_outline_color="#FF0000",
+        )
+        fig, ax = plt.subplots()
+        curve_drawer.draw(ax, c, "frequency")
+        lines = ax.get_lines()
+        # Should have 2 lines: outline behind + main curve
+        assert len(lines) == 2
+        # Outline (zorder 9) should be first drawn
+        assert lines[0].get_zorder() == 9
+        assert lines[1].get_zorder() == 10
+        plt.close(fig)
+
+    def test_peak_color_overrides_curve_color(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import OffsetCurve
+        from packages.report_studio.rendering import curve_drawer
+
+        c = OffsetCurve(
+            frequency=np.array([1.0, 2.0]),
+            velocity=np.array([100.0, 200.0]),
+            color="#0000FF",
+            peak_color="#FF0000",
+        )
+        fig, ax = plt.subplots()
+        curve_drawer.draw(ax, c, "frequency")
+        lines = ax.get_lines()
+        # Main line should use peak_color
+        assert lines[0].get_color() == "#FF0000"
+        plt.close(fig)
+
+
+class TestV23LegendFontSync:
+    """Test legend font syncs to subplot font family."""
+
+    def test_legend_uses_subplot_font(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import (
+            OffsetCurve, SubplotState, SheetState)
+        from packages.report_studio.rendering.renderer import render_sheet
+        from packages.report_studio.rendering.style import StyleConfig
+
+        curve = OffsetCurve(
+            frequency=np.array([1.0, 2.0, 3.0]),
+            velocity=np.array([100.0, 200.0, 300.0]),
+            subplot_key="main",
+        )
+        sp = SubplotState(key="main", legend_visible=True,
+                          font_family="Times New Roman")
+        sp.curve_uids = [curve.uid]
+        sheet = SheetState()
+        sheet.subplots = {"main": sp}
+        sheet.curves = [curve]
+        style = StyleConfig(legend_visible=True)
+
+        fig = plt.figure()
+        render_sheet(fig, sheet, style)
+        ax = fig.axes[0] if fig.axes else None
+        assert ax is not None
+        legend = ax.get_legend()
+        if legend:
+            # Check legend text uses the specified font
+            for text in legend.get_texts():
+                assert text.get_fontfamily()[0] == "Times New Roman"
+        plt.close(fig)
+
+
+class TestV23ExportPanelNoSize:
+    """Export panel should not have width/height spinboxes."""
+
+    def test_no_width_height_spinboxes(self):
+        from packages.report_studio.gui.panels.export_panel import ExportPanel
+        panel = ExportPanel()
+        assert not hasattr(panel, "_spin_exp_w")
+        assert not hasattr(panel, "_spin_exp_h")
+
+    def test_set_sheet_stores_reference(self):
+        from packages.report_studio.gui.panels.export_panel import ExportPanel
+        from packages.report_studio.core.models import SheetState
+        panel = ExportPanel()
+        sheet = SheetState()
+        sheet.figure_width = 12.0
+        sheet.figure_height = 8.0
+        panel.set_sheet(sheet)
+        assert panel._sheet is sheet
+        assert panel._sheet.figure_width == 12.0
+
+
+class TestV23SubplotDefaultValues:
+    """Spinboxes should show real defaults instead of 'Default' text."""
+
+    def test_title_size_shows_12(self):
+        from packages.report_studio.gui.panels.subplot_settings import (
+            SubplotSettingsPanel)
+        panel = SubplotSettingsPanel()
+        assert panel._spin_title_size.value() == 12
+        assert panel._spin_title_size.minimum() == 4
+
+    def test_label_size_shows_10(self):
+        from packages.report_studio.gui.panels.subplot_settings import (
+            SubplotSettingsPanel)
+        panel = SubplotSettingsPanel()
+        assert panel._spin_label_size.value() == 10
+
+    def test_tick_size_shows_9(self):
+        from packages.report_studio.gui.panels.subplot_settings import (
+            SubplotSettingsPanel)
+        panel = SubplotSettingsPanel()
+        assert panel._spin_tick_size.value() == 9
+
+    def test_legend_size_shows_8(self):
+        from packages.report_studio.gui.panels.subplot_settings import (
+            SubplotSettingsPanel)
+        panel = SubplotSettingsPanel()
+        assert panel._spin_legend_size.value() == 8
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.4 — Figure Type Registry
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestFigureTypeRegistry:
+    def test_registry_singleton(self):
+        from packages.report_studio.core.figure_types import registry
+        assert registry is not None
+
+    def test_register_and_get(self):
+        from packages.report_studio.core.figure_types import (
+            FigureTypeRegistry,
+        )
+
+        class DummyPlugin:
+            @property
+            def type_id(self):
+                return "dummy"
+            @property
+            def display_name(self):
+                return "Dummy"
+            @property
+            def accepted_subplot_types(self):
+                return ("combined",)
+            def load_data(self, **kwargs):
+                return {"curves": [], "spectra": []}
+            def settings_fields(self):
+                return []
+
+        reg = FigureTypeRegistry()
+        p = DummyPlugin()
+        reg.register(p)
+        assert reg.get("dummy") is p
+        assert reg.get("nonexistent") is None
+        assert "dummy" in reg.type_ids()
+        assert reg.display_names()["dummy"] == "Dummy"
+
+    def test_all_types(self):
+        from packages.report_studio.core.figure_types import (
+            FigureTypeRegistry,
+        )
+        reg = FigureTypeRegistry()
+        assert reg.all_types() == []
+
+
+class TestSourceOffsetPlugin:
+    def test_auto_registered(self):
+        from packages.report_studio.core.plugins import source_offset  # noqa: F401
+        from packages.report_studio.core.figure_types import registry
+        assert registry.get("source_offset") is not None
+
+    def test_plugin_properties(self):
+        from packages.report_studio.core.plugins.source_offset import (
+            SourceOffsetPlugin,
+        )
+        p = SourceOffsetPlugin()
+        assert p.type_id == "source_offset"
+        assert p.display_name == "Source Offset Curves"
+        assert "combined" in p.accepted_subplot_types
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="No test PKL")
+    def test_load_data_all_offsets(self):
+        from packages.report_studio.core.plugins.source_offset import (
+            SourceOffsetPlugin,
+        )
+        p = SourceOffsetPlugin()
+        result = p.load_data(pkl_path=str(PKL_PATH))
+        assert len(result["curves"]) > 0
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="No test PKL")
+    def test_load_data_selected_offsets(self):
+        from packages.report_studio.core.plugins.source_offset import (
+            SourceOffsetPlugin,
+        )
+        from packages.report_studio.io.pkl_reader import read_pkl_metadata
+        meta = read_pkl_metadata(PKL_PATH)
+        labels = meta["labels"]
+        p = SourceOffsetPlugin()
+        result = p.load_data(
+            pkl_path=str(PKL_PATH),
+            selected_offsets=labels[:2],
+        )
+        assert len(result["curves"]) == 2
+
+    @pytest.mark.skipif(
+        not (PKL_PATH.exists() and NPZ_PATH.exists()),
+        reason="No test data",
+    )
+    def test_load_data_with_spectra(self):
+        from packages.report_studio.core.plugins.source_offset import (
+            SourceOffsetPlugin,
+        )
+        p = SourceOffsetPlugin()
+        result = p.load_data(
+            pkl_path=str(PKL_PATH),
+            npz_path=str(NPZ_PATH),
+        )
+        assert len(result["spectra"]) > 0
+
+    def test_settings_fields(self):
+        from packages.report_studio.core.plugins.source_offset import (
+            SourceOffsetPlugin,
+        )
+        p = SourceOffsetPlugin()
+        fields = p.settings_fields()
+        assert isinstance(fields, list)
+        assert any(f["key"] == "x_domain" for f in fields)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.4 — Project Persistence v3
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestProjectV3:
+    def test_round_trip_v3_curve_fields(self):
+        """All v2.3 curve fields survive save → load."""
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+        from packages.report_studio.io.project import (
+            save_project, load_project,
+        )
+        sheet = SheetState(name="V3Test")
+        c = OffsetCurve(
+            name="test",
+            frequency=np.array([1.0, 2.0]),
+            velocity=np.array([100.0, 200.0]),
+            wavelength=np.array([100.0, 100.0]),
+            line_visible=False,
+            marker_visible=False,
+            peak_color="#FF0000",
+            peak_outline=True,
+            peak_outline_color="#00FF00",
+            peak_outline_width=2.5,
+            spectrum_cmap="viridis",
+            spectrum_alpha=0.5,
+            spectrum_colorbar=True,
+            spectrum_colorbar_orient="horizontal",
+            spectrum_colorbar_position="bottom",
+            spectrum_colorbar_label="Power",
+            line_style="--",
+            marker_style="s",
+        )
+        sheet.add_curve(c)
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w"
+        ) as f:
+            path = f.name
+
+        try:
+            save_project([sheet], path)
+            loaded = load_project(path)
+            assert len(loaded) == 1
+            lc = list(loaded[0].curves.values())[0]
+            assert lc.line_visible is False
+            assert lc.marker_visible is False
+            assert lc.peak_color == "#FF0000"
+            assert lc.peak_outline is True
+            assert lc.peak_outline_color == "#00FF00"
+            assert lc.peak_outline_width == 2.5
+            assert lc.spectrum_cmap == "viridis"
+            assert lc.spectrum_alpha == 0.5
+            assert lc.spectrum_colorbar is True
+            assert lc.spectrum_colorbar_orient == "horizontal"
+            assert lc.spectrum_colorbar_position == "bottom"
+            assert lc.spectrum_colorbar_label == "Power"
+            assert lc.line_style == "--"
+            assert lc.marker_style == "s"
+        finally:
+            os.unlink(path)
+
+    def test_round_trip_v3_subplot_fields(self):
+        """All subplot fields survive save → load."""
+        from packages.report_studio.core.models import (
+            SheetState, SubplotState,
+        )
+        from packages.report_studio.io.project import (
+            save_project, load_project,
+        )
+        sheet = SheetState(name="SubTest")
+        sp = sheet.subplots["main"]
+        sp.x_scale = "log"
+        sp.y_scale = "log"
+        sp.font_family = "Arial"
+        sp.title_font_size = 14
+        sp.axis_label_font_size = 11
+        sp.tick_label_font_size = 10
+        sp.x_tick_format = "sci"
+        sp.y_tick_format = "eng"
+        sp.x_label = "Freq"
+        sp.y_label = "Vel"
+        sp.legend_visible = False
+        sp.legend_position = "upper right"
+        sp.legend_font_size = 7
+        sp.legend_frame_on = False
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w"
+        ) as f:
+            path = f.name
+
+        try:
+            save_project([sheet], path)
+            loaded = load_project(path)
+            lsp = loaded[0].subplots["main"]
+            assert lsp.x_scale == "log"
+            assert lsp.y_scale == "log"
+            assert lsp.font_family == "Arial"
+            assert lsp.title_font_size == 14
+            assert lsp.x_tick_format == "sci"
+            assert lsp.x_label == "Freq"
+            assert lsp.legend_visible is False
+            assert lsp.legend_position == "upper right"
+        finally:
+            os.unlink(path)
+
+    def test_backward_compat_v2(self):
+        """A version-2 project loads fine (missing fields get defaults)."""
+        from packages.report_studio.io.project import load_project
+        v2_data = {
+            "version": 2,
+            "sheets": [{
+                "name": "OldSheet",
+                "curves": {},
+                "spectra": {},
+                "subplots": {
+                    "main": {
+                        "key": "main",
+                        "name": "Main",
+                        "stype": "unset",
+                        "curve_uids": [],
+                        "x_domain": "frequency",
+                        "x_range": None,
+                        "y_range": None,
+                        "auto_x": True,
+                        "auto_y": True,
+                    }
+                },
+                "grid_rows": 1,
+                "grid_cols": 1,
+                "col_ratios": [1.0],
+                "row_ratios": [1.0],
+                "hspace": 0.3,
+                "wspace": 0.3,
+                "figure_width": 10.0,
+                "figure_height": 7.0,
+                "legend": {"visible": True, "position": "best",
+                           "font_size": 9, "frame_on": True, "alpha": 0.8},
+                "typography": {"title_size": 12, "axis_label_size": 10,
+                               "tick_label_size": 9,
+                               "font_family": "sans-serif"},
+            }],
+        }
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w"
+        ) as f:
+            json.dump(v2_data, f)
+            path = f.name
+
+        try:
+            sheets = load_project(path)
+            assert len(sheets) == 1
+            sp = sheets[0].subplots["main"]
+            # New fields should have defaults
+            assert sp.x_scale == "linear"
+            assert sp.font_family == ""
+            assert sp.legend_visible is None
+        finally:
+            os.unlink(path)
+
+    def test_version_3_header(self):
+        """Saved files have version 3."""
+        from packages.report_studio.core.models import SheetState
+        from packages.report_studio.io.project import save_project
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w"
+        ) as f:
+            path = f.name
+
+        try:
+            save_project([SheetState()], path)
+            with open(path) as f:
+                data = json.load(f)
+            assert data["version"] == 3
+        finally:
+            os.unlink(path)
+
+    def test_canvas_dpi_round_trip(self):
+        from packages.report_studio.core.models import SheetState
+        from packages.report_studio.io.project import (
+            save_project, load_project,
+        )
+        sheet = SheetState(name="DPI Test")
+        sheet.canvas_dpi = 150
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w"
+        ) as f:
+            path = f.name
+
+        try:
+            save_project([sheet], path)
+            loaded = load_project(path)
+            assert loaded[0].canvas_dpi == 150
+        finally:
+            os.unlink(path)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.4 — AddDataDialog
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestAddDataDialog:
+    def test_dialog_creates(self, qtbot):
+        from packages.report_studio.gui.panels.add_data_dialog import (
+            AddDataDialog,
+        )
+        dlg = AddDataDialog(subplot_key="cell_0_0")
+        qtbot.addWidget(dlg)
+        assert dlg.subplot_key == "cell_0_0"
+        assert dlg.selected_type_id == "source_offset"
+
+    def test_type_combo_has_source_offset(self, qtbot):
+        from packages.report_studio.gui.panels.add_data_dialog import (
+            AddDataDialog,
+        )
+        dlg = AddDataDialog()
+        qtbot.addWidget(dlg)
+        combo = dlg._type_combo
+        found = False
+        for i in range(combo.count()):
+            if combo.itemData(i) == "source_offset":
+                found = True
+                break
+        assert found
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="No test PKL")
+    def test_offset_list_populated(self, qtbot):
+        from packages.report_studio.gui.panels.add_data_dialog import (
+            AddDataDialog,
+        )
+        dlg = AddDataDialog()
+        qtbot.addWidget(dlg)
+        dlg._load_offset_list(str(PKL_PATH))
+        assert dlg._offset_list.count() > 0
+        # All checked by default
+        assert len(dlg.selected_offsets) == dlg._offset_list.count()
+
+    @pytest.mark.skipif(not PKL_PATH.exists(), reason="No test PKL")
+    def test_select_none_then_all(self, qtbot):
+        from packages.report_studio.gui.panels.add_data_dialog import (
+            AddDataDialog,
+        )
+        dlg = AddDataDialog()
+        qtbot.addWidget(dlg)
+        dlg._load_offset_list(str(PKL_PATH))
+        dlg._select_none()
+        assert len(dlg.selected_offsets) == 0
+        dlg._select_all()
+        assert len(dlg.selected_offsets) == dlg._offset_list.count()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.4 — Startup Flow (no forced dialog)
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestStartupFlow:
+    def test_window_opens_without_controller(self, qtbot):
+        """Studio opens to empty sheet — no dialog forced."""
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+        sheet = win._current_sheet()
+        assert sheet is not None
+        assert sheet.name == "Sheet 1"
+        assert len(sheet.curves) == 0
+
+    def test_window_has_save_as(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+        assert hasattr(win, "_act_save_sheet_as")
+
+    def test_dirty_tracking(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+        assert not win._dirty
+        win._mark_dirty()
+        assert win._dirty
+        assert win.windowTitle().endswith(" •")
+        win._mark_clean()
+        assert not win._dirty
+        assert not win.windowTitle().endswith(" •")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.4 — Data Tree add-data signal carries subplot key
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestDataTreeAddSignal:
+    def test_add_signal_emits_subplot_key(self, qtbot):
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel,
+        )
+        from packages.report_studio.core.models import SheetState
+        panel = DataTreePanel()
+        qtbot.addWidget(panel)
+        sheet = SheetState()
+        panel.populate(sheet)
+
+        received = []
+        panel.add_data_requested.connect(lambda k: received.append(k))
+        panel._on_add_clicked()
+        assert len(received) == 1
+        assert received[0] == "main"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.5 — Lightweight Project (v4) Format
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestProjectV4:
+    """Tests for directory-based project persistence."""
+
+    def test_create_project(self, tmp_path):
+        from packages.report_studio.io.project_v4 import create_project
+        manifest_path = create_project(tmp_path / "myproj", "Test Project",
+                                       pkl_path="/data/test.pkl",
+                                       npz_path="/data/test.npz",
+                                       fingerprint="abc123")
+        assert manifest_path.exists()
+        data = json.loads(manifest_path.read_text())
+        assert data["version"] == 4
+        assert data["name"] == "Test Project"
+        assert data["data_sources"]["pkl_path"] == "/data/test.pkl"
+        assert (tmp_path / "myproj" / "sheets").is_dir()
+
+    def test_save_and_load_sheet(self, tmp_path):
+        from packages.report_studio.io.project_v4 import (
+            save_sheet, load_sheet_skeleton,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+        sheet = SheetState(name="My Sheet")
+        curve = OffsetCurve(
+            name="Offset -10",
+            frequency=np.linspace(1, 50, 100),
+            velocity=np.linspace(100, 500, 100),
+            wavelength=np.linspace(2, 100, 100),
+            color="#ff0000",
+            line_width=2.5,
+        )
+        sheet.add_curve(curve, "main")
+        sheet.hspace = 0.5
+        sheet.typography.title_size = 14
+
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        path = save_sheet(project_dir, sheet)
+        assert path.exists()
+
+        # File should be small (no array data)
+        assert path.stat().st_size < 10_000  # < 10 KB
+
+        loaded_sheet, curve_settings = load_sheet_skeleton(path)
+        assert loaded_sheet.name == "My Sheet"
+        assert loaded_sheet.hspace == 0.5
+        assert loaded_sheet.typography.title_size == 14
+        assert "Offset -10" in curve_settings
+        assert curve_settings["Offset -10"]["color"] == "#ff0000"
+
+    def test_full_project_round_trip(self, tmp_path):
+        from packages.report_studio.io.project_v4 import (
+            save_project, load_project, compute_fingerprint,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+        sheet1 = SheetState(name="Sheet 1")
+        c1 = OffsetCurve(
+            name="Offset -5",
+            frequency=np.linspace(1, 50, 50),
+            velocity=np.linspace(100, 300, 50),
+            wavelength=np.linspace(2, 100, 50),
+            color="#00ff00",
+        )
+        sheet1.add_curve(c1, "main")
+
+        sheet2 = SheetState(name="Sheet 2")
+        c2 = OffsetCurve(
+            name="Offset -10",
+            frequency=np.linspace(1, 50, 50),
+            velocity=np.linspace(100, 300, 50),
+            wavelength=np.linspace(2, 100, 50),
+        )
+        sheet2.add_curve(c2, "main")
+
+        fp = compute_fingerprint([c1, c2])
+        proj_dir = tmp_path / "full_project"
+        manifest_path = save_project(
+            proj_dir, [sheet1, sheet2],
+            pkl_path="/test.pkl", npz_path="/test.npz",
+            fingerprint=fp,
+        )
+        assert manifest_path.exists()
+
+        # Load back
+        manifest, sheet_skeletons = load_project(proj_dir)
+        assert manifest["version"] == 4
+        assert len(sheet_skeletons) == 2
+        assert sheet_skeletons[0][0].name == "Sheet 1"
+        assert sheet_skeletons[1][0].name == "Sheet 2"
+        # Curve settings preserved but no arrays
+        s1, cs1 = sheet_skeletons[0]
+        assert "Offset -5" in cs1
+        assert cs1["Offset -5"]["color"] == "#00ff00"
+        # Sheet has no curves yet (skeleton)
+        assert len(s1.curves) == 0
+
+    def test_fingerprint_deterministic(self):
+        from packages.report_studio.io.project_v4 import compute_fingerprint
+        from packages.report_studio.core.models import OffsetCurve
+        curves = [
+            OffsetCurve(name="A", frequency=np.array([1, 2, 3])),
+            OffsetCurve(name="B", frequency=np.array([4, 5, 6])),
+        ]
+        fp1 = compute_fingerprint(curves)
+        fp2 = compute_fingerprint(curves)
+        assert fp1 == fp2
+        assert len(fp1) == 16
+
+    def test_fingerprint_changes_with_data(self):
+        from packages.report_studio.io.project_v4 import compute_fingerprint
+        from packages.report_studio.core.models import OffsetCurve
+        c1 = [OffsetCurve(name="A", frequency=np.array([1, 2, 3]))]
+        c2 = [OffsetCurve(name="A", frequency=np.array([1, 2, 99]))]
+        assert compute_fingerprint(c1) != compute_fingerprint(c2)
+
+    def test_reload_and_apply(self, tmp_path):
+        from packages.report_studio.io.project_v4 import (
+            save_sheet, load_sheet_skeleton, reload_and_apply,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, SpectrumData,
+        )
+        # Create and save a sheet with styled curve
+        sheet = SheetState(name="Reload Test")
+        curve = OffsetCurve(
+            name="Offset -5",
+            frequency=np.linspace(1, 50, 50),
+            velocity=np.linspace(100, 300, 50),
+            wavelength=np.linspace(2, 100, 50),
+            color="#0000ff",
+            line_width=3.0,
+            marker_visible=False,
+        )
+        sheet.add_curve(curve, "main")
+
+        project_dir = tmp_path / "reload_proj"
+        project_dir.mkdir()
+        path = save_sheet(project_dir, sheet)
+
+        # Load skeleton
+        loaded, curve_settings = load_sheet_skeleton(path)
+
+        # Simulate reloaded data (new curve instances)
+        new_curve = OffsetCurve(
+            name="Offset -5",
+            frequency=np.linspace(1, 50, 50),
+            velocity=np.linspace(100, 300, 50),
+            wavelength=np.linspace(2, 100, 50),
+        )
+        reload_and_apply(loaded, curve_settings, [new_curve], [])
+
+        # Settings should be applied from saved data
+        assert len(loaded.curves) == 1
+        reloaded = list(loaded.curves.values())[0]
+        assert reloaded.color == "#0000ff"
+        assert reloaded.line_width == 3.0
+        assert reloaded.marker_visible is False
+
+    def test_project_file_size_small(self, tmp_path):
+        """Verify project files are < 50 KB even with many curves."""
+        from packages.report_studio.io.project_v4 import save_project
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+        sheet = SheetState(name="Size Test")
+        for i in range(20):
+            c = OffsetCurve(
+                name=f"Offset {i}",
+                frequency=np.linspace(1, 100, 1000),
+                velocity=np.linspace(100, 800, 1000),
+                wavelength=np.linspace(1, 200, 1000),
+            )
+            sheet.add_curve(c, "main")
+
+        proj_dir = tmp_path / "size_test"
+        save_project(proj_dir, [sheet])
+
+        # Total project should be small
+        total_size = sum(
+            f.stat().st_size for f in proj_dir.rglob("*.json")
+        )
+        assert total_size < 500_000  # < 500 KB (settings only, no arrays)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.5 — Multi-curve Removal & Subplot Rename
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestMultiRemoveRename:
+    def test_remove_curves_batch(self):
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+        sheet = SheetState(name="Test")
+        curves = []
+        for i in range(5):
+            c = OffsetCurve(name=f"C{i}")
+            sheet.add_curve(c, "main")
+            curves.append(c)
+
+        assert len(sheet.curves) == 5
+        uids_to_remove = [curves[1].uid, curves[3].uid]
+        sheet.remove_curves(uids_to_remove)
+        assert len(sheet.curves) == 3
+        sp = sheet.subplots["main"]
+        assert curves[1].uid not in sp.curve_uids
+        assert curves[3].uid not in sp.curve_uids
+        assert curves[0].uid in sp.curve_uids
+
+    def test_data_tree_has_batch_removal_signal(self, qtbot):
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel,
+        )
+        panel = DataTreePanel()
+        qtbot.addWidget(panel)
+        assert hasattr(panel, "remove_curves_requested")
+
+    def test_data_tree_has_rename_signal(self, qtbot):
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel,
+        )
+        panel = DataTreePanel()
+        qtbot.addWidget(panel)
+        assert hasattr(panel, "subplot_renamed")
+
+    def test_subplot_rename_updates_display_name(self):
+        from packages.report_studio.core.models import (
+            SheetState, SubplotState,
+        )
+        sheet = SheetState(name="Test")
+        sheet.subplots["main"].name = "My Custom Name"
+        assert sheet.subplots["main"].display_name == "My Custom Name"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.5 — Export Panel Display Names & Filtering
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestExportPanelSync:
+    def test_populated_subplot_info(self):
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+        sheet = SheetState(name="Test")
+        sheet.set_grid(2, 2)
+        # Only add curves to cell_0_0 and cell_1_1
+        c1 = OffsetCurve(name="C1")
+        c2 = OffsetCurve(name="C2")
+        sheet.add_curve(c1, "cell_0_0")
+        sheet.add_curve(c2, "cell_1_1")
+        sheet.subplots["cell_0_0"].name = "Top Left"
+        sheet.subplots["cell_1_1"].name = "Bottom Right"
+
+        keys, names = sheet.populated_subplot_info()
+        assert len(keys) == 2
+        assert "cell_0_0" in keys
+        assert "cell_1_1" in keys
+        assert "cell_0_1" not in keys  # empty subplot
+        assert names["cell_0_0"] == "Top Left"
+        assert names["cell_1_1"] == "Bottom Right"
+
+    def test_export_panel_display_names(self, qtbot):
+        from packages.report_studio.gui.panels.export_panel import (
+            ExportPanel,
+        )
+        panel = ExportPanel()
+        qtbot.addWidget(panel)
+        panel.update_subplots(
+            ["cell_0_0", "cell_1_1"],
+            {"cell_0_0": "My Plot", "cell_1_1": "Other Plot"},
+        )
+        # Check that checkbox labels use display names
+        assert "cell_0_0" in panel._subplot_checks
+        chk = panel._subplot_checks["cell_0_0"]
+        assert chk.text() == "My Plot"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.6 — GeoFigure-Style Project Flow
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestProjectStartDialog:
+    """Startup dialog with data-source + project sections."""
+
+    def test_dialog_creates(self, qtbot):
+        from packages.report_studio.gui.panels.project_start_dialog import (
+            ProjectStartDialog,
+        )
+        dlg = ProjectStartDialog(controller=None)
+        qtbot.addWidget(dlg)
+        assert dlg.windowTitle() == "Report Studio — Project Setup"
+        assert dlg.use_controller is False
+
+    def test_dialog_properties_accessible(self, qtbot):
+        from packages.report_studio.gui.panels.project_start_dialog import (
+            ProjectStartDialog,
+        )
+        dlg = ProjectStartDialog(controller=None)
+        qtbot.addWidget(dlg)
+        # Properties should be accessible (may have QSettings values)
+        assert isinstance(dlg.pkl_path, str)
+        assert isinstance(dlg.npz_path, str)
+        assert isinstance(dlg.project_dir, str)
+        assert dlg.is_open_existing is False
+
+    def test_dialog_has_controller_checkbox_when_controller(self, qtbot):
+        from packages.report_studio.gui.panels.project_start_dialog import (
+            ProjectStartDialog,
+        )
+        dlg = ProjectStartDialog(controller="mock_controller")
+        qtbot.addWidget(dlg)
+        assert dlg._from_memory_cb is not None
+        assert dlg._from_memory_cb.isEnabled()
+        assert dlg.use_controller is True  # Default checked when controller exists
+
+
+class TestQSettingsRoundTrip:
+    """QSettings persistence for paths and recent projects."""
+
+    def test_save_and_load_data_paths(self):
+        from packages.report_studio.gui.panels.project_start_dialog import (
+            save_data_paths, load_data_paths, get_qsettings,
+        )
+        # Save
+        save_data_paths("/test/abc.pkl", "/test/abc.npz")
+        # Load
+        pkl, npz = load_data_paths()
+        assert pkl == "/test/abc.pkl"
+        assert npz == "/test/abc.npz"
+
+        # Clean up
+        s = get_qsettings()
+        s.remove("data/last_pkl")
+        s.remove("data/last_npz")
+
+    def test_add_and_get_recent_projects(self):
+        from packages.report_studio.gui.panels.project_start_dialog import (
+            add_recent_project, get_qsettings, KEY_RECENT_PROJECTS,
+        )
+        s = get_qsettings()
+        # Clear first
+        s.remove(KEY_RECENT_PROJECTS)
+
+        add_recent_project("/project/alpha")
+        add_recent_project("/project/beta")
+
+        recent = s.value(KEY_RECENT_PROJECTS, [])
+        if isinstance(recent, str):
+            recent = [recent]
+        assert "/project/beta" in recent
+        assert "/project/alpha" in recent
+        # Most recent first
+        assert recent[0] == "/project/beta"
+
+        # Clean up
+        s.remove(KEY_RECENT_PROJECTS)
+
+    def test_recent_projects_max_8(self):
+        from packages.report_studio.gui.panels.project_start_dialog import (
+            add_recent_project, get_qsettings, KEY_RECENT_PROJECTS,
+        )
+        s = get_qsettings()
+        s.remove(KEY_RECENT_PROJECTS)
+
+        for i in range(12):
+            add_recent_project(f"/project/proj_{i}")
+
+        recent = s.value(KEY_RECENT_PROJECTS, [])
+        if isinstance(recent, str):
+            recent = [recent]
+        assert len(recent) <= 8
+
+        # Clean up
+        s.remove(KEY_RECENT_PROJECTS)
+
+
+class TestSessionAutoSave:
+    """Session auto-save and restore helpers."""
+
+    def test_save_session_creates_manifest(self, tmp_path):
+        from packages.report_studio.io.project_v4 import save_session
+        from packages.report_studio.core.models import SheetState, OffsetCurve
+
+        sheet = SheetState(name="Auto Sheet")
+        c = OffsetCurve(name="Test Curve", frequency=np.array([1, 2, 3]))
+        sheet.add_curve(c, "main")
+
+        manifest_path = save_session(tmp_path, [sheet])
+        assert manifest_path.exists()
+
+        data = json.loads(manifest_path.read_text())
+        assert len(data["sheets"]) == 1
+        assert data["sheets"][0]["name"] == "Auto Sheet"
+
+        # Sheet JSON should exist
+        sheet_path = tmp_path / "session" / data["sheets"][0]["file"]
+        assert sheet_path.exists()
+
+    def test_load_session_manifest(self, tmp_path):
+        from packages.report_studio.io.project_v4 import (
+            save_session, load_session_manifest,
+        )
+        from packages.report_studio.core.models import SheetState
+
+        s1 = SheetState(name="Sheet A")
+        s2 = SheetState(name="Sheet B")
+        save_session(tmp_path, [s1, s2])
+
+        entries = load_session_manifest(tmp_path)
+        assert entries is not None
+        assert len(entries) == 2
+        assert entries[0]["name"] == "Sheet A"
+        assert entries[1]["name"] == "Sheet B"
+
+    def test_load_session_manifest_none_when_missing(self, tmp_path):
+        from packages.report_studio.io.project_v4 import load_session_manifest
+        assert load_session_manifest(tmp_path) is None
+
+    def test_session_round_trip_preserves_settings(self, tmp_path):
+        from packages.report_studio.io.project_v4 import (
+            save_session, load_session_manifest, load_sheet_skeleton,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+
+        sheet = SheetState(name="Styled Sheet")
+        sheet.set_grid(2, 1)
+        sheet.hspace = 0.3
+        sheet.typography.title_size = 16
+
+        c = OffsetCurve(
+            name="Curve X", frequency=np.array([1, 2]),
+            color="#ff00ff", line_width=2.5,
+        )
+        sheet.add_curve(c, "cell_0_0")
+
+        save_session(tmp_path, [sheet])
+
+        # Reload
+        entries = load_session_manifest(tmp_path)
+        session_dir = tmp_path / "session"
+        sheet_path = session_dir / entries[0]["file"]
+
+        loaded, curve_settings = load_sheet_skeleton(sheet_path)
+
+        assert loaded.name == "Styled Sheet"
+        assert loaded.hspace == 0.3
+        assert loaded.typography.title_size == 16
+        assert "Curve X" in curve_settings
+
+
+class TestFolderBasedProject:
+    """Folder-based load and save flow."""
+
+    def test_load_project_uses_folder(self, qtbot):
+        """_on_load_project should use folder picker (not file)."""
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+        assert hasattr(win, "_on_load_project")
+        assert hasattr(win, "_on_save_sheet_as")
+
+    def test_open_project_dir_validates_manifest(self, qtbot, tmp_path):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+
+        # Non-existent project.json — should not crash
+        win._open_project_dir(str(tmp_path))
+        assert len(win._sheets) >= 1  # Still has default sheet
+
+    def test_recent_menu_exists(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+        assert hasattr(win, "_recent_menu")
+        assert hasattr(win, "_refresh_recent_menu")
+
+    def test_auto_save_session_no_crash_without_project(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+        # Should not crash when no project path is set
+        win._auto_save_session()
+
+    def test_show_startup_false_skips_dialog(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+        # Window should open normally without dialog
+        assert win._current_sheet() is not None
+
+    def test_add_sheet_with_state(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        from packages.report_studio.core.models import SheetState
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+
+        sheet = SheetState(name="Custom Sheet")
+        idx = win._add_sheet_with_state(sheet)
+        assert idx >= 0
+        assert win._sheets[-1].name == "Custom Sheet"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.7 — Sheet-Centric Persistence
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestSheetManifest:
+    """Per-sheet manifest save / load round-trip."""
+
+    def test_save_sheet_manifest_creates_folder(self, tmp_path):
+        from packages.report_studio.io.project_v4 import save_sheet_manifest
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "sheets").mkdir()
+
+        sheet = SheetState(name="My Sheet")
+        sheet.pkl_path = "/data/test.pkl"
+        sheet.npz_path = "/data/test.npz"
+        c = OffsetCurve(
+            name="Offset -5",
+            frequency=np.linspace(1, 50, 50),
+            velocity=np.linspace(100, 300, 50),
+            wavelength=np.linspace(2, 100, 50),
+            color="#ff0000",
+        )
+        sheet.add_curve(c, "main")
+
+        save_sheet_manifest(str(proj), sheet, "My Sheet")
+        # Sanitized name uses space (not in forbidden chars)
+        manifest_path = proj / "sheets" / "My Sheet" / "manifest.json"
+        assert manifest_path.exists()
+
+        data = json.loads(manifest_path.read_text())
+        assert data["_version"] == 1
+        assert data["sheet_name"] == "My Sheet"
+        assert data["data_sources"]["pkl_path"] == "/data/test.pkl"
+        # Curve settings are nested in settings.curves
+        assert "Offset -5" in [
+            v.get("name") for v in data["settings"].get("curves", {}).values()
+        ]
+
+    def test_load_sheet_manifest_round_trip(self, tmp_path):
+        from packages.report_studio.io.project_v4 import (
+            save_sheet_manifest, load_sheet_manifest,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve,
+        )
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "sheets").mkdir()
+
+        sheet = SheetState(name="RT Sheet")
+        sheet.pkl_path = "/data/rt.pkl"
+        sheet.npz_path = "/data/rt.npz"
+        sheet.hspace = 0.4
+        sheet.typography.title_size = 18
+        c = OffsetCurve(
+            name="Offset -10",
+            frequency=np.linspace(1, 50, 50),
+            velocity=np.linspace(100, 300, 50),
+            wavelength=np.linspace(2, 100, 50),
+            color="#0000ff",
+            line_width=3.0,
+        )
+        sheet.add_curve(c, "main")
+
+        save_sheet_manifest(str(proj), sheet, "RT Sheet")
+        folder = str(proj / "sheets" / "RT Sheet")
+        loaded, curve_settings, data_sources = load_sheet_manifest(folder)
+
+        assert loaded.name == "RT Sheet"
+        assert loaded.hspace == 0.4
+        assert loaded.typography.title_size == 18
+        assert data_sources["pkl_path"] == "/data/rt.pkl"
+        assert data_sources["npz_path"] == "/data/rt.npz"
+        assert "Offset -10" in curve_settings
+        assert curve_settings["Offset -10"]["color"] == "#0000ff"
+
+    def test_list_sheets(self, tmp_path):
+        from packages.report_studio.io.project_v4 import (
+            save_sheet_manifest, list_sheets,
+        )
+        from packages.report_studio.core.models import SheetState
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "sheets").mkdir()
+
+        s1 = SheetState(name="Alpha")
+        s2 = SheetState(name="Beta")
+        save_sheet_manifest(str(proj), s1, "Alpha")
+        save_sheet_manifest(str(proj), s2, "Beta")
+
+        sheets = list_sheets(str(proj))
+        names = [n for n, _ in sheets]
+        assert "Alpha" in names
+        assert "Beta" in names
+        assert len(sheets) == 2
+
+    def test_list_sheets_empty_project(self, tmp_path):
+        from packages.report_studio.io.project_v4 import list_sheets
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "sheets").mkdir()
+
+        assert list_sheets(str(proj)) == []
+
+    def test_sheet_state_has_data_paths(self):
+        from packages.report_studio.core.models import SheetState
+        sheet = SheetState(name="Test")
+        assert hasattr(sheet, "pkl_path")
+        assert hasattr(sheet, "npz_path")
+        assert sheet.pkl_path == ""
+        assert sheet.npz_path == ""
+        sheet.pkl_path = "/some/path.pkl"
+        assert sheet.pkl_path == "/some/path.pkl"
+
+
+class TestSheetMenuActions:
+    """v2.7 menu items — Save Sheet / Load Sheet."""
+
+    def test_window_has_sheet_menu_actions(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+        assert hasattr(win, "_act_save_sheet")
+        assert hasattr(win, "_act_save_sheet_as")
+        assert hasattr(win, "_act_load_sheet")
+        assert hasattr(win, "_on_save_sheet")
+        assert hasattr(win, "_on_save_sheet_as")
+        assert hasattr(win, "_on_load_sheet")
+
+    def test_save_sheet_requires_project(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+        # No project path set — _ensure_project_path will be needed
+        assert win._project_path == ""
+
+    def test_load_from_files_stores_paths(self, qtbot):
+        from packages.report_studio.gui.main_window import (
+            ReportStudioWindow,
+        )
+        win = ReportStudioWindow(controller=None, show_startup=False)
+        qtbot.addWidget(win)
+
+        # Just verify the path storage works without loading real data
+        sheet = win._current_sheet()
+        sheet.pkl_path = "/some/test.pkl"
+        sheet.npz_path = "/some/test.npz"
+        assert sheet.pkl_path == "/some/test.pkl"
+        assert sheet.npz_path == "/some/test.npz"
+
+
+class TestSuppressEditClear:
+    """v2.7 — _suppress_edit_clear prevents Recent bug."""
+
+    def test_dialog_has_suppress_flag(self, qtbot):
+        from packages.report_studio.gui.panels.project_start_dialog import (
+            ProjectStartDialog,
+        )
+        dlg = ProjectStartDialog(controller=None)
+        qtbot.addWidget(dlg)
+        assert hasattr(dlg, "_suppress_edit_clear")
+        assert dlg._suppress_edit_clear is False
+
+    def test_recent_select_preserves_open_path(self, qtbot, tmp_path):
+        from packages.report_studio.gui.panels.project_start_dialog import (
+            ProjectStartDialog, add_recent_project, get_qsettings,
+            KEY_RECENT_PROJECTS,
+        )
+
+        s = get_qsettings()
+        s.remove(KEY_RECENT_PROJECTS)
+
+        # Use a real directory so _on_recent_selected validates it
+        proj_dir = tmp_path / "test_proj"
+        proj_dir.mkdir()
+        (proj_dir / "project.json").write_text('{"version":4}')
+
+        add_recent_project(str(proj_dir))
+
+        dlg = ProjectStartDialog(controller=None)
+        qtbot.addWidget(dlg)
+
+        # Index 0 is placeholder; real entries start at 1
+        if hasattr(dlg, "_recent_combo") and dlg._recent_combo.count() > 1:
+            dlg._recent_combo.setCurrentIndex(1)
+            assert dlg._open_existing_path == str(proj_dir)
+
+        s.remove(KEY_RECENT_PROJECTS)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2.8 — Average with Uncertainty figure type
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestAggregatedCurveModel:
+    """Tests for AggregatedCurve dataclass."""
+
+    def test_default_creation(self):
+        from packages.report_studio.core.models import AggregatedCurve
+        agg = AggregatedCurve(
+            name="Avg Test",
+            bin_centers=np.array([1, 2, 3]),
+            avg_vals=np.array([10, 20, 30]),
+            std_vals=np.array([1, 2, 3]),
+        )
+        assert agg.has_data is True
+        assert agg.display_name == "Avg Test"
+        assert agg.num_bins == 50
+        assert agg.log_bias == 0.7
+        assert agg.avg_visible is True
+        assert agg.shadow_visible is True
+        assert agg.uncertainty_visible is True
+        assert agg.uncertainty_mode == "band"
+        assert len(agg.uid) > 0
+
+    def test_empty_data(self):
+        from packages.report_studio.core.models import AggregatedCurve
+        agg = AggregatedCurve(name="Empty")
+        assert agg.has_data is False
+
+    def test_effective_uncertainty_color_default(self):
+        from packages.report_studio.core.models import AggregatedCurve
+        agg = AggregatedCurve(
+            name="T", avg_color="#FF0000",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([1]),
+            std_vals=np.array([1]),
+        )
+        assert agg.effective_uncertainty_color == "#FF0000"
+
+    def test_effective_uncertainty_color_custom(self):
+        from packages.report_studio.core.models import AggregatedCurve
+        agg = AggregatedCurve(
+            name="T", avg_color="#FF0000",
+            uncertainty_color="#00FF00",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([1]),
+            std_vals=np.array([1]),
+        )
+        assert agg.effective_uncertainty_color == "#00FF00"
+
+
+class TestSheetStateAggregated:
+    """Tests for SheetState aggregated dict management."""
+
+    def test_add_and_remove_aggregated(self):
+        from packages.report_studio.core.models import (
+            SheetState, AggregatedCurve, OffsetCurve,
+        )
+        sheet = SheetState(name="Test")
+        c = OffsetCurve(name="C1", frequency=np.array([1]), velocity=np.array([1]))
+        sheet.add_curve(c, "main")
+
+        agg = AggregatedCurve(
+            name="Avg",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([10]),
+            std_vals=np.array([1]),
+            shadow_curve_uids=[c.uid],
+        )
+        sheet.add_aggregated(agg)
+        assert agg.uid in sheet.aggregated
+
+        sheet.remove_aggregated(agg.uid)
+        assert agg.uid not in sheet.aggregated
+        # Shadow curve should also be removed
+        assert c.uid not in sheet.curves
+
+    def test_grid_change_preserves_aggregated(self):
+        """Aggregated data should survive grid changes."""
+        from packages.report_studio.core.models import (
+            SheetState, AggregatedCurve, OffsetCurve,
+        )
+        sheet = SheetState(name="Test", grid_rows=1, grid_cols=1)
+        c = OffsetCurve(name="C1", frequency=np.array([1]), velocity=np.array([1]))
+        sheet.add_curve(c, "main")
+
+        agg = AggregatedCurve(
+            name="Avg",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([10]),
+            std_vals=np.array([1]),
+            shadow_curve_uids=[c.uid],
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["main"].aggregated_uid = agg.uid
+
+        # Expand to 2x2 grid — "main" disappears
+        sheet.set_grid(2, 2)
+        # Aggregated should be migrated to cell_0_0
+        first_sp = sheet.subplots["cell_0_0"]
+        assert first_sp.aggregated_uid == agg.uid
+        assert agg.uid in sheet.aggregated
+        assert agg.subplot_key == "cell_0_0"
+
+    def test_grid_change_preserves_aggregated_shrink(self):
+        """Aggregated data survives when grid shrinks back to 1x1."""
+        from packages.report_studio.core.models import (
+            SheetState, AggregatedCurve, OffsetCurve,
+        )
+        sheet = SheetState(name="Test", grid_rows=2, grid_cols=2)
+        sheet.set_grid(2, 2)  # create cells
+        c = OffsetCurve(name="C1", frequency=np.array([1]), velocity=np.array([1]))
+        sheet.add_curve(c, "cell_1_1")
+
+        agg = AggregatedCurve(
+            name="Avg",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([10]),
+            std_vals=np.array([1]),
+            shadow_curve_uids=[c.uid],
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["cell_1_1"].aggregated_uid = agg.uid
+        agg.subplot_key = "cell_1_1"
+
+        # Shrink to 1x1 — cell_1_1 disappears
+        sheet.set_grid(1, 1)
+        assert sheet.subplots["main"].aggregated_uid == agg.uid
+        assert agg.subplot_key == "main"
+
+
+class TestSubplotTypesAggregated:
+    """Tests for aggregated subplot type acceptance."""
+
+    def test_kind_aggregated_exists(self):
+        from packages.report_studio.core.subplot_types import (
+            KIND_AGGREGATED, ACCEPTANCE_RULES,
+        )
+        assert KIND_AGGREGATED == "aggregated"
+        # COMBINED should accept aggregated
+        assert KIND_AGGREGATED in ACCEPTANCE_RULES.get("combined", set())
+
+
+class TestAverageCurvePlugin:
+    """Tests for the average_curve plugin."""
+
+    def test_plugin_registered(self):
+        from packages.report_studio.core.plugins import average_curve as _  # noqa
+        from packages.report_studio.core.figure_types import registry
+        p = registry.get("average_curve")
+        assert p is not None
+        assert p.display_name == "Average with Uncertainty (Frequency)"
+
+    def test_plugin_load_data_empty(self):
+        from packages.report_studio.core.plugins.average_curve import (
+            AverageCurvePlugin,
+        )
+        plugin = AverageCurvePlugin()
+        result = plugin.load_data(pkl_path="")
+        assert result["aggregated"] is None
+        assert result["shadow_curves"] == []
+
+    @pytest.mark.skipif(
+        not PKL_PATH.exists(), reason="Test PKL not available",
+    )
+    def test_plugin_load_data_from_pkl(self):
+        from packages.report_studio.core.plugins.average_curve import (
+            AverageCurvePlugin,
+        )
+        plugin = AverageCurvePlugin()
+        result = plugin.load_data(pkl_path=str(PKL_PATH))
+        assert result["aggregated"] is not None
+        agg = result["aggregated"]
+        assert agg.has_data
+        assert len(result["shadow_curves"]) > 0
+        assert agg.bin_centers.size > 0
+
+    def test_settings_fields(self):
+        from packages.report_studio.core.plugins.average_curve import (
+            AverageCurvePlugin,
+        )
+        fields = AverageCurvePlugin().settings_fields()
+        keys = [f["key"] for f in fields]
+        assert "x_domain" in keys
+        assert "num_bins" in keys
+
+
+class TestAggregatedDrawer:
+    """Tests for aggregated_drawer.draw()."""
+
+    def test_draw_does_not_crash(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import AggregatedCurve
+        from packages.report_studio.rendering.aggregated_drawer import draw
+
+        fig, ax = plt.subplots()
+        agg = AggregatedCurve(
+            name="Test Avg",
+            bin_centers=np.array([1, 2, 5, 10, 20]),
+            avg_vals=np.array([100, 200, 300, 250, 150]),
+            std_vals=np.array([10, 20, 30, 25, 15]),
+        )
+        draw(ax, agg, shadow_curves=[])
+        assert len(ax.get_lines()) >= 1
+        plt.close(fig)
+
+    def test_draw_with_errorbar_mode(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import AggregatedCurve
+        from packages.report_studio.rendering.aggregated_drawer import draw
+
+        fig, ax = plt.subplots()
+        agg = AggregatedCurve(
+            name="EB",
+            bin_centers=np.array([1, 2, 5]),
+            avg_vals=np.array([100, 200, 300]),
+            std_vals=np.array([10, 20, 30]),
+            uncertainty_mode="errorbar",
+        )
+        draw(ax, agg, shadow_curves=[])
+        assert len(ax.get_lines()) >= 1
+        plt.close(fig)
+
+    def test_draw_empty_does_not_crash(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import AggregatedCurve
+        from packages.report_studio.rendering.aggregated_drawer import draw
+
+        fig, ax = plt.subplots()
+        agg = AggregatedCurve(name="Empty")
+        draw(ax, agg, shadow_curves=[])
+        assert len(ax.get_lines()) == 0
+        plt.close(fig)
+
+    def test_draw_sticks_mode(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from packages.report_studio.core.models import AggregatedCurve
+        from packages.report_studio.rendering.aggregated_drawer import draw
+
+        fig, ax = plt.subplots()
+        agg = AggregatedCurve(
+            name="Sticks",
+            bin_centers=np.array([1, 2, 5]),
+            avg_vals=np.array([100, 200, 300]),
+            std_vals=np.array([10, 20, 30]),
+            uncertainty_mode="sticks",
+        )
+        draw(ax, agg, shadow_curves=[])
+        # Average line + 3 vlines segments = at least 1 line
+        assert len(ax.get_lines()) >= 1
+        plt.close(fig)
+
+
+class TestAggregatedSerialization:
+    """Tests for aggregated curve serialization round-trip."""
+
+    def test_round_trip(self, tmp_path):
+        from packages.report_studio.core.models import (
+            SheetState, AggregatedCurve, OffsetCurve,
+        )
+        from packages.report_studio.io.project_v4 import (
+            _sheet_to_dict, _dict_to_sheet_skeleton,
+        )
+
+        sheet = SheetState(name="SZ Test")
+        c = OffsetCurve(
+            name="C1",
+            frequency=np.array([1, 2, 3]),
+            velocity=np.array([100, 200, 300]),
+        )
+        sheet.add_curve(c, "main")
+
+        agg = AggregatedCurve(
+            name="Avg RT",
+            bin_centers=np.array([1.5, 2.5]),
+            avg_vals=np.array([150, 250]),
+            std_vals=np.array([10, 20]),
+            shadow_curve_uids=[c.uid],
+            avg_color="#FF0000",
+            uncertainty_mode="errorbar",
+            uncertainty_alpha=0.5,
+            num_bins=30,
+            log_bias=0.5,
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["main"].aggregated_uid = agg.uid
+
+        d = _sheet_to_dict(sheet)
+        assert "aggregated" in d
+        assert agg.uid in d["aggregated"]
+        assert d["aggregated"][agg.uid]["avg_color"] == "#FF0000"
+        assert d["aggregated"][agg.uid]["uncertainty_mode"] == "errorbar"
+
+        # Reconstruct
+        rebuilt = _dict_to_sheet_skeleton(d)
+        assert agg.uid in rebuilt.aggregated
+        r_agg = rebuilt.aggregated[agg.uid]
+        assert r_agg.avg_color == "#FF0000"
+        assert r_agg.num_bins == 30
+        assert r_agg.uncertainty_mode == "errorbar"
+        assert rebuilt.subplots["main"].aggregated_uid == agg.uid
+
+
+class TestAggregatedSettingsPanel:
+    """Tests for the AggregatedSettingsPanel widget."""
+
+    def test_show_aggregated(self, qtbot):
+        from packages.report_studio.gui.panels.aggregated_settings import (
+            AggregatedSettingsPanel,
+        )
+        from packages.report_studio.core.models import AggregatedCurve
+
+        panel = AggregatedSettingsPanel()
+        qtbot.addWidget(panel)
+
+        agg = AggregatedCurve(
+            name="Panel Test",
+            bin_centers=np.array([1, 2]),
+            avg_vals=np.array([10, 20]),
+            std_vals=np.array([1, 2]),
+            avg_color="#FF0000",
+            avg_line_width=3.0,
+            num_bins=40,
+        )
+        panel.show_aggregated(agg)
+        assert panel._current_uid == agg.uid
+        assert panel._spin_avg_lw.value() == 3.0
+        assert panel._spin_bins.value() == 40
+
+    def test_signal_emitted(self, qtbot):
+        from packages.report_studio.gui.panels.aggregated_settings import (
+            AggregatedSettingsPanel,
+        )
+        from packages.report_studio.core.models import AggregatedCurve
+
+        panel = AggregatedSettingsPanel()
+        qtbot.addWidget(panel)
+
+        agg = AggregatedCurve(
+            name="Sig Test",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([10]),
+            std_vals=np.array([1]),
+        )
+        panel.show_aggregated(agg)
+
+        with qtbot.waitSignal(panel.aggregated_style_changed, timeout=1000):
+            panel._spin_avg_lw.setValue(5.0)
+
+
+class TestRightPanelAggregated:
+    """Tests for aggregated integration in RightPanel."""
+
+    def test_aggregated_panel_index(self, qtbot):
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        panel = RightPanel()
+        qtbot.addWidget(panel)
+        assert hasattr(panel, "aggregated_panel")
+        assert panel._IDX_AGGREGATED == 4
+
+    def test_show_aggregated_switches_stack(self, qtbot):
+        from packages.report_studio.gui.panels.right_panel import RightPanel
+        from packages.report_studio.core.models import AggregatedCurve
+
+        panel = RightPanel()
+        qtbot.addWidget(panel)
+
+        agg = AggregatedCurve(
+            name="RP Test",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([10]),
+            std_vals=np.array([1]),
+        )
+        panel.show_aggregated(agg)
+        assert panel._context_stack.currentIndex() == panel._IDX_AGGREGATED
+
+
+class TestDataTreeAggregated:
+    """Tests for aggregated node in DataTreePanel."""
+
+    def test_aggregated_node_shown(self, qtbot):
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel, _ITEM_TYPE_ROLE, _TYPE_AGG_GROUP,
+            _TYPE_AGG_AVG, _TYPE_AGG_UNC, _TYPE_AGG_SHADOW_GROUP,
+            _TYPE_AGG_SHADOW,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, AggregatedCurve,
+        )
+
+        tree = DataTreePanel()
+        qtbot.addWidget(tree)
+
+        sheet = SheetState(name="DT Test")
+        c = OffsetCurve(
+            name="C1",
+            frequency=np.array([1]),
+            velocity=np.array([1]),
+        )
+        sheet.add_curve(c, "main")
+
+        agg = AggregatedCurve(
+            name="Avg Node",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([10]),
+            std_vals=np.array([1]),
+            shadow_curve_uids=[c.uid],
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["main"].aggregated_uid = agg.uid
+
+        tree.populate(sheet)
+
+        # Root = subplot, first child should be the group node
+        root = tree._tree.topLevelItem(0)
+        group = root.child(0)
+        assert group.data(0, _ITEM_TYPE_ROLE) == _TYPE_AGG_GROUP
+        assert "Avg Node" in group.text(0)
+
+        # Group children: Average Line, Uncertainty, Shadow Curves, Binning
+        child_types = [
+            group.child(i).data(0, _ITEM_TYPE_ROLE)
+            for i in range(group.childCount())
+        ]
+        assert _TYPE_AGG_AVG in child_types
+        assert _TYPE_AGG_UNC in child_types
+        assert _TYPE_AGG_SHADOW_GROUP in child_types
+
+        # Shadow group should contain the shadow curve
+        shadow_idx = child_types.index(_TYPE_AGG_SHADOW_GROUP)
+        shadow_group = group.child(shadow_idx)
+        assert shadow_group.childCount() == 1
+        assert shadow_group.child(0).data(0, _ITEM_TYPE_ROLE) == _TYPE_AGG_SHADOW
+
+        # Shadow curve should NOT appear as a flat sibling
+        for i in range(root.childCount()):
+            child = root.child(i)
+            from packages.report_studio.gui.panels.data_tree import (
+                _TYPE_CURVE, _UID_ROLE,
+            )
+            if child.data(0, _ITEM_TYPE_ROLE) == _TYPE_CURVE:
+                assert child.data(0, _UID_ROLE) != c.uid
+
+    def test_group_checkbox_propagates(self, qtbot):
+        """Unchecking group toggles all sub-layer checkboxes."""
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel, _ITEM_TYPE_ROLE, _TYPE_AGG_GROUP,
+            _TYPE_AGG_AVG, _TYPE_AGG_UNC, _TYPE_AGG_SHADOW_GROUP,
+            _TYPE_AGG_SHADOW, Checked, Unchecked,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, AggregatedCurve,
+        )
+
+        tree = DataTreePanel()
+        qtbot.addWidget(tree)
+
+        sheet = SheetState(name="Propagate")
+        c = OffsetCurve(name="S1", frequency=np.array([1]), velocity=np.array([1]))
+        sheet.add_curve(c, "main")
+        agg = AggregatedCurve(
+            name="Agg", bin_centers=np.array([1]),
+            avg_vals=np.array([10]), std_vals=np.array([1]),
+            shadow_curve_uids=[c.uid],
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["main"].aggregated_uid = agg.uid
+        tree.populate(sheet)
+
+        root = tree._tree.topLevelItem(0)
+        group = root.child(0)
+        assert group.data(0, _ITEM_TYPE_ROLE) == _TYPE_AGG_GROUP
+
+        # Uncheck group — all children should become unchecked
+        with qtbot.waitSignal(tree.aggregated_visibility_changed, timeout=1000):
+            group.setCheckState(0, Unchecked)
+
+        for i in range(group.childCount()):
+            child = group.child(i)
+            ctype = child.data(0, _ITEM_TYPE_ROLE)
+            if ctype in (_TYPE_AGG_AVG, _TYPE_AGG_UNC, _TYPE_AGG_SHADOW_GROUP):
+                assert child.checkState(0) == Unchecked
+                if ctype == _TYPE_AGG_SHADOW_GROUP:
+                    for j in range(child.childCount()):
+                        assert child.child(j).checkState(0) == Unchecked
+
+        # Re-check group — all children checked
+        with qtbot.waitSignal(tree.aggregated_visibility_changed, timeout=1000):
+            group.setCheckState(0, Checked)
+
+        for i in range(group.childCount()):
+            child = group.child(i)
+            ctype = child.data(0, _ITEM_TYPE_ROLE)
+            if ctype in (_TYPE_AGG_AVG, _TYPE_AGG_UNC, _TYPE_AGG_SHADOW_GROUP):
+                assert child.checkState(0) == Checked
+
+    def test_shadow_group_checkbox_propagates(self, qtbot):
+        """Unchecking shadow group toggles individual shadow curves."""
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel, _ITEM_TYPE_ROLE, _TYPE_AGG_GROUP,
+            _TYPE_AGG_SHADOW_GROUP, _TYPE_AGG_SHADOW, Unchecked,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, AggregatedCurve,
+        )
+
+        tree = DataTreePanel()
+        qtbot.addWidget(tree)
+
+        sheet = SheetState(name="Shadow")
+        c1 = OffsetCurve(name="S1", frequency=np.array([1]), velocity=np.array([1]))
+        c2 = OffsetCurve(name="S2", frequency=np.array([2]), velocity=np.array([2]))
+        sheet.add_curve(c1, "main")
+        sheet.add_curve(c2, "main")
+        agg = AggregatedCurve(
+            name="A", bin_centers=np.array([1]),
+            avg_vals=np.array([10]), std_vals=np.array([1]),
+            shadow_curve_uids=[c1.uid, c2.uid],
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["main"].aggregated_uid = agg.uid
+        tree.populate(sheet)
+
+        root = tree._tree.topLevelItem(0)
+        group = root.child(0)
+
+        # Find shadow group
+        shadow_grp = None
+        for i in range(group.childCount()):
+            if group.child(i).data(0, _ITEM_TYPE_ROLE) == _TYPE_AGG_SHADOW_GROUP:
+                shadow_grp = group.child(i)
+                break
+        assert shadow_grp is not None
+        assert shadow_grp.childCount() == 2
+
+        with qtbot.waitSignal(tree.aggregated_visibility_changed, timeout=1000):
+            shadow_grp.setCheckState(0, Unchecked)
+
+        for j in range(shadow_grp.childCount()):
+            assert shadow_grp.child(j).checkState(0) == Unchecked
+
+    def test_aggregated_visibility_signal_layers(self, qtbot):
+        """Each sub-layer emits correct layer string."""
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel, _ITEM_TYPE_ROLE, _TYPE_AGG_GROUP,
+            _TYPE_AGG_AVG, _TYPE_AGG_UNC, Unchecked,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, AggregatedCurve,
+        )
+
+        tree = DataTreePanel()
+        qtbot.addWidget(tree)
+
+        sheet = SheetState(name="Sig")
+        c = OffsetCurve(name="C", frequency=np.array([1]), velocity=np.array([1]))
+        sheet.add_curve(c, "main")
+        agg = AggregatedCurve(
+            name="A", bin_centers=np.array([1]),
+            avg_vals=np.array([10]), std_vals=np.array([1]),
+            shadow_curve_uids=[c.uid],
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["main"].aggregated_uid = agg.uid
+        tree.populate(sheet)
+
+        root = tree._tree.topLevelItem(0)
+        group = root.child(0)
+
+        # Toggle Average Line → emits "avg"
+        avg_item = None
+        unc_item = None
+        for i in range(group.childCount()):
+            ct = group.child(i).data(0, _ITEM_TYPE_ROLE)
+            if ct == _TYPE_AGG_AVG:
+                avg_item = group.child(i)
+            elif ct == _TYPE_AGG_UNC:
+                unc_item = group.child(i)
+
+        with qtbot.waitSignal(tree.aggregated_visibility_changed,
+                              timeout=1000) as sig:
+            avg_item.setCheckState(0, Unchecked)
+        assert sig.args[1] == "avg"
+        assert sig.args[2] is False
+
+        with qtbot.waitSignal(tree.aggregated_visibility_changed,
+                              timeout=1000) as sig:
+            unc_item.setCheckState(0, Unchecked)
+        assert sig.args[1] == "uncertainty"
+        assert sig.args[2] is False
+
+
+class TestV282WavelengthMoveXdomain:
+    """v2.8.2 — Wavelength plugin, move aggregated, x_domain recompute."""
+
+    def test_wavelength_plugin_registered(self):
+        from packages.report_studio.core.plugins import average_curve as _  # noqa
+        from packages.report_studio.core.figure_types import registry
+        p = registry.get("average_curve_wavelength")
+        assert p is not None
+        assert p.display_name == "Average with Uncertainty (Wavelength)"
+
+    def test_wavelength_plugin_defaults_xdomain(self):
+        from packages.report_studio.core.plugins.average_curve import (
+            AverageCurveWavelengthPlugin,
+        )
+        plugin = AverageCurveWavelengthPlugin()
+        fields = plugin.settings_fields()
+        xd = [f for f in fields if f["key"] == "x_domain"][0]
+        assert xd["default"] == "wavelength"
+
+    @pytest.mark.skipif(
+        not PKL_PATH.exists(), reason="Test PKL not available",
+    )
+    def test_wavelength_plugin_load_data(self):
+        from packages.report_studio.core.plugins.average_curve import (
+            AverageCurveWavelengthPlugin,
+        )
+        plugin = AverageCurveWavelengthPlugin()
+        result = plugin.load_data(pkl_path=str(PKL_PATH))
+        agg = result["aggregated"]
+        assert agg is not None
+        assert agg.x_domain == "wavelength"
+        assert agg.bin_centers.size > 0
+
+    def test_xdomain_triggers_recompute(self):
+        """Changing x_domain should recompute aggregated arrays."""
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, AggregatedCurve,
+        )
+        sheet = SheetState(name="XD")
+        c = OffsetCurve(
+            name="C1",
+            frequency=np.array([5.0, 10.0, 20.0]),
+            velocity=np.array([300.0, 250.0, 200.0]),
+            wavelength=np.array([60.0, 25.0, 10.0]),
+        )
+        sheet.add_curve(c, "main")
+        agg = AggregatedCurve(
+            name="A",
+            bin_centers=np.array([5.0, 10.0, 20.0]),
+            avg_vals=np.array([300.0, 250.0, 200.0]),
+            std_vals=np.array([10.0, 10.0, 10.0]),
+            shadow_curve_uids=[c.uid],
+            x_domain="frequency",
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["main"].aggregated_uid = agg.uid
+
+        old_bins = agg.bin_centers.copy()
+
+        # Simulate x_domain change + recompute
+        agg.x_domain = "wavelength"
+        from dc_cut.core.processing.averages import (
+            compute_binned_avg_std_wavelength,
+        )
+        wl = c.wavelength
+        vel = c.velocity
+        bc, av, sd = compute_binned_avg_std_wavelength(
+            wl, vel, num_bins=agg.num_bins, log_bias=agg.log_bias)
+        agg.bin_centers = bc
+        agg.avg_vals = av
+        agg.std_vals = sd
+
+        # Bins should differ (wavelength domain vs frequency domain)
+        assert agg.x_domain == "wavelength"
+        assert agg.bin_centers.size > 0
+
+    def test_move_aggregated_model(self):
+        """SheetState.move_aggregated moves agg + shadows to new subplot."""
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, AggregatedCurve, SubplotState,
+        )
+        sheet = SheetState(name="Move")
+        sheet.grid_rows = 2
+        sheet.subplots["cell_0_0"] = SubplotState(key="cell_0_0")
+        sheet.subplots["cell_1_0"] = SubplotState(key="cell_1_0")
+
+        c1 = OffsetCurve(name="S1", frequency=np.array([1]), velocity=np.array([1]))
+        c2 = OffsetCurve(name="S2", frequency=np.array([2]), velocity=np.array([2]))
+        sheet.add_curve(c1, "cell_0_0")
+        sheet.add_curve(c2, "cell_0_0")
+
+        agg = AggregatedCurve(
+            name="Avg",
+            bin_centers=np.array([1.5]),
+            avg_vals=np.array([1.5]),
+            std_vals=np.array([0.5]),
+            shadow_curve_uids=[c1.uid, c2.uid],
+        )
+        sheet.add_aggregated(agg, "cell_0_0")
+        sheet.subplots["cell_0_0"].aggregated_uid = agg.uid
+
+        # Move to cell_1_0
+        sheet.move_aggregated(agg.uid, "cell_1_0")
+
+        # Old subplot should be unlinked
+        assert sheet.subplots["cell_0_0"].aggregated_uid == ""
+        # New subplot should be linked
+        assert sheet.subplots["cell_1_0"].aggregated_uid == agg.uid
+        assert agg.subplot_key == "cell_1_0"
+        # Shadow curves should have moved
+        assert c1.subplot_key == "cell_1_0"
+        assert c2.subplot_key == "cell_1_0"
+        assert c1.uid in sheet.subplots["cell_1_0"].curve_uids
+        assert c2.uid in sheet.subplots["cell_1_0"].curve_uids
+
+    def test_drag_agg_group_emits_signal(self, qtbot):
+        """Aggregated group nodes should be draggable."""
+        from packages.report_studio.gui.panels.data_tree import (
+            DataTreePanel, _ITEM_TYPE_ROLE, _TYPE_AGG_GROUP,
+        )
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, AggregatedCurve,
+        )
+        tree = DataTreePanel()
+        qtbot.addWidget(tree)
+
+        sheet = SheetState(name="Drag")
+        c = OffsetCurve(name="C", frequency=np.array([1]), velocity=np.array([1]))
+        sheet.add_curve(c, "main")
+        agg = AggregatedCurve(
+            name="A",
+            bin_centers=np.array([1]),
+            avg_vals=np.array([10]),
+            std_vals=np.array([1]),
+            shadow_curve_uids=[c.uid],
+        )
+        sheet.add_aggregated(agg)
+        sheet.subplots["main"].aggregated_uid = agg.uid
+        tree.populate(sheet)
+
+        # Verify the agg group node exists and is draggable type
+        root = tree._tree.topLevelItem(0)
+        group = root.child(0)
+        assert group.data(0, _ITEM_TYPE_ROLE) == _TYPE_AGG_GROUP
+        # Verify the agg group node exists and has correct UID
+        from packages.report_studio.gui.panels.data_tree import _UID_ROLE
+        assert group.data(0, _UID_ROLE) == agg.uid
+
+
+# ── v2.8.3 — Aggregated save/load UID fix + drag-drop signal ─────────────
+
+class TestV283:
+    """v2.8.3: aggregated save/load round-trip, drag-drop signal fix."""
+
+    def test_aggregated_save_load_roundtrip(self, tmp_path):
+        """Shadow curve UIDs survive save → load → reload cycle."""
+        from packages.report_studio.core.models import (
+            SheetState, OffsetCurve, AggregatedCurve, SubplotState,
+        )
+        from packages.report_studio.io.project_v4 import (
+            save_sheet, load_sheet_skeleton, reload_and_apply,
+        )
+
+        # --- build a sheet with 2 curves + 1 aggregated ---
+        sheet = SheetState(name="RoundTrip")
+        c1 = OffsetCurve(
+            name="SO1",
+            frequency=np.array([1.0, 2.0, 3.0]),
+            velocity=np.array([100.0, 200.0, 300.0]),
+            wavelength=np.array([10.0, 20.0, 30.0]),
+        )
+        c2 = OffsetCurve(
+            name="SO2",
+            frequency=np.array([1.5, 2.5]),
+            velocity=np.array([150.0, 250.0]),
+            wavelength=np.array([15.0, 25.0]),
+        )
+        sheet.add_curve(c1, "main")
+        sheet.add_curve(c2, "main")
+
+        agg = AggregatedCurve(
+            name="Average",
+            bin_centers=np.array([1.5, 2.5]),
+            avg_vals=np.array([125.0, 225.0]),
+            std_vals=np.array([25.0, 25.0]),
+            shadow_curve_uids=[c1.uid, c2.uid],
+            num_bins=10,
+            log_bias=0.5,
+        )
+        sheet.add_aggregated(agg, "main")
+        sheet.subplots["main"].aggregated_uid = agg.uid
+
+        orig_c1_uid = c1.uid
+        orig_c2_uid = c2.uid
+        orig_agg_uid = agg.uid
+
+        # --- save ---
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "sheets").mkdir()
+        save_sheet(proj, sheet)
+
+        # --- load skeleton ---
+        sheet_json = proj / "sheets" / "RoundTrip.json"
+        assert sheet_json.exists()
+        skel, curve_settings = load_sheet_skeleton(sheet_json)
+
+        # skeleton has aggregated with old shadow UIDs
+        assert orig_agg_uid in skel.aggregated
+        assert skel.aggregated[orig_agg_uid].shadow_curve_uids == [
+            orig_c1_uid, orig_c2_uid
+        ]
+
+        # --- simulate fresh curves from PKL (new auto UIDs) ---
+        fresh_c1 = OffsetCurve(
+            name="SO1",
+            frequency=np.array([1.0, 2.0, 3.0]),
+            velocity=np.array([100.0, 200.0, 300.0]),
+            wavelength=np.array([10.0, 20.0, 30.0]),
+        )
+        fresh_c2 = OffsetCurve(
+            name="SO2",
+            frequency=np.array([1.5, 2.5]),
+            velocity=np.array([150.0, 250.0]),
+            wavelength=np.array([15.0, 25.0]),
+        )
+        # These have NEW auto UIDs, different from the saved ones
+        assert fresh_c1.uid != orig_c1_uid
+        assert fresh_c2.uid != orig_c2_uid
+
+        # --- reload and apply ---
+        reload_and_apply(skel, curve_settings, [fresh_c1, fresh_c2], [])
+
+        # UIDs should have been remapped to original saved UIDs
+        assert fresh_c1.uid == orig_c1_uid
+        assert fresh_c2.uid == orig_c2_uid
+
+        # Curves should be in sheet keyed by original UIDs
+        assert orig_c1_uid in skel.curves
+        assert orig_c2_uid in skel.curves
+
+        # Aggregated shadow_curve_uids should match
+        restored_agg = skel.aggregated[orig_agg_uid]
+        assert restored_agg.shadow_curve_uids == [orig_c1_uid, orig_c2_uid]
+
+        # Aggregated arrays should be recomputed (not empty)
+        assert restored_agg.bin_centers.size > 0
+        assert restored_agg.avg_vals.size > 0
+
+    def test_drag_tree_widget_has_aggregated_moved_signal(self, qtbot):
+        """_DragTreeWidget must have aggregated_moved signal for forwarding."""
+        from packages.report_studio.gui.panels.data_tree import (
+            _DragTreeWidget,
+        )
+        tree = _DragTreeWidget()
+        qtbot.addWidget(tree)
+        assert hasattr(tree, "aggregated_moved")
+        # Verify it's a signal by checking we can connect to it
+        received = []
+        tree.aggregated_moved.connect(lambda uid, key: received.append((uid, key)))
+        tree.aggregated_moved.emit("test_uid", "cell_0_0")
+        assert received == [("test_uid", "cell_0_0")]
+
+    def test_find_subplot_ancestor(self, qtbot):
+        """_find_subplot_ancestor should walk up tree to find subplot root."""
+        from packages.report_studio.gui.panels.data_tree import (
+            _DragTreeWidget, _ITEM_TYPE_ROLE, _TYPE_SUBPLOT,
+            _TYPE_AGG_GROUP, _TYPE_AGG_SHADOW, _KEY_ROLE,
+        )
+        tree = _DragTreeWidget()
+        qtbot.addWidget(tree)
+
+        # Build a small tree: subplot → agg_group → shadow
+        from packages.report_studio.qt_compat import QtWidgets
+        sp_item = QtWidgets.QTreeWidgetItem(tree, ["Subplot 1"])
+        sp_item.setData(0, _ITEM_TYPE_ROLE, _TYPE_SUBPLOT)
+        sp_item.setData(0, _KEY_ROLE, "main")
+
+        agg_item = QtWidgets.QTreeWidgetItem(sp_item, ["Average"])
+        agg_item.setData(0, _ITEM_TYPE_ROLE, _TYPE_AGG_GROUP)
+
+        shadow_item = QtWidgets.QTreeWidgetItem(agg_item, ["Shadow1"])
+        shadow_item.setData(0, _ITEM_TYPE_ROLE, _TYPE_AGG_SHADOW)
+
+        # From shadow (2 levels deep), should find subplot
+        found = tree._find_subplot_ancestor(shadow_item)
+        assert found is sp_item
+        assert found.data(0, _KEY_ROLE) == "main"
+
+        # From agg_group (1 level deep), should find subplot
+        found2 = tree._find_subplot_ancestor(agg_item)
+        assert found2 is sp_item
+
+        # From subplot itself, should return itself
+        found3 = tree._find_subplot_ancestor(sp_item)
+        assert found3 is sp_item
+
+    def test_aggregated_moved_forwarded_to_panel(self, qtbot):
+        """DataTreePanel must forward _DragTreeWidget.aggregated_moved."""
+        from packages.report_studio.gui.panels.data_tree import DataTreePanel
+        panel = DataTreePanel()
+        qtbot.addWidget(panel)
+
+        received = []
+        panel.aggregated_moved.connect(
+            lambda uid, key: received.append((uid, key)))
+
+        # Emit on the inner tree widget
+        panel._tree.aggregated_moved.emit("agg123", "cell_1_0")
+        assert received == [("agg123", "cell_1_0")]

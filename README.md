@@ -33,7 +33,7 @@ DC Cut streamlines the workflow of cleaning, editing, and exporting dispersion c
 | **Spectral Power Overlay** | Load and display power spectrum backgrounds from `.npz` files |
 | **Layer Management** | Per-layer visibility, color, marker, and style customization |
 | **Export Wizard** | Resample, smooth, and export cleaned curves to Geopsy-compatible TXT, CSV, or state files |
-| **Publication Figures** | Comprehensive generator for camera-ready plots with uncertainty bands |
+| **Report Generation** | Comprehensive generator for camera-ready plots with uncertainty bands |
 | **Undo / Redo** | Full history stack for all editing operations |
 
 ---
@@ -97,7 +97,7 @@ Evaluate near-field contamination using the NACD (Normalized Array Center Distan
 
 ---
 
-### 📊 Publication Figure Generator
+### 📊 Report Generation
 
 A comprehensive figure export dialog with categorized plot types — frequency/wavelength domain curves, modal analysis, uncertainty visualization, near-field analysis, spectral grids, and more. Configurable styling, axis limits, and output format (PDF, SVG, PNG, EPS).
 
@@ -253,7 +253,7 @@ The **Launcher Window** will appear, letting you select a data file and processi
 | Geopsy TXT | `.txt` | Frequency, slowness, DinverStd, number of points |
 | Passive Stats | `.csv` | Mean frequency, slowness, uncertainty, and point count |
 | Session State | `.pkl` | Complete session for later restore |
-| Publication Figures | `.pdf` / `.svg` / `.png` / `.eps` | Camera-ready vector and raster figures |
+| Report Figures | `.pdf` / `.svg` / `.png` / `.eps` | Camera-ready vector and raster figures |
 
 ---
 
@@ -295,7 +295,7 @@ dc_cut/
 │   ├── data_model.py       # CurveDataModel
 │   └── processing_panel.py # Smoothing & resampling controls
 │
-├── pub_figures/            # Publication-quality figure generator
+├── packages/report_generation/  # Report generation (publication-quality figures)
 ├── services/               # Preferences, theming, logging, actions
 ├── circular_array/         # Circular array processing
 ├── theoretical_curves/     # Theoretical curve overlay support
@@ -319,7 +319,7 @@ DC Cut follows a **layered, modular architecture** with an Action Registry:
 | **GUI** | `gui/` | PyQt6 application with menus, toolbars, docks, and Matplotlib-embedded canvases |
 | **I/O** | `io/` | Format-specific readers and writers (MAT, CSV, MAX, TXT, state) |
 | **Export Wizard** | `export_wizard/` | Interactive resampling, smoothing, and export pipeline |
-| **Pub Figures** | `pub_figures/` | Publication-quality figure generator with extensive plot type catalog |
+| **Report Generation** | `packages/report_generation/` | Publication-quality figure generator with extensive plot type catalog |
 | **Services** | `services/` | Cross-cutting concerns — preferences, theming, logging, action registry |
 
 ---
