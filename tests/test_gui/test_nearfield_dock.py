@@ -93,7 +93,7 @@ def _isolate_prefs(tmp_path, monkeypatch):
 @pytest.fixture
 def dock(qt_app, tmp_path, monkeypatch):
     _isolate_prefs(tmp_path, monkeypatch)
-    from dc_cut.gui.views.nearfield_dock_new import NearFieldEvalDock
+    from dc_cut.gui.views.nearfield_dock import NearFieldEvalDock
     ctrl = _build_mock_controller()
     return NearFieldEvalDock(ctrl)
 
@@ -102,7 +102,7 @@ def dock(qt_app, tmp_path, monkeypatch):
 #  Tests
 # ---------------------------------------------------------------------
 def test_import_alias(qt_app):
-    from dc_cut.gui.views.nearfield_dock_new import (
+    from dc_cut.gui.views.nearfield_dock import (
         NearFieldEvalDock,
         NearFieldAnalysisDock,
     )
@@ -137,7 +137,7 @@ def test_backward_compat_shims(dock):
 
 
 def test_range_gate_single_vs_multi(dock):
-    from dc_cut.gui.views.nearfield_dock_new.common import refresh_offset_checks
+    from dc_cut.gui.views.nearfield_dock.common import refresh_offset_checks
     refresh_offset_checks(
         dock, dock._nacd_tab.offset_checks, dock._nacd_tab.offset_layout
     )
@@ -180,8 +180,8 @@ def test_reference_derivation_with_synthetic_vf(qt_app):
 def test_prefs_round_trip(qt_app, tmp_path, monkeypatch):
     _isolate_prefs(tmp_path, monkeypatch)
     from dc_cut.core.processing.nearfield.ranges import EvaluationRange
-    from dc_cut.gui.views.nearfield_dock_new import NearFieldEvalDock
-    from dc_cut.gui.views.nearfield_dock_new.prefs_io import save_range_prefs
+    from dc_cut.gui.views.nearfield_dock import NearFieldEvalDock
+    from dc_cut.gui.views.nearfield_dock.prefs_io import save_range_prefs
 
     ctrl = _build_mock_controller()
     dock = NearFieldEvalDock(ctrl)
