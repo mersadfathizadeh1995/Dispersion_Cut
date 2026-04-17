@@ -74,6 +74,43 @@ class LimitsCoordinator:
         self.tab.refresh(self.current_derived_set)
         self.redraw_on_canvas()
 
+    def rebuild_tree_with_set(
+        self,
+        derived: DerivedLimitSet,
+        *,
+        hide_freq_by_default: bool = False,
+    ) -> None:
+        """Install an already-computed :class:`DerivedLimitSet`.
+
+        Used by the no-range run paths (NACD-Only and Reference) to
+        publish ``λ``/``f`` lines derived directly from per-offset
+        ``λ_max`` values so they appear in the Limit Lines tree.
+
+        If ``hide_freq_by_default`` is true, every ``freq`` leaf in
+        the set whose visibility hasn't been touched by the user yet
+        is seeded to ``False`` — this is the behaviour requested for
+        NACD-Only with no evaluation range, where the user wanted the
+        ``f`` lines drawable (via the tree) but off at first sight.
+        """
+        self.current_derived_set = derived
+        state = self.current_state()
+        if hide_freq_by_default and derived is not None:
+            for ln in derived.lines:
+                if ln.kind != "freq":
+                    continue
+                leaf_key = (ln.band_index, "freq", ln.role)
+                # Only seed the first time we see this key; never
+                # overwrite an explicit user choice.
+                if leaf_key not in state.visible:
+                    state.visible[leaf_key] = False
+        if self.active_mode == "m2":
+            self.state_m2 = state
+        else:
+            self.state_m1 = state
+        self.tab.set_state(state)
+        self.tab.refresh(derived)
+        self.redraw_on_canvas()
+
     def redraw_on_canvas(self) -> None:
         """Clear and redraw NF limit lines from the active DerivedLimitSet."""
         dock = self.dock
@@ -103,14 +140,17 @@ class LimitsCoordinator:
             return
 
         def _style(key):
-            band_key = (key[0], "band", "band")
-            group_key = (key[0], key[1], "group")
-            if not state.get_visible(band_key, True):
-                return False, "#000000"
-            if not state.get_visible(group_key, True):
-                return False, "#000000"
+            # Visibility is driven PURELY by the per-leaf flag.  Band
+            # and group rows exist only as visual aggregators; when
+            # the user clicks them the tab propagates the new state
+            # into every leaf beneath, so reading the leaf here is
+            # enough.  (This fixes the earlier "one leaf toggles
+            # everything" bug caused by Qt auto-tristate writing
+            # PartiallyChecked into the parent's stored visibility.)
             if not state.get_visible(key, True):
                 return False, "#000000"
+            group_key = (key[0], key[1], "group")
+            band_key = (key[0], "band", "band")
             color = state.get_color(key, default="")
             if not color:
                 color = state.get_color(
@@ -136,7 +176,17 @@ class LimitsCoordinator:
         elif idx == 1:
             self.active_mode = "m2"
         if idx == 2:
-            self.rebuild_tree()
+            # Tab switching is pure navigation: re-sync the tab widget
+            # with whatever DerivedLimitSet is already installed, but
+            # NEVER re-derive from the range.  Re-deriving on tab
+            # change used to clobber the multi-band λ-only set that
+            # NacdTab/ReferenceTab install via ``rebuild_tree_with_set``
+            # (no-range runs) whenever the range widget still held a
+            # stale single-offset band.  If the user wants fresh lines
+            # they click Run.
+            self.tab.set_state(self.current_state())
+            self.tab.refresh(self.current_derived_set)
+            self.redraw_on_canvas()
 
     def _on_state_changed(self) -> None:
         """React to visibility/color edits made in the Limit Lines tab."""

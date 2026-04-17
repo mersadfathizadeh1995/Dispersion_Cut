@@ -230,17 +230,24 @@ class NacdTab(QtWidgets.QWidget):
     def run(self) -> None:
         """Run NACD-only evaluation on selected offsets.
 
-        Contamination rule per point (Rahimi et al. 2022; see
-        ``nearfield/criteria.py`` — "NACD threshold *below* which data
-        is considered near-field contaminated"):
+        Per user design, the filter used depends on what the user asked
+        for:
 
-            contaminated = (NACD < thr)  OR  (point outside user's EvaluationRange)
+        * **Single offset + non-empty evaluation range** — the range is
+          trusted as the definitive filter.  ``contaminated = ~in_range``.
+          The x\u0305/threshold criterion is *not* applied, because the
+          user has already told us which part of the curve they consider
+          valid.
+        * **Single offset + empty range**, OR **multiple offsets** — the
+          classical NACD rule takes over:
+          ``contaminated = (NACD < thr)`` (Rahimi et al. 2022; see
+          ``nearfield/criteria.py`` — "NACD threshold *below* which data
+          is considered near-field contaminated").  The user range is
+          irrelevant here.
 
-        In words: a point is contaminated when the source-to-array mean
-        distance x\u0305 is *small* compared to the pick's wavelength
-        (\u03bb >= x\u0305), i.e. the array can't resolve that long a
-        wavelength.  Short wavelengths (\u03bb < x\u0305, NACD >= thr)
-        are well resolved and stay clean.
+        This matches the rationale the user wrote out: "the maximum
+        Wavelength consideration should be for the condition in which we
+        don't give range or we select multiple source offsets."
         """
         dock = self.dock
         dock._clear_nf_overlays()
@@ -264,6 +271,10 @@ class NacdTab(QtWidgets.QWidget):
             self.ranges_widget.get_range() if single_offset
             else EvaluationRange()
         )
+        # Which filter do we apply?  Range-only when the user has given
+        # us an explicit range for a single offset; otherwise fall back
+        # to the classical NACD < threshold rule.
+        use_range_only = single_offset and not eval_range.is_empty()
 
         results = []
         for idx in selected:
@@ -278,7 +289,10 @@ class NacdTab(QtWidgets.QWidget):
             so = parse_source_offset_from_label(lbl)
             nacd = compute_nacd_array(recv, f, v, source_offset=so)
             in_range = compute_range_mask(f, v, eval_range)
-            mask = (nacd < thr) | (~in_range)
+            if use_range_only:
+                mask = ~in_range
+            else:
+                mask = (nacd < thr)
             x_bar = float(np.mean(np.abs(recv - (so if so is not None else 0.0))))
             lam_max = x_bar / max(thr, 1e-12)
             n_contam = int(np.sum(mask))
@@ -318,18 +332,27 @@ class NacdTab(QtWidgets.QWidget):
             finally:
                 dock._limits.force_vf_idx = None
         elif self.ranges_widget.show_lines() and results:
-            artists: list = []
+            # No evaluation range: publish one band per evaluated
+            # offset to the Limit Lines tree.  Each band holds the
+            # offset's own λ_max plus the *derived* f_min from that
+            # offset's V(f), so both kinds of line are toggle-able
+            # from the tree.  f-lines are hidden by default (as
+            # requested) — the user can tick them on.
+            from dc_cut.core.processing.nearfield.range_derivation import (
+                derive_limits_from_lambda_values,
+            )
+            lam_triples = []
             for r in results:
                 lam = float(r.get("lambda_max", 0.0))
                 if lam <= 0:
                     continue
-                artists.extend(draw_nf_limit_lines(
-                    dock.c.ax_freq, dock.c.ax_wave,
-                    lambda_max=lam,
-                    lambda_min=None,
-                    freq_bands=None,
-                ))
-            dock._nf_limit_artists = artists
+                f_arr = np.asarray(r.get("f", []), float)
+                v_arr = np.asarray(r.get("v", []), float)
+                lam_triples.append((lam, f_arr, v_arr))
+            derived = derive_limits_from_lambda_values(lam_triples)
+            dock._limits.rebuild_tree_with_set(
+                derived, hide_freq_by_default=True,
+            )
 
         dock._last_batch = results
         dock._overlay_offsets = selected

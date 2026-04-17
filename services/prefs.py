@@ -49,6 +49,21 @@ def load_prefs() -> Dict[str, Any]:
     # merge defaults
     out = dict(_DEFAULTS)
     out.update({k: v for k, v in data.items() if k in _DEFAULTS or True})
+
+    # One-shot migration: the default frequency tick style used to be
+    # "decades"; it was changed to "ruler".  If we detect a legacy
+    # prefs file that still carries the old default (and the user
+    # never migrated), flip it to "ruler" once so the new default
+    # actually surfaces in the Properties dock without forcing the
+    # user to edit a JSON file by hand.
+    if not out.get("_migrated_freq_tick_ruler_v1"):
+        if out.get("freq_tick_style") == "decades":
+            out["freq_tick_style"] = "ruler"
+        out["_migrated_freq_tick_ruler_v1"] = True
+        try:
+            save_prefs(out)
+        except Exception:
+            pass
     return out
 
 

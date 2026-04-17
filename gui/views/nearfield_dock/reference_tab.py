@@ -395,20 +395,31 @@ class ReferenceTab(QtWidgets.QWidget):
         if not eval_range.is_empty():
             dock._limits.rebuild_tree()
         else:
-            clear_nf_limit_lines(dock._nf_limit_artists)
+            # No evaluation range: publish every evaluated offset's
+            # own λ_max AND the reference's λ_max into the Limit
+            # Lines tree (each as its own band), together with their
+            # derived f-partners computed from the reference V(f).
+            # All are visible by default; the user can toggle/recolor
+            # individual lines from the tree.
             if self.ranges_widget.show_lines():
-                lam_max_vals = [
-                    r.get("lambda_max", 0.0)
-                    for r in results if r.get("lambda_max", 0.0) > 0
-                ]
-                draw_max = max(lam_max_vals) if lam_max_vals else 0.0
-                if draw_max > 0:
-                    dock._nf_limit_artists = draw_nf_limit_lines(
-                        dock.c.ax_freq, dock.c.ax_wave,
-                        lambda_max=float(draw_max),
-                        lambda_min=None,
-                        freq_bands=None,
-                    )
+                from dc_cut.core.processing.nearfield.range_derivation import (
+                    derive_limits_from_lambda_values,
+                )
+                triples: list = []
+                for r in results:
+                    lam = float(r.get("lambda_max", 0.0))
+                    if lam > 0:
+                        triples.append((lam, f_ref_full, v_ref_full))
+                ref_lam = float(getattr(ev, "_lambda_max_ref", 0.0) or 0.0)
+                if np.isfinite(ref_lam) and ref_lam > 0:
+                    triples.append((ref_lam, f_ref_full, v_ref_full))
+                derived = derive_limits_from_lambda_values(triples)
+                dock._limits.rebuild_tree_with_set(
+                    derived, hide_freq_by_default=False,
+                )
+            else:
+                clear_nf_limit_lines(dock._nf_limit_artists)
+                dock._nf_limit_artists = []
 
         dock._results_tab.populate_batch_table(results)
         dock._results_tab.populate_inspect_combo(results)

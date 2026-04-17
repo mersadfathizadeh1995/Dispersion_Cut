@@ -202,3 +202,266 @@ def test_showEvent_refreshes_offsets(dock):
     dock.hide()
     assert len(dock._m1_offset_checks) == 3
     assert len(dock._m2_offset_checks) == 3
+    # NACD-Only default is opt-in (all boxes unchecked so the user has
+    # to pick at least one offset before running).
+    assert all(not chk.isChecked() for chk in dock._m1_offset_checks)
+
+
+def test_collapsible_section_size_policy_toggles(qt_app):
+    """When closed, a CollapsibleSection must stop claiming vertical
+    stretch from its parent layout — otherwise it leaves a big empty
+    hole between the header and the section below it."""
+    from dc_cut.gui.widgets.collapsible_section import CollapsibleSection
+
+    try:
+        ExpandingV = QtWidgets.QSizePolicy.Policy.Expanding
+        MaximumV = QtWidgets.QSizePolicy.Policy.Maximum
+    except AttributeError:
+        ExpandingV = QtWidgets.QSizePolicy.Expanding
+        MaximumV = QtWidgets.QSizePolicy.Maximum
+
+    sec = CollapsibleSection("x", initially_expanded=True)
+    assert sec.sizePolicy().verticalPolicy() == ExpandingV
+    sec.set_expanded(False)
+    assert sec.sizePolicy().verticalPolicy() == MaximumV
+    sec.set_expanded(True)
+    assert sec.sizePolicy().verticalPolicy() == ExpandingV
+
+
+def test_limits_tab_leaf_toggle_does_not_hide_whole_band(qt_app):
+    """Toggling a single leaf off must NOT hide the band's other
+    lines.  Regression test for the old auto-tristate behaviour that
+    wrote ``PartiallyChecked`` into the parent's stored visibility.
+    """
+    from dc_cut.core.processing.nearfield.range_derivation import (
+        DerivedLimitSet, DerivedLine,
+    )
+    from dc_cut.gui.views.nf_limits_tab import NFLimitsTab
+
+    ds = DerivedLimitSet(lines=[
+        DerivedLine(band_index=0, kind="lambda", role="min", value=5.0,
+                    source="user", valid=True),
+        DerivedLine(band_index=0, kind="lambda", role="max", value=50.0,
+                    source="user", valid=True),
+        DerivedLine(band_index=0, kind="freq", role="min", value=7.0,
+                    source="user", valid=True),
+        DerivedLine(band_index=0, kind="freq", role="max", value=20.0,
+                    source="user", valid=True),
+    ])
+    tab = NFLimitsTab()
+    tab.refresh(ds)
+
+    # Find and uncheck the leaf for (0, 'freq', 'max').
+    from matplotlib.backends import qt_compat
+    QtCore = qt_compat.QtCore
+    try:
+        _Unchecked = QtCore.Qt.Unchecked
+        _Checked = QtCore.Qt.Checked
+    except AttributeError:
+        _Unchecked = QtCore.Qt.CheckState.Unchecked
+        _Checked = QtCore.Qt.CheckState.Checked
+
+    target_key = (0, "freq", "max")
+    found = False
+    root = tab._tree
+    for bi in range(root.topLevelItemCount()):
+        band = root.topLevelItem(bi)
+        for gi in range(band.childCount()):
+            group = band.child(gi)
+            for li in range(group.childCount()):
+                leaf = group.child(li)
+                if tuple(leaf.data(0, qt_compat.QtCore.Qt.UserRole)) == target_key:
+                    leaf.setCheckState(0, _Unchecked)
+                    found = True
+    assert found, "f_max leaf not found"
+
+    # State: exactly ONE key should be stored as False (the leaf we
+    # unchecked); every other leaf's visibility must default to True.
+    st = tab.state()
+    assert st.get_visible((0, "freq", "max"), True) is False
+    assert st.get_visible((0, "freq", "min"), True) is True
+    assert st.get_visible((0, "lambda", "min"), True) is True
+    assert st.get_visible((0, "lambda", "max"), True) is True
+    # Parent keys must NOT leak into the persisted visibility store.
+    assert (0, "band", "band") not in st.visible
+    assert (0, "freq", "group") not in st.visible
+    assert (0, "lambda", "group") not in st.visible
+
+
+def test_limits_tab_band_toggle_propagates_to_all_leaves(qt_app):
+    """Clicking a band checkbox must flip every leaf beneath it."""
+    from dc_cut.core.processing.nearfield.range_derivation import (
+        DerivedLimitSet, DerivedLine,
+    )
+    from dc_cut.gui.views.nf_limits_tab import NFLimitsTab
+    from matplotlib.backends import qt_compat
+
+    ds = DerivedLimitSet(lines=[
+        DerivedLine(band_index=0, kind="lambda", role="min", value=5.0,
+                    source="user", valid=True),
+        DerivedLine(band_index=0, kind="lambda", role="max", value=50.0,
+                    source="user", valid=True),
+        DerivedLine(band_index=0, kind="freq", role="min", value=7.0,
+                    source="user", valid=True),
+        DerivedLine(band_index=0, kind="freq", role="max", value=20.0,
+                    source="user", valid=True),
+    ])
+    tab = NFLimitsTab()
+    tab.refresh(ds)
+
+    QtCore = qt_compat.QtCore
+    try:
+        _Unchecked = QtCore.Qt.Unchecked
+    except AttributeError:
+        _Unchecked = QtCore.Qt.CheckState.Unchecked
+
+    band_item = tab._tree.topLevelItem(0)
+    band_item.setCheckState(0, _Unchecked)
+
+    st = tab.state()
+    for role in ("min", "max"):
+        assert st.get_visible((0, "lambda", role), True) is False
+        assert st.get_visible((0, "freq", role), True) is False
+
+
+def test_nacd_run_single_offset_empty_range_does_not_crash(dock):
+    """Regression test for the TypeError crash on NACD-Only runs with
+    a single offset and no user-specified evaluation range.
+
+    Previously the λ_max leaf was emitted as ``source="derived"``
+    without a ``derived_from`` value, which made ``_add_leaf`` crash
+    in ``f"{ln.derived_from:g}"``.  The fix marks the leaf
+    ``source="user"`` and makes the formatter tolerant of a missing
+    partner.  Together they must keep the tree populated instead of
+    bubbling up a ``TypeError``.
+    """
+    from dc_cut.core.processing.nearfield.ranges import EvaluationRange
+    from dc_cut.gui.views.nearfield_dock.common import refresh_offset_checks
+
+    refresh_offset_checks(
+        dock, dock._nacd_tab.offset_checks, dock._nacd_tab.offset_layout
+    )
+    for i, chk in enumerate(dock._m1_offset_checks):
+        chk.setChecked(i == 0)
+    dock._m1_ranges.set_range(EvaluationRange())  # empty → no range
+    # Must not raise.
+    dock._nacd_tab.run()
+    # A single band should have been published to the Limit Lines tree.
+    tree = dock._limits_tab._tree
+    assert tree.topLevelItemCount() >= 1, (
+        "Expected the Limit Lines tree to be populated with at least "
+        "one band after a no-range NACD-Only run."
+    )
+
+
+def test_multi_offset_run_with_stale_range_gives_lambda_only_bands(dock):
+    """Regression: running NACD-Only for MULTIPLE offsets must publish
+    one λ-only band per offset to the Limit Lines tree, even if the
+    range widget still contains a stale (f_lo, f_hi) band from a
+    prior single-offset run.  After switching to the Limit Lines tab
+    the tree must still reflect that λ-only set (not a single
+    range-derived band that would replace everything with
+    ``f_min=… Hz (user)`` / ``f_max=… Hz (user)`` entries).
+    """
+    from dc_cut.core.processing.nearfield.ranges import EvaluationRange
+    from dc_cut.gui.views.nearfield_dock.common import refresh_offset_checks
+
+    refresh_offset_checks(
+        dock, dock._nacd_tab.offset_checks, dock._nacd_tab.offset_layout
+    )
+    # Leftover range from an earlier single-offset run.
+    dock._m1_ranges.set_range(EvaluationRange(freq_bands=[(6.0, 25.0)]))
+    # Select every offset (multi-offset path).
+    for chk in dock._m1_offset_checks:
+        chk.setChecked(True)
+    dock._nacd_tab.run()
+
+    ds = dock._limits.current_derived_set
+    assert ds is not None and ds.lines, "multi-offset run produced no lines"
+    # λ-only path: every emitted line is kind=='lambda' (there are no
+    # freq-band lines since no user range was applied for multi-offset).
+    # Each line's source must be 'user' (the λ_max value) or 'derived'
+    # (the derived f_min partner, if present).  There should never be
+    # a freq=='max' line, since derive_limits_from_lambda_values only
+    # emits λ_max + f_min partners.
+    kinds_roles = {(ln.kind, ln.role) for ln in ds.lines}
+    assert ("freq", "max") not in kinds_roles, (
+        "multi-offset NACD-Only must not install an f_max (user) line; "
+        "the tree should stay λ-only (+ hidden f_min partners)."
+    )
+
+    # Tab switch must leave the set (and tree) intact.
+    tree = dock._limits_tab._tree
+    pre_count = tree.topLevelItemCount()
+    dock._limits.on_top_tab_changed(2)
+    post_count = dock._limits_tab._tree.topLevelItemCount()
+    assert post_count == pre_count
+    # And none of the freshly-displayed lines may be a user f_max.
+    ds_after = dock._limits.current_derived_set
+    assert ds_after is not None
+    kinds_roles_after = {(ln.kind, ln.role) for ln in ds_after.lines}
+    assert ("freq", "max") not in kinds_roles_after
+
+
+def test_switching_to_limits_tab_preserves_no_range_set(dock):
+    """Regression: after a no-range NACD-Only run, clicking the Limit
+    Lines tab must NOT clobber the tree or wipe the canvas artists.
+
+    The bug: ``on_top_tab_changed(2)`` unconditionally called
+    ``rebuild_tree()``, which re-derives from the (empty) evaluation
+    range and replaces the ``DerivedLimitSet`` that ``NacdTab.run()``
+    just installed via ``rebuild_tree_with_set``.  The fix only
+    auto-rebuilds when the current range is non-empty.
+    """
+    from dc_cut.core.processing.nearfield.ranges import EvaluationRange
+    from dc_cut.gui.views.nearfield_dock.common import refresh_offset_checks
+
+    refresh_offset_checks(
+        dock, dock._nacd_tab.offset_checks, dock._nacd_tab.offset_layout
+    )
+    for i, chk in enumerate(dock._m1_offset_checks):
+        chk.setChecked(i == 0)
+    dock._m1_ranges.set_range(EvaluationRange())  # no range
+    dock._nacd_tab.run()
+    # Sanity: the no-range run populated the tree.
+    assert dock._limits_tab._tree.topLevelItemCount() >= 1
+
+    # Simulate the user switching to the Limit Lines tab.
+    dock._limits.on_top_tab_changed(2)
+    # The set must survive and so must the tree.
+    assert dock._limits.current_derived_set is not None
+    assert dock._limits.current_derived_set.lines, (
+        "Limit Lines tab switch wiped the no-range DerivedLimitSet."
+    )
+    assert dock._limits_tab._tree.topLevelItemCount() >= 1
+
+
+def test_nacd_run_range_only_when_single_offset_with_range(dock):
+    """Single offset + non-empty evaluation range ⇒ mask must be
+    driven by the range only (not the NACD < thr rule).  Multi-offset
+    or empty-range runs must fall back to the NACD rule."""
+    from dc_cut.core.processing.nearfield.ranges import EvaluationRange
+    from dc_cut.gui.views.nearfield_dock.common import refresh_offset_checks
+
+    refresh_offset_checks(
+        dock, dock._nacd_tab.offset_checks, dock._nacd_tab.offset_layout
+    )
+    # Pick exactly one offset.
+    for i, chk in enumerate(dock._m1_offset_checks):
+        chk.setChecked(i == 0)
+    # Give it a narrow band that excludes most of the data.
+    f = np.asarray(dock.c.frequency_arrays[0], float)
+    fmin, fmax = float(f.min()) + 5.0, float(f.max()) - 5.0
+    dock._m1_ranges.set_range(EvaluationRange(freq_bands=[(fmin, fmax)]))
+    # Run — should succeed and produce a single batch entry.
+    dock._nacd_tab.run()
+    assert len(dock._last_batch) == 1
+    batch = dock._last_batch[0]
+    mask = np.asarray(batch["mask"])
+    # Range-only: every point flagged contaminated must be outside
+    # the user's frequency band.
+    outside = (f < fmin) | (f > fmax)
+    assert np.array_equal(mask, outside), (
+        "Range-only filter expected: every flagged point must lie "
+        "outside the user's band."
+    )

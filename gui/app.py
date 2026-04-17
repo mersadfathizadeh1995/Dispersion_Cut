@@ -1055,6 +1055,18 @@ def open_data_directly():
 def main():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
 
+    # Force Fusion as the base style: Qt draws spin-box step buttons
+    # and combo-box drop-downs with well-proportioned native-looking
+    # arrow glyphs at reasonable click sizes, consistently across
+    # Windows / macOS / Linux.  Our theme stylesheet then layers
+    # light cosmetic tweaks on top.
+    try:
+        fusion = QtWidgets.QStyleFactory.create("Fusion")
+        if fusion is not None:
+            app.setStyle(fusion)
+    except Exception:
+        pass
+
     # Apply theme from preferences early
     try:
         from dc_cut.services.prefs import load_prefs

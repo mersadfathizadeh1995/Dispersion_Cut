@@ -77,6 +77,8 @@ class CollapsibleSection(QtWidgets.QWidget):
         main.addWidget(self._line)
         main.addWidget(self._content)
 
+        self._apply_size_policy(initially_expanded)
+
     # ── public API ──
 
     def add_widget(self, widget: QtWidgets.QWidget) -> None:
@@ -106,8 +108,28 @@ class CollapsibleSection(QtWidgets.QWidget):
 
     # ── private ──
 
+    def _apply_size_policy(self, expanded: bool) -> None:
+        """Collapse the section to header height when closed.
+
+        Without this, a parent layout that gives this widget any vertical
+        stretch would keep handing it empty space even when the body is
+        hidden.  Switching the vertical policy to ``Maximum`` pins the
+        widget to its sizeHint (header + separator) on collapse and back
+        to ``Expanding`` on expand so the body can grow with its parent.
+        """
+        try:
+            Horizontal = QtWidgets.QSizePolicy.Policy.Expanding
+            VertExpand = QtWidgets.QSizePolicy.Policy.Expanding
+            VertFixed = QtWidgets.QSizePolicy.Policy.Maximum
+        except AttributeError:
+            Horizontal = QtWidgets.QSizePolicy.Expanding
+            VertExpand = QtWidgets.QSizePolicy.Expanding
+            VertFixed = QtWidgets.QSizePolicy.Maximum
+        self.setSizePolicy(Horizontal, VertExpand if expanded else VertFixed)
+
     def _on_toggled(self, checked: bool) -> None:
         self._toggle_button.setArrowType(
             _DownArrow if checked else _RightArrow
         )
         self._content.setVisible(checked)
+        self._apply_size_policy(checked)

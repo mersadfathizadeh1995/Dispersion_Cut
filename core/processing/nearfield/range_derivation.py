@@ -389,10 +389,54 @@ def _replace_or_append(
     out.lines.append(new_line)
 
 
+def derive_limits_from_lambda_values(
+    lam_values: List[Tuple[float, Optional[np.ndarray], Optional[np.ndarray]]],
+) -> DerivedLimitSet:
+    """Build a one-band-per-λ :class:`DerivedLimitSet`.
+
+    For each tuple ``(lam, f_curve, v_curve)`` in ``lam_values`` a new
+    band is emitted containing a single ``λ_max`` leaf and (when a
+    V(f) curve is supplied) its derived ``f_min`` partner.  Bands
+    where ``lam <= 0`` are skipped.
+
+    This helper is the bridge the *no evaluation range* run paths
+    (NACD-Only with multiple offsets; Reference with no user range)
+    use to push λ_max lines into the Limit Lines tree so the user can
+    toggle/recolor them like the range-driven ones.
+    """
+    out = DerivedLimitSet()
+    bi = 0
+    for lam, f_curve, v_curve in lam_values:
+        if lam is None or lam <= 0 or not np.isfinite(lam):
+            continue
+        # λ_max itself is the primary user-driven value in the
+        # no-range paths (it comes from the NACD λ_max metric, not
+        # from a user-entered range).  We flag it as ``source="user"``
+        # so the UI shows "(user)" rather than an (invalid) "(derived
+        # from …)" label with no partner value attached.
+        out.lines.append(DerivedLine(
+            band_index=bi, kind="lambda", role="max",
+            value=float(lam), source="user", valid=True,
+        ))
+        fc = np.asarray(f_curve, float) if f_curve is not None else np.asarray([])
+        vc = np.asarray(v_curve, float) if v_curve is not None else np.asarray([])
+        has_curve = fc.size >= 2 and vc.size >= 2
+        if has_curve:
+            f_val, ok = _solve_f_for_lambda(fc, vc, float(lam))
+            out.lines.append(DerivedLine(
+                band_index=bi, kind="freq", role="min",
+                value=float(f_val), source="derived", valid=ok,
+                derived_from=float(lam),
+            ))
+        bi += 1
+    return out
+
+
 __all__ = [
     "DerivedLine",
     "DerivedLimitSet",
     "derive_limits",
+    "derive_limits_from_lambda_values",
     "LineKind",
     "LineRole",
     "LineSource",

@@ -31,9 +31,11 @@ QtCore = qt_compat.QtCore
 try:
     _Stretch = QtWidgets.QHeaderView.Stretch
     _ResizeToContents = QtWidgets.QHeaderView.ResizeToContents
+    _Interactive = QtWidgets.QHeaderView.Interactive
 except AttributeError:
     _Stretch = QtWidgets.QHeaderView.ResizeMode.Stretch
     _ResizeToContents = QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+    _Interactive = QtWidgets.QHeaderView.ResizeMode.Interactive
 
 
 KIND_FREQ = "Frequency (Hz)"
@@ -91,9 +93,13 @@ class NFEvalRangesWidget(QtWidgets.QWidget):
         self._table.setHorizontalHeaderLabels(["Kind", "Min", "Max"])
         self._table.setMaximumHeight(140)
         hdr = self._table.horizontalHeader()
-        hdr.setSectionResizeMode(0, _ResizeToContents)
+        # Kind column is interactive with a generous default width so
+        # "Frequency (Hz)" / "Wavelength (m)" read in full; Min/Max
+        # share the remainder (plenty for a numeric value).
+        hdr.setSectionResizeMode(0, _Interactive)
         hdr.setSectionResizeMode(1, _Stretch)
         hdr.setSectionResizeMode(2, _Stretch)
+        self._table.setColumnWidth(0, 150)
         self._table.verticalHeader().setVisible(False)
         self._table.setSelectionBehavior(
             QtWidgets.QAbstractItemView.SelectRows

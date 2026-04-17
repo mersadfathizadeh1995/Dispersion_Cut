@@ -132,7 +132,14 @@ class ResultsTab(QtWidgets.QWidget):
         action_row.addWidget(self.btn_cancel)
         inspect_sec.add_layout(action_row)
 
-        layout.addWidget(inspect_sec, stretch=1)
+        # When Inspect Offset is expanded we want it to dominate the
+        # vertical space (so the points table has room to breathe) —
+        # hence the large stretch factor.  When it's collapsed the
+        # CollapsibleSection switches to the Maximum vertical policy,
+        # which caps the section at its sizeHint regardless of
+        # stretch, so the section shrinks to a thin header row and
+        # the trailing stretch absorbs the leftover space.
+        layout.addWidget(inspect_sec, stretch=10)
 
         # ── Export ──
         export_sec = CollapsibleSection("Export", initially_expanded=False)
@@ -156,7 +163,11 @@ class ResultsTab(QtWidgets.QWidget):
 
         layout.addWidget(export_sec)
 
-        layout.addStretch()
+        # Trailing spacer: absorbs extra vertical space when every
+        # section is collapsed so the headers stack at the top.
+        # Its stretch (=1) is a tenth of Inspect's (=10), so when
+        # Inspect is expanded it claims ~91 % of extra space.
+        layout.addStretch(1)
 
     # ================================================================
     #  Population

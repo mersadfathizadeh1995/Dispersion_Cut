@@ -197,28 +197,12 @@ def get_dark_stylesheet() -> str:
         border: 2px solid {DARK_THEME_COLORS['cyan']};
     }}
 
-    QComboBox::drop-down {{
-        border: 1px solid {DARK_THEME_COLORS['border']};
-        background-color: {DARK_THEME_COLORS['comment']};
+    QAbstractSpinBox, QSpinBox, QDoubleSpinBox {{
+        min-height: 24px;
     }}
 
-    QComboBox::down-arrow {{
-        image: none;
-        border-left: 4px solid transparent;
-        border-right: 4px solid transparent;
-        border-top: 6px solid {DARK_THEME_COLORS['foreground']};
-        width: 0px;
-        height: 0px;
-    }}
-
-    QSpinBox::up-button, QDoubleSpinBox::up-button {{
-        background-color: {DARK_THEME_COLORS['comment']};
-        border: 1px solid {DARK_THEME_COLORS['border']};
-    }}
-
-    QSpinBox::down-button, QDoubleSpinBox::down-button {{
-        background-color: {DARK_THEME_COLORS['comment']};
-        border: 1px solid {DARK_THEME_COLORS['border']};
+    QComboBox {{
+        min-height: 24px;
     }}
     """
 
@@ -401,53 +385,104 @@ def get_dark_high_contrast_stylesheet() -> str:
         border: 2px solid {accent};
     }}
 
-    QComboBox::drop-down {{
-        border: 1px solid {border};
-        background-color: {hover};
+    QAbstractSpinBox, QSpinBox, QDoubleSpinBox {{
+        min-height: 24px;
     }}
 
-    QComboBox::down-arrow {{
-        image: none;
-        border-left: 5px solid transparent;
-        border-right: 5px solid transparent;
-        border-top: 7px solid {fg};
-        width: 0px;
-        height: 0px;
-    }}
-
-    QSpinBox::up-button, QDoubleSpinBox::up-button {{
-        background-color: {hover};
-        border: 1px solid {border};
-    }}
-
-    QSpinBox::down-button, QDoubleSpinBox::down-button {{
-        background-color: {hover};
-        border: 1px solid {border};
-    }}
-
-    QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
-        image: none;
-        border-left: 3px solid transparent;
-        border-right: 3px solid transparent;
-        border-bottom: 5px solid {fg};
-        width: 0px;
-        height: 0px;
-    }}
-
-    QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
-        image: none;
-        border-left: 3px solid transparent;
-        border-right: 3px solid transparent;
-        border-top: 5px solid {fg};
-        width: 0px;
-        height: 0px;
+    QComboBox {{
+        min-height: 24px;
     }}
     """
 
 
 def get_light_stylesheet() -> str:
-    """Return Qt stylesheet for light theme (default/minimal)."""
-    return ""  # Use system default for light theme
+    """Return Qt stylesheet for light theme.
+
+    A *minimal* override that only enforces readable colors on
+    editable widgets.  On systems whose native palette is dark (e.g.
+    Windows with system-wide dark mode) Qt's default rendering
+    produces black-on-black cells inside QTableWidget edit sessions
+    and QComboBox drop-downs.  The rules below force a neutral
+    white-on-black look for the text of every commonly-used input
+    widget, matching the rest of the light UI chrome.
+    """
+    return (
+        # ── basic input widgets ────────────────────────────────────
+        "QLineEdit, QTextEdit, QPlainTextEdit, "
+        "QSpinBox, QDoubleSpinBox, QAbstractSpinBox, "
+        "QComboBox {"
+        "  background-color: #ffffff;"
+        "  color: #000000;"
+        "  selection-background-color: #1565C0;"
+        "  selection-color: #ffffff;"
+        "  border: 1px solid #b0b0b0;"
+        "  padding: 2px 4px;"
+        "}"
+        "QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, "
+        "QSpinBox:focus, QDoubleSpinBox:focus, QAbstractSpinBox:focus, "
+        "QComboBox:focus {"
+        "  border: 1px solid #1565C0;"
+        "}"
+        "QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, "
+        "QComboBox:disabled {"
+        "  background-color: #f0f0f0;"
+        "  color: #808080;"
+        "}"
+        # ── combo-box drop-down list ───────────────────────────────
+        "QComboBox QAbstractItemView {"
+        "  background-color: #ffffff;"
+        "  color: #000000;"
+        "  selection-background-color: #1565C0;"
+        "  selection-color: #ffffff;"
+        "  border: 1px solid #b0b0b0;"
+        "}"
+        # ── QTableWidget / QTreeWidget body + cell editors ─────────
+        "QTableView, QTableWidget, QTreeView, QTreeWidget, QListView, "
+        "QListWidget {"
+        "  background-color: #ffffff;"
+        "  alternate-background-color: #f7f7f7;"
+        "  color: #000000;"
+        "  selection-background-color: #1565C0;"
+        "  selection-color: #ffffff;"
+        "}"
+        "QTableView::item:selected, QTableWidget::item:selected, "
+        "QTreeView::item:selected, QTreeWidget::item:selected, "
+        "QListView::item:selected, QListWidget::item:selected {"
+        "  background-color: #1565C0;"
+        "  color: #ffffff;"
+        "}"
+        # When a QTableWidget opens an editor on double-click, the
+        # embedded QLineEdit inherits this rule instead of the OS palette.
+        "QTableView QLineEdit, QTableWidget QLineEdit, "
+        "QTreeView QLineEdit, QTreeWidget QLineEdit, "
+        "QAbstractItemView QLineEdit {"
+        "  background-color: #ffffff;"
+        "  color: #000000;"
+        "  selection-background-color: #1565C0;"
+        "  selection-color: #ffffff;"
+        "  border: 1px solid #1565C0;"
+        "}"
+        # ── header sections ────────────────────────────────────────
+        "QHeaderView::section {"
+        "  background-color: #f0f0f0;"
+        "  color: #202020;"
+        "  padding: 3px;"
+        "  border: 0;"
+        "  border-right: 1px solid #d0d0d0;"
+        "  border-bottom: 1px solid #d0d0d0;"
+        "}"
+        # ── Spin/combo sizing (let Fusion paint the buttons) ───────
+        # With QStyleFactory.create("Fusion") installed at app
+        # startup, Qt already draws well-proportioned step and
+        # drop-down buttons with visible arrow glyphs.  We only tune
+        # the overall height so they feel comfortable to click.
+        "QAbstractSpinBox, QSpinBox, QDoubleSpinBox {"
+        "  min-height: 24px;"
+        "}"
+        "QComboBox {"
+        "  min-height: 24px;"
+        "}"
+    )
 
 
 def apply_theme(app: QtWidgets.QApplication, theme_name: str = "light") -> None:

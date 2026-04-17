@@ -1565,6 +1565,15 @@ class MainWindow(QtWidgets.QMainWindow):
 def show_shell(controller):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
 
+    # Force Fusion as the base style for the shell too — see gui/app.py
+    # for rationale.  Safe to call even if main() already installed it.
+    try:
+        fusion = QtWidgets.QStyleFactory.create("Fusion")
+        if fusion is not None:
+            app.setStyle(fusion)
+    except Exception:
+        pass
+
     # Apply theme from preferences
     try:
         from dc_cut.services.prefs import load_prefs

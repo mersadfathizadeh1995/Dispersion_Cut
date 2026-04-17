@@ -179,17 +179,41 @@ class NFLimitsTab(QtWidgets.QWidget):
         self._tree = QtWidgets.QTreeWidget()
         self._tree.setColumnCount(2)
         self._tree.setHeaderLabels(["Limit", "Color"])
-        self._tree.setColumnWidth(0, 220)
+        # Color column is a thin, fixed-width swatch (no hex text).
+        try:
+            _Stretch = QtWidgets.QHeaderView.Stretch
+            _Fixed = QtWidgets.QHeaderView.Fixed
+        except AttributeError:
+            _Stretch = QtWidgets.QHeaderView.ResizeMode.Stretch
+            _Fixed = QtWidgets.QHeaderView.ResizeMode.Fixed
+        self._tree.setColumnWidth(0, 240)
+        self._tree.setColumnWidth(1, 28)
+        _hdr = self._tree.header()
+        _hdr.setSectionResizeMode(0, _Stretch)
+        _hdr.setSectionResizeMode(1, _Fixed)
+        _hdr.setStretchLastSection(False)
         self._tree.setUniformRowHeights(False)
         self._tree.itemChanged.connect(self._on_item_changed)
         self._tree.itemDoubleClicked.connect(self._on_item_double_clicked)
+        # Right-click on a band node: set the color of every line in
+        # that band from a single dialog.
+        try:
+            _CustomContext = QtCore.Qt.CustomContextMenu
+        except AttributeError:
+            _CustomContext = QtCore.Qt.ContextMenuPolicy.CustomContextMenu
+        self._tree.setContextMenuPolicy(_CustomContext)
+        self._tree.customContextMenuRequested.connect(
+            self._on_context_menu_requested
+        )
         layout.addWidget(self._tree, stretch=1)
 
         # ── hint row ───────────────────────────────────────────────
         hint = QtWidgets.QLabel(
-            "Tip: double-click a row's color cell to change it."
+            "Tip: double-click a row's color cell to change its color. "
+            "Right-click a Band to recolor every line inside it at once."
         )
         hint.setStyleSheet("color: #888; font-size: 10px;")
+        hint.setWordWrap(True)
         layout.addWidget(hint)
 
     # ── public API ───────────────────────────────────────────────────
@@ -224,6 +248,15 @@ class NFLimitsTab(QtWidgets.QWidget):
             self._tree.blockSignals(False)
             self._updating = False
         self._tree.expandAll()
+        # Seed band/group visual check states from the leaves we just
+        # installed (display only — band/group state is never persisted).
+        self._updating = True
+        try:
+            self._tree.blockSignals(True)
+            self._refresh_parent_check_states()
+        finally:
+            self._tree.blockSignals(False)
+            self._updating = False
 
     # ── internals ────────────────────────────────────────────────────
     def _default_color(self, key: LineKey) -> str:
@@ -248,10 +281,15 @@ class NFLimitsTab(QtWidgets.QWidget):
             title = f"Band {band_index + 1}  (\u03bb-only)"
 
         band_item = QtWidgets.QTreeWidgetItem([title, ""])
+        # IMPORTANT: NO auto-tristate.  Qt's auto-tristate cascades
+        # the computed parent state back into our visibility store,
+        # which used to flip every line off whenever any single leaf
+        # became unchecked.  Instead we manage the parent's visual
+        # tri-state ourselves, and propagate only when the *user*
+        # clicks the parent row directly.
         band_item.setFlags(
             band_item.flags()
             | _ItemIsUserCheckable
-            | _ItemIsAutoTristate
         )
         # Band-level key uses a sentinel role so persistence stays
         # unique even if it overlaps with leaves.
@@ -282,9 +320,9 @@ class NFLimitsTab(QtWidgets.QWidget):
             if ln is not None:
                 self._add_leaf(freq_group, ln, color)
 
-        # Apply band check state LAST, after children have set theirs.
-        band_check = _Checked if self._state.get_visible(band_key, True) else _Unchecked
-        band_item.setCheckState(0, band_check)
+        # Band's check state is derived from its leaves by
+        # _refresh_parent_check_states at the end of refresh().
+        band_item.setCheckState(0, _Checked)
 
     def _add_group(
         self, parent: QtWidgets.QTreeWidgetItem,
@@ -292,15 +330,13 @@ class NFLimitsTab(QtWidgets.QWidget):
     ) -> QtWidgets.QTreeWidgetItem:
         key: LineKey = (band_index, kind, "group")
         item = QtWidgets.QTreeWidgetItem([label, ""])
-        item.setFlags(
-            item.flags()
-            | _ItemIsUserCheckable
-            | _ItemIsAutoTristate
-        )
+        item.setFlags(item.flags() | _ItemIsUserCheckable)
         item.setData(0, _UserRole, key)
         self._apply_color_cell(item, self._state.get_color(key, color))
         parent.addChild(item)
-        item.setCheckState(0, _Checked if self._state.get_visible(key, True) else _Unchecked)
+        # Check state is derived from the leaves after they're added
+        # (see _refresh_parent_check_states at the end of refresh()).
+        item.setCheckState(0, _Checked)
         return item
 
     def _add_leaf(
@@ -316,7 +352,16 @@ class NFLimitsTab(QtWidgets.QWidget):
             label_prefix = "f"
         suffix = ""
         if ln.source == "derived":
-            suffix = f"   (derived from {ln.derived_from:g})"
+            # ``derived_from`` is normally the partner value the line
+            # was derived from (e.g. a λ_max → f_min partner keeps
+            # ``derived_from=λ_max``).  Some callers emit a derived
+            # line without that partner (no-range NACD single-offset
+            # path) — fall back to a generic "(auto)" suffix instead
+            # of crashing on None formatting.
+            if ln.derived_from is not None:
+                suffix = f"   (derived from {ln.derived_from:g})"
+            else:
+                suffix = "   (auto)"
         elif ln.source == "user":
             suffix = "   (user)"
         if not ln.valid:
@@ -342,12 +387,16 @@ class NFLimitsTab(QtWidgets.QWidget):
         self, item: QtWidgets.QTreeWidgetItem, color: str,
     ) -> None:
         try:
-            item.setText(1, color)
-            item.setForeground(1, QtGui.QColor(color))
-            # Use a filled background swatch for readability.
+            # Pure swatch — no hex code text; the column is narrow so
+            # the cell's background colour is the whole indicator.
+            item.setText(1, "")
             item.setBackground(1, QtGui.QColor(color))
-            fg = "#FFF" if QtGui.QColor(color).lightnessF() < 0.5 else "#000"
-            item.setForeground(1, QtGui.QColor(fg))
+            # Matching foreground keeps the cell visually uniform if
+            # the style otherwise draws a subtle focus marker.
+            item.setForeground(1, QtGui.QColor(color))
+            # Tool-tip still shows the hex code so power users can
+            # read it without cluttering the tree.
+            item.setToolTip(1, color)
         except Exception:
             pass
 
@@ -366,8 +415,80 @@ class NFLimitsTab(QtWidgets.QWidget):
         key = item.data(0, _UserRole)
         if key is None:
             return
-        self._state.set_visible(tuple(key), item.checkState(0) == _Checked)
+        tkey = tuple(key)
+        new_checked = item.checkState(0) == _Checked
+        is_parent_row = tkey[2] in ("group", "band")
+
+        self._updating = True
+        try:
+            self._tree.blockSignals(True)
+            if is_parent_row:
+                # User clicked a Band or Group checkbox → bulk apply to
+                # every leaf beneath it.  Parent/aggregate state itself
+                # is NOT stored — it's purely visual.
+                self._apply_visibility_to_leaves(item, new_checked)
+            else:
+                # Leaf toggle → only this one line.
+                self._state.set_visible(tkey, new_checked)
+            # After any change, refresh parent (group / band) visuals.
+            self._refresh_parent_check_states()
+        finally:
+            self._tree.blockSignals(False)
+            self._updating = False
         self.state_changed.emit()
+
+    def _apply_visibility_to_leaves(
+        self, item: QtWidgets.QTreeWidgetItem, visible: bool,
+    ) -> None:
+        """Recursively push ``visible`` to every leaf under *item*."""
+        for i in range(item.childCount()):
+            child = item.child(i)
+            child_key = child.data(0, _UserRole)
+            if child.childCount() > 0:
+                # Group: recurse and let the leaves drive its check-state.
+                self._apply_visibility_to_leaves(child, visible)
+            else:
+                if child_key is not None:
+                    tk = tuple(child_key)
+                    # Leaves only — group/band keys are never persisted.
+                    if tk[2] not in ("group", "band"):
+                        self._state.set_visible(tk, visible)
+                child.setCheckState(
+                    0, _Checked if visible else _Unchecked,
+                )
+
+    def _refresh_parent_check_states(self) -> None:
+        """Recompute Band + Group check-states from their leaves.
+
+        The parent rows are pure aggregators: they show ``Checked``
+        when every descendant is checked, ``Unchecked`` when none,
+        and ``PartiallyChecked`` when the set is mixed.  This is a
+        display-only update — nothing is written back to the state.
+        """
+        for bi in range(self._tree.topLevelItemCount()):
+            band = self._tree.topLevelItem(bi)
+            band_leaf_states: list = []
+            for gi in range(band.childCount()):
+                group = band.child(gi)
+                grp_states: list = []
+                for li in range(group.childCount()):
+                    leaf = group.child(li)
+                    grp_states.append(leaf.checkState(0) == _Checked)
+                if grp_states:
+                    if all(grp_states):
+                        group.setCheckState(0, _Checked)
+                    elif not any(grp_states):
+                        group.setCheckState(0, _Unchecked)
+                    else:
+                        group.setCheckState(0, _PartiallyChecked)
+                band_leaf_states.extend(grp_states)
+            if band_leaf_states:
+                if all(band_leaf_states):
+                    band.setCheckState(0, _Checked)
+                elif not any(band_leaf_states):
+                    band.setCheckState(0, _Unchecked)
+                else:
+                    band.setCheckState(0, _PartiallyChecked)
 
     def _on_item_double_clicked(
         self, item: QtWidgets.QTreeWidgetItem, column: int,
@@ -377,46 +498,133 @@ class NFLimitsTab(QtWidgets.QWidget):
         key = item.data(0, _UserRole)
         if key is None:
             return
+        tkey = tuple(key)
+        # Double-click on a Band row asks the user whether they meant
+        # "whole-band recolor" (right-click shortcut) or "just this
+        # header row".  Route through the band helper.
+        if tkey[2] == "band":
+            self._set_band_color_from_dialog(item)
+            return
         current = self._state.get_color(
-            tuple(key), default=default_band_color(int(key[0])),
+            tkey, default=default_band_color(int(key[0])),
         )
         picked = QtWidgets.QColorDialog.getColor(
-            QtGui.QColor(current), self, "Pick limit-line color",
+            QtGui.QColor(current), self,
+            "Pick color for this line" if tkey[2] not in ("group", "band")
+            else "Pick color for this group",
         )
         if not picked.isValid():
             return
         new_color = picked.name()
-        tkey = tuple(key)
         self._state.set_color(tkey, new_color)
         self._updating = True
         try:
             self._apply_color_cell(item, new_color)
         finally:
             self._updating = False
-        # If this is a band/group node, cascade into children that still
-        # use the default.
-        if tkey[1] in ("band", "lambda", "freq") and tkey[2] in ("band", "group"):
-            self._cascade_color(item, new_color)
+        # Per-leaf / per-group double-click does NOT cascade anymore.
+        # If the user wants "everything in the band", they right-click
+        # the band node and get a dedicated dialog (see
+        # _on_context_menu_requested).
         self.state_changed.emit()
 
-    def _cascade_color(
-        self, parent: QtWidgets.QTreeWidgetItem, new_color: str,
+    # ── right-click: recolor an entire band ─────────────────────────
+    def _on_context_menu_requested(self, pos) -> None:
+        item = self._tree.itemAt(pos)
+        if item is None:
+            return
+        key = item.data(0, _UserRole)
+        if key is None:
+            return
+        tkey = tuple(key)
+        # Walk up to the band row so right-clicking any descendant
+        # still targets the whole band.
+        band_item = item
+        while band_item is not None:
+            bk = band_item.data(0, _UserRole)
+            if bk is not None and tuple(bk)[2] == "band":
+                break
+            band_item = band_item.parent()
+        if band_item is None:
+            return
+        menu = QtWidgets.QMenu(self)
+        act_band = menu.addAction("Set color for entire band…")
+        act_leaf = None
+        if tkey[2] not in ("group", "band"):
+            act_leaf = menu.addAction("Set color for this line only…")
+        try:
+            global_pos = self._tree.viewport().mapToGlobal(pos)
+        except Exception:
+            global_pos = self.mapToGlobal(pos)
+        chosen = menu.exec_(global_pos) if hasattr(menu, "exec_") else menu.exec(global_pos)
+        if chosen is None:
+            return
+        if chosen is act_band:
+            self._set_band_color_from_dialog(band_item)
+        elif act_leaf is not None and chosen is act_leaf:
+            self._set_single_color_from_dialog(item)
+
+    def _set_band_color_from_dialog(
+        self, band_item: QtWidgets.QTreeWidgetItem,
     ) -> None:
+        bkey = band_item.data(0, _UserRole)
+        if bkey is None:
+            return
+        bi = int(tuple(bkey)[0])
+        current = self._state.get_color(
+            tuple(bkey), default=default_band_color(bi),
+        )
+        picked = QtWidgets.QColorDialog.getColor(
+            QtGui.QColor(current), self,
+            f"Pick color for Band {bi + 1} (all lines)",
+        )
+        if not picked.isValid():
+            return
+        new_color = picked.name()
         self._updating = True
         try:
-            for i in range(parent.childCount()):
-                child = parent.child(i)
-                key = child.data(0, _UserRole)
-                if key is not None:
-                    tkey = tuple(key)
-                    # Only overwrite when the user hasn't already
-                    # picked a custom color.
-                    self._state.set_color(tkey, new_color)
-                    self._apply_color_cell(child, new_color)
-                if child.childCount() > 0:
-                    self._cascade_color(child, new_color)
+            self._state.set_color(tuple(bkey), new_color)
+            self._apply_color_cell(band_item, new_color)
+            self._apply_color_to_descendants(band_item, new_color)
         finally:
             self._updating = False
+        self.state_changed.emit()
+
+    def _set_single_color_from_dialog(
+        self, item: QtWidgets.QTreeWidgetItem,
+    ) -> None:
+        key = item.data(0, _UserRole)
+        if key is None:
+            return
+        tkey = tuple(key)
+        current = self._state.get_color(
+            tkey, default=default_band_color(int(key[0])),
+        )
+        picked = QtWidgets.QColorDialog.getColor(
+            QtGui.QColor(current), self, "Pick color for this line",
+        )
+        if not picked.isValid():
+            return
+        new_color = picked.name()
+        self._state.set_color(tkey, new_color)
+        self._updating = True
+        try:
+            self._apply_color_cell(item, new_color)
+        finally:
+            self._updating = False
+        self.state_changed.emit()
+
+    def _apply_color_to_descendants(
+        self, parent: QtWidgets.QTreeWidgetItem, new_color: str,
+    ) -> None:
+        for i in range(parent.childCount()):
+            child = parent.child(i)
+            key = child.data(0, _UserRole)
+            if key is not None:
+                self._state.set_color(tuple(key), new_color)
+                self._apply_color_cell(child, new_color)
+            if child.childCount() > 0:
+                self._apply_color_to_descendants(child, new_color)
 
 
 __all__ = [
