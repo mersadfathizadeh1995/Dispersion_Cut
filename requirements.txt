@@ -1,24 +1,34 @@
-# DC_Cut: Interactive Dispersion Curve Editor
-# Requirements for Python >= 3.10
+# ═══════════════════════════════════════════════════════════════════════════
+#   DC_Cut / Dispersion Cut — Python dependencies
+# ═══════════════════════════════════════════════════════════════════════════
 #
-# Install with:  pip install -r requirements.txt
-# Run with:      python -m dc_cut
+#   Required Python:  3.10+  (tested on 3.11 – 3.13)
+#
+#   Install into the repo venv via:
+#       pip install -r requirements.txt
+#
+#   Or use the bundled installer which creates the venv for you:
+#       dc_cut\install.bat        (Windows)
+#
+#   After install, launch the app with the auto-generated launcher:
+#       Dispersion_Cut.bat        (in the repo parent folder)
+# ───────────────────────────────────────────────────────────────────────────
 
-# --- Core scientific stack ---
+# ── Core scientific stack ──────────────────────────────────────────────────
 numpy>=1.24,<3.0
 scipy>=1.10
 pandas>=2.0
 
-# --- GUI framework ---
+# ── GUI framework ──────────────────────────────────────────────────────────
 # Matplotlib's qt_compat bridges to whichever Qt binding is installed.
 # PySide6 is the recommended Qt6 binding for this application.
 PySide6>=6.5
 matplotlib>=3.7
 
-# --- I/O & export ---
-# python-pptx is used for PowerPoint export of publication figures.
+# ── I/O & export ───────────────────────────────────────────────────────────
+# python-pptx: PowerPoint export of publication figures.
 python-pptx>=0.6.23
 
-# --- Pillow (transitive, pulled by matplotlib) ---
-# Listed explicitly so SW_Transform image utilities also work.
+# ── Imaging (Pillow is transitive via matplotlib, listed explicitly so the
+#            SW_Transform image utilities also work stand-alone) ────────────
 Pillow>=9.0

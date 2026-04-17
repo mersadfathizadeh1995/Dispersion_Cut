@@ -1,0 +1,15 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#   DC_Cut / Dispersion Cut — development-only dependencies
+# ═══════════════════════════════════════════════════════════════════════════
+#
+#   Install on top of the runtime requirements:
+#       pip install -r requirements.txt -r requirements-dev.txt
+#
+#   These packages are NOT needed to run the app — only to execute the
+#   automated test suite (pytest) and the GUI-widget tests (pytest-qt).
+# ───────────────────────────────────────────────────────────────────────────
+
+-r requirements.txt
+
+pytest>=7.0
+pytest-qt>=4.2
