@@ -142,10 +142,6 @@ class SpectrumHandler:
         1. The first layer with spectrum_visible=True and visible line, OR
         2. If no match, the first layer with spectrum_visible=True
         """
-        if not get_pref('show_spectra', True):
-            self.clear_all()
-            return
-        
         if not hasattr(self._ctrl, '_layers_model') or self._ctrl._layers_model is None:
             return
         
@@ -328,7 +324,11 @@ class SpectrumHandler:
         enabled : bool
             True to show all, False to hide all.
         """
-        set_pref('show_spectra', enabled)
+        if not hasattr(self._ctrl, '_layers_model') or self._ctrl._layers_model is None:
+            return
+        for layer in self._ctrl._layers_model.layers:
+            if layer.spectrum_data is not None:
+                layer.spectrum_visible = enabled
         self.render_backgrounds()
 
     def on_layer_visibility_changed(self) -> None:

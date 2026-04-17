@@ -7,6 +7,7 @@ QtGui     = qt_compat.QtGui
 QtCore    = qt_compat.QtCore
 
 from dc_cut.services.prefs import load_prefs, set_pref
+from dc_cut.gui.widgets.collapsible_section import CollapsibleSection
 
 # Qt5/Qt6 dock-widget feature compatibility
 try:
@@ -33,41 +34,42 @@ class PropertiesDock(QtWidgets.QDockWidget):
 
         w = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(w)
-        layout.setSpacing(6)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(2)
+        layout.setContentsMargins(4, 4, 4, 4)
 
-        # ── View Section ──
-        view_group = QtWidgets.QGroupBox("View")
-        vg_layout = QtWidgets.QFormLayout(view_group)
+        # ── View Section (collapsible) ──
+        view_sec = CollapsibleSection("View", initially_expanded=True)
         self.mode_combo = QtWidgets.QComboBox()
         self.mode_combo.addItems(["both", "freq_only", "wave_only"])
-        vg_layout.addRow("View mode:", self.mode_combo)
-        layout.addWidget(view_group)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel("View mode:"))
+        row.addWidget(self.mode_combo, stretch=1)
+        view_sec.add_layout(row)
+        layout.addWidget(view_sec)
 
-        # ── Axes Section ──
-        axes_group = QtWidgets.QGroupBox("Axes")
-        ag_layout = QtWidgets.QVBoxLayout(axes_group)
+        # ── Axes Section (collapsible) ──
+        axes_sec = CollapsibleSection("Axes", initially_expanded=True)
 
         # Frequency X-axis
-        freq_group = QtWidgets.QGroupBox("Frequency X-axis")
-        fg_layout = QtWidgets.QFormLayout(freq_group)
+        freq_box = QtWidgets.QGroupBox("Frequency X-axis")
+        fg = QtWidgets.QFormLayout(freq_box)
         self.freq_scale_combo = QtWidgets.QComboBox()
         self.freq_scale_combo.addItems(["Log", "Linear"])
-        fg_layout.addRow("Scale:", self.freq_scale_combo)
+        fg.addRow("Scale:", self.freq_scale_combo)
         self.freq_ticks_combo = QtWidgets.QComboBox()
         self.freq_ticks_combo.addItems(["decades", "one-two-five", "custom", "ruler"])
-        fg_layout.addRow("Tick style:", self.freq_ticks_combo)
+        fg.addRow("Tick style:", self.freq_ticks_combo)
         self.freq_custom_entry = QtWidgets.QLineEdit()
         self.freq_custom_entry.setPlaceholderText("e.g. 1,2,3,5,7,10,15,20")
-        fg_layout.addRow("Custom (Hz):", self.freq_custom_entry)
-        ag_layout.addWidget(freq_group)
+        fg.addRow("Custom (Hz):", self.freq_custom_entry)
+        axes_sec.add_widget(freq_box)
 
         # Phase Velocity Y-axis
-        vel_group = QtWidgets.QGroupBox("Phase Velocity Y-axis")
-        velg_layout = QtWidgets.QFormLayout(vel_group)
+        vel_box = QtWidgets.QGroupBox("Phase Velocity Y-axis")
+        vg = QtWidgets.QFormLayout(vel_box)
         self.vel_scale_combo = QtWidgets.QComboBox()
         self.vel_scale_combo.addItems(["Linear", "Log"])
-        velg_layout.addRow("Scale:", self.vel_scale_combo)
+        vg.addRow("Scale:", self.vel_scale_combo)
         row_y = QtWidgets.QHBoxLayout()
         self.ymin_spin = QtWidgets.QDoubleSpinBox()
         self.ymin_spin.setRange(0.0, 1e6)
@@ -82,67 +84,51 @@ class PropertiesDock(QtWidgets.QDockWidget):
         row_y.addSpacing(6)
         row_y.addWidget(QtWidgets.QLabel("Max:"))
         row_y.addWidget(self.ymax_spin)
-        velg_layout.addRow("Clamp:", row_y)
-        ag_layout.addWidget(vel_group)
+        vg.addRow("Clamp:", row_y)
+        axes_sec.add_widget(vel_box)
 
         # Wavelength X-axis
-        wave_group = QtWidgets.QGroupBox("Wavelength X-axis")
-        wg_layout = QtWidgets.QFormLayout(wave_group)
+        wave_box = QtWidgets.QGroupBox("Wavelength X-axis")
+        wg = QtWidgets.QFormLayout(wave_box)
         self.wave_scale_combo = QtWidgets.QComboBox()
         self.wave_scale_combo.addItems(["Log", "Linear"])
-        wg_layout.addRow("Scale:", self.wave_scale_combo)
-        ag_layout.addWidget(wave_group)
+        wg.addRow("Scale:", self.wave_scale_combo)
+        axes_sec.add_widget(wave_box)
 
-        layout.addWidget(axes_group)
+        layout.addWidget(axes_sec)
 
-        # ── Overlays Section ──
-        overlays_group = QtWidgets.QGroupBox("Overlays")
-        og_layout = QtWidgets.QVBoxLayout(overlays_group)
+        # ── Overlays Section (collapsible) ──
+        overlays_sec = CollapsibleSection("Overlays", initially_expanded=False)
         self.chk_grid = QtWidgets.QCheckBox("Show grid")
-        og_layout.addWidget(self.chk_grid)
-        self.chk_avg_f = QtWidgets.QCheckBox("Average (Freq)")
-        og_layout.addWidget(self.chk_avg_f)
-        self.chk_avg_w = QtWidgets.QCheckBox("Average (Wave)")
-        og_layout.addWidget(self.chk_avg_w)
-        self.chk_k_guides = QtWidgets.QCheckBox("Show k-limit guides")
-        og_layout.addWidget(self.chk_k_guides)
-
-        self.klimits_group = QtWidgets.QGroupBox("K-Limits")
-        self.klimits_group.setCheckable(False)
-        klimits_layout = QtWidgets.QVBoxLayout(self.klimits_group)
-        klimits_layout.setContentsMargins(4, 4, 4, 4)
-        klimits_layout.setSpacing(2)
-        self.klimits_list = QtWidgets.QWidget()
-        self.klimits_list_layout = QtWidgets.QVBoxLayout(self.klimits_list)
-        self.klimits_list_layout.setContentsMargins(0, 0, 0, 0)
-        self.klimits_list_layout.setSpacing(2)
-        klimits_layout.addWidget(self.klimits_list)
-        self.klimits_checkboxes = {}
-        og_layout.addWidget(self.klimits_group)
-        self.klimits_group.setVisible(False)
-
+        overlays_sec.add_widget(self.chk_grid)
         self.chk_auto = QtWidgets.QCheckBox("Auto limits (padding)")
-        og_layout.addWidget(self.chk_auto)
-        layout.addWidget(overlays_group)
+        overlays_sec.add_widget(self.chk_auto)
+        layout.addWidget(overlays_sec)
 
-        # ── NACD Section ──
-        nacd_group = QtWidgets.QGroupBox("NACD")
-        ng_layout = QtWidgets.QFormLayout(nacd_group)
+        # Average checkboxes removed – now in Layers > Data tab
+        # Hidden backward-compat stubs
+        self.chk_avg_f = QtWidgets.QCheckBox()
+        self.chk_avg_f.setVisible(False)
+        self.chk_avg_w = QtWidgets.QCheckBox()
+        self.chk_avg_w.setVisible(False)
+
+        # K-limits checkbox removed – now in Layers > K-Limits tab
+        # NACD spinner removed – now in λ Lines and NF Eval docks
+        # Placeholder attribute for backward compat
+        self.chk_k_guides = QtWidgets.QCheckBox()
+        self.chk_k_guides.setVisible(False)
         self.nacd_spin = QtWidgets.QDoubleSpinBox()
-        self.nacd_spin.setDecimals(2)
-        self.nacd_spin.setRange(0.10, 3.00)
-        self.nacd_spin.setSingleStep(0.02)
-        ng_layout.addRow("NACD ≤", self.nacd_spin)
-        layout.addWidget(nacd_group)
+        self.nacd_spin.setVisible(False)
 
-        # ── Actions Section ──
-        actions_group = QtWidgets.QGroupBox("Actions")
-        act_layout = QtWidgets.QHBoxLayout(actions_group)
+        # ── Actions Section (collapsible) ──
+        actions_sec = CollapsibleSection("Actions", initially_expanded=True)
+        act_row = QtWidgets.QHBoxLayout()
         self.btn_apply_limits = QtWidgets.QPushButton("Apply limits")
         self.btn_reavg = QtWidgets.QPushButton("Recompute averages")
-        act_layout.addWidget(self.btn_apply_limits)
-        act_layout.addWidget(self.btn_reavg)
-        layout.addWidget(actions_group)
+        act_row.addWidget(self.btn_apply_limits)
+        act_row.addWidget(self.btn_reavg)
+        actions_sec.add_layout(act_row)
+        layout.addWidget(actions_sec)
 
         layout.addStretch(1)
         scroll.setWidget(w)
@@ -154,10 +140,8 @@ class PropertiesDock(QtWidgets.QDockWidget):
         self.vel_scale_combo.currentTextChanged.connect(self._on_vel_scale)
         self.wave_scale_combo.currentTextChanged.connect(self._on_wave_scale)
         self.chk_auto.toggled.connect(self._on_auto)
-        self.nacd_spin.valueChanged.connect(self._on_nacd)
         self.chk_avg_f.toggled.connect(self._on_avg_f)
         self.chk_avg_w.toggled.connect(self._on_avg_w)
-        self.chk_k_guides.toggled.connect(self._on_k_guides)
         self.chk_grid.toggled.connect(self._on_grid)
         self.ymin_spin.valueChanged.connect(self._on_yclamp)
         self.ymax_spin.valueChanged.connect(self._on_yclamp)
@@ -167,49 +151,13 @@ class PropertiesDock(QtWidgets.QDockWidget):
         self.btn_reavg.clicked.connect(self._recompute_avg)
 
         self.sync_from_controller()
-        self._rebuild_klimits_list()
         try:
             P = load_prefs()
             if not hasattr(self.controller, 'nacd_thresh'):
                 self.controller.nacd_thresh = float(P.get('nacd_thresh', 1.0))
-            self.nacd_spin.setValue(float(getattr(self.controller, 'nacd_thresh', 1.0)))
             self.chk_grid.setChecked(bool(P.get('show_grid', True)))
             self.ymin_spin.setValue(float(getattr(self.controller, 'min_vel', 0.0)))
             self.ymax_spin.setValue(float(getattr(self.controller, 'max_vel', 5000.0)))
-        except Exception:
-            pass
-
-    # ── K-Limits list ──
-
-    def _rebuild_klimits_list(self) -> None:
-        for cb in list(self.klimits_checkboxes.values()):
-            cb.setParent(None)
-            cb.deleteLater()
-        self.klimits_checkboxes.clear()
-
-        multi_klimits = getattr(self.controller, '_multi_klimits', [])
-        visibility = getattr(self.controller, '_klimits_visibility', {})
-
-        if not multi_klimits or len(multi_klimits) <= 1:
-            self.klimits_group.setVisible(False)
-            return
-
-        self.klimits_group.setVisible(True)
-
-        for label, kmin, kmax in multi_klimits:
-            cb = QtWidgets.QCheckBox(f"{label} ({kmin:.3f} - {kmax:.3f})")
-            cb.setChecked(visibility.get(label, True))
-            cb.toggled.connect(lambda checked, lbl=label: self._on_klimit_toggled(lbl, checked))
-            self.klimits_list_layout.addWidget(cb)
-            self.klimits_checkboxes[label] = cb
-
-    def _on_klimit_toggled(self, label: str, checked: bool) -> None:
-        if not hasattr(self.controller, '_klimits_visibility'):
-            self.controller._klimits_visibility = {}
-        self.controller._klimits_visibility[label] = checked
-        try:
-            self.controller._draw_k_guides()
-            self.controller.fig.canvas.draw_idle()
         except Exception:
             pass
 
@@ -221,8 +169,8 @@ class PropertiesDock(QtWidgets.QDockWidget):
             self.blockSignals(True)
             # Block individual widget signals to prevent cascading callbacks
             for widget in (self.mode_combo, self.freq_scale_combo, self.vel_scale_combo,
-                           self.wave_scale_combo, self.chk_auto, self.nacd_spin,
-                           self.chk_avg_f, self.chk_avg_w, self.chk_k_guides,
+                           self.wave_scale_combo, self.chk_auto,
+                           self.chk_avg_f, self.chk_avg_w,
                            self.freq_ticks_combo, self.chk_grid,
                            self.ymin_spin, self.ymax_spin):
                 widget.blockSignals(True)
@@ -230,10 +178,8 @@ class PropertiesDock(QtWidgets.QDockWidget):
             idx = max(0, ["both", "freq_only", "wave_only"].index(getattr(c, 'view_mode', 'both')))
             self.mode_combo.setCurrentIndex(idx)
             self.chk_auto.setChecked(getattr(c, 'auto_limits', True))
-            self.nacd_spin.setValue(float(getattr(c, 'nacd_thresh', 1.0)))
             self.chk_avg_f.setChecked(getattr(c, 'show_average', True))
             self.chk_avg_w.setChecked(getattr(c, 'show_average_wave', True))
-            self.chk_k_guides.setChecked(bool(getattr(c, 'show_k_guides', False)))
 
             # Axis scales
             freq_sc = getattr(c, 'freq_x_scale', 'log')
@@ -259,8 +205,8 @@ class PropertiesDock(QtWidgets.QDockWidget):
                     pass
         finally:
             for widget in (self.mode_combo, self.freq_scale_combo, self.vel_scale_combo,
-                           self.wave_scale_combo, self.chk_auto, self.nacd_spin,
-                           self.chk_avg_f, self.chk_avg_w, self.chk_k_guides,
+                           self.wave_scale_combo, self.chk_auto,
+                           self.chk_avg_f, self.chk_avg_w,
                            self.freq_ticks_combo, self.chk_grid,
                            self.ymin_spin, self.ymax_spin):
                 widget.blockSignals(False)
@@ -294,13 +240,6 @@ class PropertiesDock(QtWidgets.QDockWidget):
         self.controller._apply_axis_limits()
         self.controller.fig.canvas.draw_idle()
 
-    def _on_nacd(self, val: float) -> None:
-        self.controller.nacd_thresh = float(val)
-        try:
-            set_pref('nacd_thresh', float(val))
-        except Exception:
-            pass
-
     def _on_avg_f(self, on: bool) -> None:
         self.controller.show_average = on
         self.controller._update_average_line()
@@ -310,17 +249,6 @@ class PropertiesDock(QtWidgets.QDockWidget):
         self.controller.show_average_wave = on
         self.controller._update_average_line()
         self.controller._update_legend()
-
-    def _on_k_guides(self, on: bool) -> None:
-        self.controller.show_k_guides = bool(on)
-        try:
-            self.controller._draw_k_guides()
-        except Exception:
-            pass
-        try:
-            set_pref('show_k_guides_default', bool(on))
-        except Exception:
-            pass
 
     def _on_grid(self, on: bool) -> None:
         try:
@@ -392,3 +320,20 @@ class PropertiesDock(QtWidgets.QDockWidget):
     def _recompute_avg(self) -> None:
         self.controller._update_average_line()
         self.controller._update_legend()
+
+    # Backward compatibility stubs
+    def _rebuild_klimits_list(self) -> None:
+        """No-op: K-limits are now in the Layers > K-Limits tab."""
+        pass
+
+    def _on_klimit_toggled(self, label: str, checked: bool) -> None:
+        """No-op: K-limits are now in the Layers > K-Limits tab."""
+        pass
+
+    def _on_nacd(self, val: float) -> None:
+        """No-op: NACD is now in the λ Lines and NF Eval docks."""
+        pass
+
+    def _on_k_guides(self, on: bool) -> None:
+        """No-op: K-limit guides toggle is now in the K-Limits tab."""
+        pass

@@ -89,8 +89,8 @@ class BaseInteractiveRemoval:
         self.avg_err_bars_w = None
 
         # Preferences/state
-        self.view_mode = 'both'
-        self.auto_limits = True
+        self.view_mode = 'freq_only'
+        self.auto_limits = False
         self.freq_tick_style = 'decades'
         self.freq_custom_ticks: List[float] = []
         self.kmin: Optional[float] = None

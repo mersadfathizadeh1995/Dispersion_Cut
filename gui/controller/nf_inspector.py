@@ -19,11 +19,33 @@ from dc_cut.core.processing.nearfield import (
     compute_nearfield_report,
     load_reference_curve,
     select_reference_by_largest_xbar,
+    build_nf_clean_composite_curve,
+    EvaluationRange,
+    compute_range_mask,
+    reference_coverage_warnings,
 )
+from dc_cut.core.processing.nearfield.criteria import resolve_nacd_threshold
 from dc_cut.core.processing.wavelength_lines import (
     parse_source_offset_from_label,
     compute_lambda_max,
 )
+
+
+def _resolve_user_lambda_max(eval_range: Optional[EvaluationRange]) -> Optional[float]:
+    """Pick the effective ``user_lambda_max`` for V_R validity masking.
+
+    When the user supplies any non-empty :class:`EvaluationRange`, the
+    range is already applied outside (``compute_range_mask`` NaNs the
+    out-of-range V_R).  Applying the reference's own ``lambda_max_ref``
+    on top causes bug #6: offsets farther than the reference lose
+    every low-frequency point to NaN.  We bypass the cap by returning
+    ``inf`` whenever the user gave a range but no explicit \u03bb_max.
+    """
+    if eval_range is None or eval_range.is_empty():
+        return None
+    if eval_range.lambda_max is not None and eval_range.lambda_max > 0:
+        return float(eval_range.lambda_max)
+    return float(np.inf)
 
 
 class NearFieldInspector:
@@ -41,14 +63,15 @@ class NearFieldInspector:
         self._reference_index: Optional[int] = None
         self._lambda_max_ref: float = np.inf
 
-        # Configurable reference frequency band
-        self._ref_freq_range: Tuple[float, float] = (0.0, 9999.0)
-
         # Severity criteria
         self._clean_threshold: float = 0.95
         self._marginal_threshold: float = 0.85
         self._unknown_action: str = "unknown"
         self._vr_onset_threshold: float = 0.90
+
+        # Source-type-aware criteria
+        self._source_type: str = "sledgehammer"
+        self._error_level: str = "10_15pct"
 
     # ── lifecycle ──────────────────────────────────────────────────
 
@@ -163,9 +186,6 @@ class NearFieldInspector:
 
     # ── configurable criteria ─────────────────────────────────────
 
-    def set_reference_freq_range(self, fmin: float, fmax: float) -> None:
-        self._ref_freq_range = (float(fmin), float(fmax))
-
     def set_severity_criteria(
         self,
         clean_threshold: float = 0.95,
@@ -179,24 +199,32 @@ class NearFieldInspector:
         self._vr_onset_threshold = vr_onset_threshold
 
     def _get_trimmed_reference(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Return reference arrays trimmed to the configured freq range."""
-        f_ref = self._reference_f
-        v_ref = self._reference_v
-        fmin, fmax = self._ref_freq_range
-        if fmin > 0 or fmax < 9999:
-            mask = (f_ref >= fmin) & (f_ref <= fmax)
-            if np.any(mask):
-                f_ref = f_ref[mask]
-                v_ref = v_ref[mask]
-        return f_ref, v_ref
+        """Return reference arrays (no freq-range trimming for simplicity)."""
+        return self._reference_f, self._reference_v
+
+    # ── source type ───────────────────────────────────────────────
+
+    def set_source_type(self, source_type: str) -> None:
+        self._source_type = source_type
+
+    def set_error_level(self, error_level: str) -> None:
+        self._error_level = error_level
+
+    def get_resolved_threshold(self) -> float:
+        return resolve_nacd_threshold(
+            source_type=self._source_type,
+            error_level=self._error_level,
+        )
 
     # ── data retrieval ────────────────────────────────────────────
 
-    def get_current_arrays(self):
+    def get_current_arrays(self, eval_range: Optional[EvaluationRange] = None):
         """Return (idx, f, v, w, nacd, mask, vr, severity).
 
-        vr and severity are None when no reference curve is set.
-        Uses validity masking (lambda_max_reference) for active-offset refs.
+        vr and severity are None when no reference curve is set. When
+        *eval_range* is provided, points outside the range have V_R
+        forced to NaN (classified as ``"unknown"``) and are also marked
+        contaminated in the geometry-only mask.
         """
         if self._current_idx is None:
             return None
@@ -207,16 +235,21 @@ class NearFieldInspector:
 
         array_pos = self._get_array_positions()
         nacd = compute_nacd_array(array_pos, f, v, source_offset=self._source_offset)
-        mask = nacd < self.thr
+        in_range = compute_range_mask(f, v, eval_range)
+        mask = (nacd >= self.thr) | (~in_range)
 
         vr: Optional[np.ndarray] = None
         severity: Optional[np.ndarray] = None
 
         if self.has_reference:
             f_ref, v_ref = self._get_trimmed_reference()
+            user_lam_max = _resolve_user_lambda_max(eval_range)
             vr = compute_normalized_vr_with_validity(
                 f, v, f_ref, v_ref, self._lambda_max_ref,
+                user_lambda_max=user_lam_max,
             )
+            if eval_range is not None and not eval_range.is_empty():
+                vr = np.where(in_range, vr, np.nan)
             severity = classify_nearfield_severity(
                 vr, self._clean_threshold, self._marginal_threshold,
                 self._unknown_action,
@@ -224,13 +257,16 @@ class NearFieldInspector:
 
         return i, f, v, w, nacd, mask, vr, severity
 
-    def get_all_offsets_vr(self) -> List[Tuple[str, np.ndarray, np.ndarray]]:
-        """Return [(label, nacd, vr)] for every offset -- used by diagnostics scatter."""
+    def get_all_offsets_vr(
+        self, eval_range: Optional[EvaluationRange] = None,
+    ) -> List[Tuple[str, np.ndarray, np.ndarray]]:
+        """Return [(label, nacd, vr)] for every offset -- used by scatter."""
         if not self.has_reference:
             return []
         n_data = min(len(self.c.velocity_arrays), len(self.c.frequency_arrays))
         recv = self._get_array_positions()
         f_ref, v_ref = self._get_trimmed_reference()
+        user_lam_max = _resolve_user_lambda_max(eval_range)
         results = []
         for idx in range(n_data):
             f = np.asarray(self.c.frequency_arrays[idx], float)
@@ -240,9 +276,23 @@ class NearFieldInspector:
             nacd = compute_nacd_array(recv, f, v, source_offset=so)
             vr = compute_normalized_vr_with_validity(
                 f, v, f_ref, v_ref, self._lambda_max_ref,
+                user_lambda_max=user_lam_max,
             )
+            if eval_range is not None and not eval_range.is_empty():
+                in_range = compute_range_mask(f, v, eval_range)
+                vr = np.where(in_range, vr, np.nan)
             results.append((lbl, nacd, vr))
         return results
+
+    def reference_warnings(
+        self, eval_range: Optional[EvaluationRange],
+    ) -> List[str]:
+        """Warnings when *eval_range* exceeds the current reference's coverage."""
+        if not self.has_reference:
+            return []
+        return reference_coverage_warnings(
+            self._reference_f, self._reference_v, eval_range,
+        )
 
     def compute_full_report(self) -> List[dict]:
         """Compute a full NF diagnostic report for all offsets."""
@@ -332,6 +382,106 @@ class NearFieldInspector:
         except Exception:
             pass
 
+    # ── batch analysis ────────────────────────────────────────────
+
+    def evaluate_all_offsets(
+        self, eval_range: Optional[EvaluationRange] = None,
+    ) -> list:
+        """Batch NF evaluation for every offset.
+
+        Parameters
+        ----------
+        eval_range : EvaluationRange, optional
+            User-specified evaluation domain (frequency bands and/or
+            wavelength bounds).  When provided, V_R is computed only
+            inside the mask -- points outside the range become NaN
+            (classified as ``"unknown"``).  The user's
+            ``lambda_max`` overrides the reference's own ``lambda_max``
+            for validity masking.  ``None`` or empty = full range.
+
+        Returns a list of dicts with per-offset summary including
+        NACD stats and V_R severity counts.
+        """
+        n = min(len(self.c.velocity_arrays), len(self.c.frequency_arrays))
+        if n == 0:
+            return []
+        recv = self._get_array_positions()
+        user_lam_max = _resolve_user_lambda_max(eval_range)
+        results = []
+        for idx in range(n):
+            f = np.asarray(self.c.frequency_arrays[idx], float)
+            v = np.asarray(self.c.velocity_arrays[idx], float)
+            lbl = (
+                self.c.offset_labels[idx]
+                if idx < len(self.c.offset_labels)
+                else f"Offset {idx}"
+            )
+            so = parse_source_offset_from_label(lbl)
+            nacd = compute_nacd_array(recv, f, v, source_offset=so)
+            x_bar = float(np.mean(np.abs(
+                recv - (so if so is not None else 0.0)
+            )))
+            lam_max = x_bar / max(self.thr, 1e-12)
+
+            # V_R severity
+            n_clean = n_marg = n_contam = n_unknown = 0
+            if self.has_reference:
+                f_ref, v_ref = self._get_trimmed_reference()
+
+                vr = compute_normalized_vr_with_validity(
+                    f, v, f_ref, v_ref, self._lambda_max_ref,
+                    user_lambda_max=user_lam_max,
+                )
+
+                if eval_range is not None and not eval_range.is_empty():
+                    in_range = compute_range_mask(f, v, eval_range)
+                    vr = np.where(in_range, vr, np.nan)
+
+                sev = classify_nearfield_severity(
+                    vr, self._clean_threshold, self._marginal_threshold,
+                    self._unknown_action,
+                )
+                n_clean = int(np.sum(sev == "clean"))
+                n_marg = int(np.sum(sev == "marginal"))
+                n_contam = int(np.sum(sev == "contaminated"))
+                n_unknown = int(np.sum(sev == "unknown"))
+            n_total = len(f)
+
+            results.append({
+                "label": lbl,
+                "offset_index": idx,
+                "x_bar": x_bar,
+                "lambda_max": lam_max,
+                "n_total": n_total,
+                "n_clean": n_clean,
+                "n_marginal": n_marg,
+                "n_contaminated": n_contam,
+                "n_unknown": n_unknown,
+                "clean_pct": 100.0 * n_clean / max(n_total, 1),
+                "contam_pct": 100.0 * n_contam / max(n_total, 1),
+                "is_reference": idx == self._reference_index,
+            })
+        return results
+
+    def build_clean_composite(self) -> tuple:
+        """Build an NF-clean composite curve from all offsets."""
+        n = min(len(self.c.velocity_arrays), len(self.c.frequency_arrays))
+        if n == 0:
+            return np.array([]), np.array([])
+        recv = self._get_array_positions()
+        labels = self.c.offset_labels[:n]
+        offsets = []
+        for lbl in labels:
+            so = parse_source_offset_from_label(lbl)
+            offsets.append(so if so is not None else 0.0)
+        return build_nf_clean_composite_curve(
+            self.c.frequency_arrays[:n],
+            self.c.velocity_arrays[:n],
+            offsets,
+            recv,
+            nacd_threshold=max(self.thr, 1e-12),
+        )
+
     # ── helpers ────────────────────────────────────────────────────
 
     def _get_array_positions(self) -> np.ndarray:
@@ -356,3 +506,12 @@ class NearFieldInspector:
             self.c._nf_point_overlay = {}
         except Exception:
             pass
+
+    def export_report(self, path: str, fmt: str = "csv") -> str:
+        """Export NF report to file."""
+        from dc_cut.api.analysis_ops import export_nearfield_report
+        report = self.compute_full_report()
+        result = export_nearfield_report(report, path, fmt=fmt)
+        if result["success"]:
+            return result["path"]
+        raise RuntimeError("; ".join(result["errors"]))

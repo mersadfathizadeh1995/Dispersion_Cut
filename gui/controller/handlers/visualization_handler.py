@@ -700,6 +700,7 @@ class VisualizationHandler:
 
     def _resolve_wl_default_color(self, entry: dict, line_idx: int) -> str:
         """Resolve default lambda line colour, preferring offset-matched colour."""
+        from matplotlib.colors import to_hex
         so = entry.get('source_offset')
         if so is not None:
             from dc_cut.core.processing.wavelength_lines import parse_source_offset_from_label
@@ -708,6 +709,12 @@ class VisualizationHandler:
             for i, lbl in enumerate(labels):
                 parsed = parse_source_offset_from_label(lbl)
                 if parsed is not None and abs(parsed - so) < 0.01:
+                    # Read color directly from the data line artist
+                    try:
+                        if i < len(self._ctrl.lines_wave):
+                            return to_hex(self._ctrl.lines_wave[i].get_color())
+                    except Exception:
+                        pass
                     return self.OFFSET_PALETTE[i % len(self.OFFSET_PALETTE)]
         return self.WL_COLORS[line_idx % len(self.WL_COLORS)]
 

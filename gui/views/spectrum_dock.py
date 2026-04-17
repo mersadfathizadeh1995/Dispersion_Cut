@@ -36,17 +36,26 @@ class SpectrumDock(QtWidgets.QDockWidget):
         master_group = QtWidgets.QGroupBox("Master Controls", w)
         master_layout = QtWidgets.QVBoxLayout(master_group)
 
-        # Master enable/disable checkbox
-        self.chk_master_enable = QtWidgets.QCheckBox("Enable All Spectra", master_group)
-        self.chk_master_enable.setChecked(True)
-        self.chk_master_enable.toggled.connect(self._on_master_enable_changed)
-        master_layout.addWidget(self.chk_master_enable)
+        # All On / All Off buttons (matching Data tab pattern)
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_all_on = QtWidgets.QPushButton("All On", master_group)
+        btn_all_off = QtWidgets.QPushButton("All Off", master_group)
+        btn_all_on.clicked.connect(lambda: self._set_all_spectra(True))
+        btn_all_off.clicked.connect(lambda: self._set_all_spectra(False))
+        btn_row.addWidget(btn_all_on)
+        btn_row.addWidget(btn_all_off)
+        master_layout.addLayout(btn_row)
 
         # Colormap selection
         cmap_layout = QtWidgets.QHBoxLayout()
         cmap_label = QtWidgets.QLabel("Colormap:", master_group)
         self.cmap_combo = QtWidgets.QComboBox(master_group)
-        self.cmap_combo.addItems(["viridis", "plasma", "hot", "gray", "jet"])
+        self.cmap_combo.addItems([
+            "viridis", "plasma", "inferno", "magma", "cividis",
+            "hot", "coolwarm", "Spectral", "RdYlBu",
+            "jet", "turbo", "gray", "bone", "cubehelix",
+            "twilight", "ocean", "terrain",
+        ])
 
         # Load current colormap from preferences
         try:
@@ -211,16 +220,23 @@ class SpectrumDock(QtWidgets.QDockWidget):
         # Add spacer at the end
         self.layers_layout.addStretch()
 
-    def _on_master_enable_changed(self, enabled: bool) -> None:
-        """Handle master enable/disable toggle."""
+    def _set_all_spectra(self, visible: bool) -> None:
+        """Toggle all spectra on/off (matches Data tab All On / All Off)."""
+        # Update per-layer checkboxes
+        for idx, widgets in self.layer_widgets.items():
+            cb = widgets.get('checkbox')
+            if cb:
+                cb.blockSignals(True)
+                cb.setChecked(visible)
+                cb.blockSignals(False)
+        # Update controller
         if hasattr(self.c, 'toggle_all_spectra'):
-            self.c.toggle_all_spectra(enabled)
-            # Save preference
-            try:
-                from dc_cut.services.prefs import set_pref
-                set_pref("show_spectra", enabled)
-            except Exception:
-                pass
+            self.c.toggle_all_spectra(visible)
+        try:
+            from dc_cut.services.prefs import set_pref
+            set_pref("show_spectra", visible)
+        except Exception:
+            pass
 
     def _on_colormap_changed(self, colormap: str) -> None:
         """Handle colormap selection change."""

@@ -43,17 +43,31 @@ def compute_lambda_max(
     source_offset: float,
     receiver_positions: np.ndarray,
     nacd_threshold: float = 1.0,
+    *,
+    transform: Optional[str] = None,
 ) -> float:
     """Compute the maximum resolved wavelength for a given source offset.
 
-    lambda_max = x_bar / NACD_threshold
+    lambda_max = x_bar / effective_threshold
+
+    When *transform* is provided, the NACD threshold is adjusted by the
+    transformation method's NF multiplier (Rahimi et al. 2021, Sec. 5).
+    E.g. FDBF-cylindrical gets 2× improvement → effective threshold halved.
 
     Returns 0.0 if the threshold is non-positive.
     """
     if nacd_threshold <= 0:
         return 0.0
+    effective = nacd_threshold
+    if transform is not None:
+        try:
+            from dc_cut.core.processing.nearfield.criteria import TRANSFORM_NF_MULTIPLIER
+            tr = transform.lower().strip().replace("-", "_").replace(" ", "_")
+            effective *= TRANSFORM_NF_MULTIPLIER.get(tr, 1.0)
+        except ImportError:
+            pass
     x_bar = compute_x_bar(source_offset, receiver_positions)
-    return x_bar / nacd_threshold
+    return x_bar / max(effective, 1e-12)
 
 
 def compute_wavelength_line(
@@ -81,19 +95,34 @@ def compute_wavelength_lines_batch(
     nacd_threshold: float = 1.0,
     labels: Optional[List[str]] = None,
     num_points: int = 300,
+    *,
+    transform: Optional[str] = None,
 ) -> List[Dict]:
     """Compute wavelength lines for multiple source offsets.
 
+    When *transform* is provided (or auto-detected from each label),
+    the NACD threshold is adjusted by the transform's NF multiplier.
+
     Returns a list of dicts, each with:
-        source_offset, label, x_bar, lambda_max, f_curve, v_curve
+        source_offset, label, x_bar, lambda_max, f_curve, v_curve, transform_used
     """
     results: List[Dict] = []
     for i, so in enumerate(source_offsets):
         lbl = labels[i] if labels and i < len(labels) else f"{so:+g} m"
-        x_bar = compute_x_bar(so, receiver_positions)
-        lam = x_bar / nacd_threshold if nacd_threshold > 0 else 0.0
+
+        # Determine per-offset transform
+        tr = transform
+        if tr is None and labels and i < len(labels):
+            try:
+                from dc_cut.core.processing.nearfield.criteria import parse_transform_from_label
+                tr = parse_transform_from_label(labels[i])
+            except ImportError:
+                pass
+
+        lam = compute_lambda_max(so, receiver_positions, nacd_threshold, transform=tr)
         if lam <= 0:
             continue
+        x_bar = compute_x_bar(so, receiver_positions)
         f_curve, v_curve = compute_wavelength_line(lam, fmin, fmax, num_points)
         results.append({
             "source_offset": so,
@@ -102,6 +131,7 @@ def compute_wavelength_lines_batch(
             "lambda_max": lam,
             "f_curve": f_curve,
             "v_curve": v_curve,
+            "transform_used": tr,
         })
     return results
 

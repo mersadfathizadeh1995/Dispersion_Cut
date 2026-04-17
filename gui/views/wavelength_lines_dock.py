@@ -175,12 +175,15 @@ class WavelengthLinesDock(QtWidgets.QDockWidget):
         layout = QtWidgets.QVBoxLayout(page)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        self._master_toggle = QtWidgets.QCheckBox("Show λ lines on canvas")
-        self._master_toggle.setChecked(
-            bool(getattr(self.c, 'show_wavelength_lines', False))
-        )
-        self._master_toggle.toggled.connect(self._on_master_toggle)
-        layout.addWidget(self._master_toggle)
+        # All On / All Off buttons (matching Data tab pattern)
+        btn_row_master = QtWidgets.QHBoxLayout()
+        btn_all_on = QtWidgets.QPushButton("All On")
+        btn_all_off = QtWidgets.QPushButton("All Off")
+        btn_all_on.clicked.connect(self._show_all)
+        btn_all_off.clicked.connect(self._hide_all)
+        btn_row_master.addWidget(btn_all_on)
+        btn_row_master.addWidget(btn_all_off)
+        layout.addLayout(btn_row_master)
 
         # ── Label style group ──
         style_group = QtWidgets.QGroupBox("Label Style")
@@ -237,14 +240,8 @@ class WavelengthLinesDock(QtWidgets.QDockWidget):
         layout.addWidget(self._lines_list, stretch=1)
 
         btn_row = QtWidgets.QHBoxLayout()
-        sel_all = QtWidgets.QPushButton("Show All")
-        sel_all.clicked.connect(self._show_all)
-        desel_all = QtWidgets.QPushButton("Hide All")
-        desel_all.clicked.connect(self._hide_all)
         clear_btn = QtWidgets.QPushButton("Clear All")
         clear_btn.clicked.connect(self._clear_all)
-        btn_row.addWidget(sel_all)
-        btn_row.addWidget(desel_all)
         btn_row.addWidget(clear_btn)
         layout.addLayout(btn_row)
 
@@ -291,7 +288,8 @@ class WavelengthLinesDock(QtWidgets.QDockWidget):
         self._populate_lines_list()
 
         if self.c._wavelength_lines_data:
-            self._master_toggle.setChecked(True)
+            self.c.show_wavelength_lines = True
+            self._show_all()
         else:
             self._compute_status.setText("No lines computed.")
 
@@ -381,11 +379,40 @@ class WavelengthLinesDock(QtWidgets.QDockWidget):
     # Lines list management
     # ──────────────────────────────────────────────────────────────
     # Default color palette (must match VisualizationHandler.WL_COLORS)
+    # Default color palettes (must match VisualizationHandler)
     _WL_PALETTE = [
         '#e6194b', '#3cb44b', '#4363d8', '#f58231',
         '#911eb4', '#42d4f4', '#f032e6', '#bfef45',
         '#fabed4', '#469990',
     ]
+    _OFFSET_PALETTE = [
+        '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+    ]
+
+    def _resolve_default_color(self, entry: dict, line_idx: int) -> str:
+        """Resolve default λ-line color, matching the data layer color.
+
+        This mirrors VisualizationHandler._resolve_wl_default_color so the
+        icon in the list matches the line drawn on the canvas.
+        """
+        from dc_cut.core.processing.wavelength_lines import parse_source_offset_from_label
+        from matplotlib.colors import to_hex
+        so = entry.get('source_offset')
+        if so is not None:
+            n_data = min(len(self.c.velocity_arrays), len(self.c.frequency_arrays))
+            labels = self.c.offset_labels[:n_data]
+            for i, lbl in enumerate(labels):
+                parsed = parse_source_offset_from_label(lbl)
+                if parsed is not None and abs(parsed - so) < 0.01:
+                    # Read color directly from the data line artist
+                    try:
+                        if i < len(self.c.lines_wave):
+                            return to_hex(self.c.lines_wave[i].get_color())
+                    except Exception:
+                        pass
+                    return self._OFFSET_PALETTE[i % len(self._OFFSET_PALETTE)]
+        return self._WL_PALETTE[line_idx % len(self._WL_PALETTE)]
 
     def _color_icon(self, hex_color: str) -> QtGui.QIcon:
         """Create a small square icon filled with the given color."""
@@ -411,7 +438,7 @@ class WavelengthLinesDock(QtWidgets.QDockWidget):
             else:
                 text += f"  ({label})"
 
-            default_color = self._WL_PALETTE[i % len(self._WL_PALETTE)]
+            default_color = self._resolve_default_color(entry, i)
             color = wl_colors.get(label, default_color)
 
             item = QtWidgets.QListWidgetItem(self._color_icon(color), text)
@@ -429,26 +456,50 @@ class WavelengthLinesDock(QtWidgets.QDockWidget):
         if not hasattr(self.c, '_wl_visibility'):
             self.c._wl_visibility = {}
         self.c._wl_visibility[label] = is_checked
+        # Auto-enable master flag when any line is turned on
+        if is_checked:
+            self.c.show_wavelength_lines = True
         self._redraw()
 
     def _on_master_toggle(self, checked: bool) -> None:
+        """Backward compat stub (master checkbox removed)."""
         self.c.show_wavelength_lines = checked
         self._redraw()
 
     def _show_all(self) -> None:
+        """Show all λ lines (also enables master flag)."""
+        self.c.show_wavelength_lines = True
+        self._lines_list.blockSignals(True)
         for i in range(self._lines_list.count()):
             self._lines_list.item(i).setCheckState(_Checked)
+        self._lines_list.blockSignals(False)
+        # Set all visibility flags at once
+        if not hasattr(self.c, '_wl_visibility'):
+            self.c._wl_visibility = {}
+        for entry in getattr(self.c, '_wavelength_lines_data', []):
+            label = entry.get('label', '?')
+            self.c._wl_visibility[label] = True
+        self._redraw()
 
     def _hide_all(self) -> None:
+        """Hide all λ lines (also disables master flag)."""
+        self.c.show_wavelength_lines = False
+        self._lines_list.blockSignals(True)
         for i in range(self._lines_list.count()):
             self._lines_list.item(i).setCheckState(_Unchecked)
+        self._lines_list.blockSignals(False)
+        if not hasattr(self.c, '_wl_visibility'):
+            self.c._wl_visibility = {}
+        for entry in getattr(self.c, '_wavelength_lines_data', []):
+            label = entry.get('label', '?')
+            self.c._wl_visibility[label] = False
+        self._redraw()
 
     def _clear_all(self) -> None:
         self.c._wavelength_lines_data = []
         self.c._wl_visibility = {}
         self.c._wl_colors = {}
         self.c.show_wavelength_lines = False
-        self._master_toggle.setChecked(False)
         self._populate_lines_list()
         self._redraw()
 
@@ -509,6 +560,3 @@ class WavelengthLinesDock(QtWidgets.QDockWidget):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._populate_lines_list()
-        self._master_toggle.setChecked(
-            bool(getattr(self.c, 'show_wavelength_lines', False))
-        )

@@ -44,10 +44,27 @@ class AverageConfig:
 
 @dataclass
 class NearFieldConfig:
-    """Configuration for near-field analysis."""
+    """Configuration for near-field analysis.
+
+    Extends basic NACD threshold with source-type-aware criteria
+    (Rahimi et al. 2022 Table 2) and reference curve options.
+    """
     threshold: float = 1.0
     n_phones: int = 24
     receiver_dx: float = 2.0
+    # Source-type-aware criteria (Phase 1)
+    source_type: str = "sledgehammer"       # "sledgehammer", "vibroseis", "hammer", "unknown"
+    error_level: str = "10_15pct"           # "5pct" or "10_15pct"
+    transform: Optional[str] = None         # "fdbf_cylindrical", "fk", "tau_p", etc.
+    source_offsets: Optional[List[float]] = None
+    # Reference curve selection
+    reference_mode: str = "longest_offset"  # "longest_offset", "median", "custom_offset", "file"
+    reference_file: Optional[str] = None
+    reference_index: Optional[int] = None
+    # V_R severity thresholds
+    vr_clean_threshold: float = 0.95
+    vr_marginal_threshold: float = 0.85
+    vr_onset_threshold: float = 0.90
 
 
 @dataclass
