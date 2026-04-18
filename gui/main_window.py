@@ -1589,6 +1589,33 @@ def show_shell(controller):
     setattr(app, "_masw_shell_window", win)
     try: win.raise_(); win.activateWindow()
     except Exception: pass
+
+    # Ensure right-side default tab remains Layers -> Data after
+    # post-show tabify/layout settling.
+    def _post_show_raise() -> None:
+        try:
+            if hasattr(win, 'layers'):
+                try:
+                    win.layers.raise_()
+                except Exception:
+                    pass
+                try:
+                    win.layers._tabs.setCurrentIndex(0)
+                except Exception:
+                    pass
+            if hasattr(win, 'nf_analysis'):
+                try:
+                    win.nf_analysis.raise_()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    try:
+        QtCore.QTimer.singleShot(0, _post_show_raise)
+        QtCore.QTimer.singleShot(50, _post_show_raise)
+    except Exception:
+        pass
     return app
 
 

@@ -1250,11 +1250,33 @@ class OpenDataDialog(QtWidgets.QDialog):
         self.active_table = QtWidgets.QTableWidget(0, 5)
         self.active_table.setHorizontalHeaderLabels(["Label", "File Path", "Map", "NPZ Spectrum", ""])
         self.active_table.horizontalHeader().setStretchLastSection(False)
-        self.active_table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Interactive if hasattr(QtWidgets.QHeaderView, 'ResizeMode') else QtWidgets.QHeaderView.Interactive)
-        self.active_table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch if hasattr(QtWidgets.QHeaderView, 'ResizeMode') else QtWidgets.QHeaderView.Stretch)
+        try:
+            resize_mode = QtWidgets.QHeaderView.ResizeMode
+        except AttributeError:
+            resize_mode = QtWidgets.QHeaderView
+        self.active_table.horizontalHeader().setSectionResizeMode(
+            0, resize_mode.Interactive if hasattr(resize_mode, 'Interactive')
+            else QtWidgets.QHeaderView.Interactive
+        )
+        self.active_table.horizontalHeader().setSectionResizeMode(
+            1, resize_mode.Stretch if hasattr(resize_mode, 'Stretch')
+            else QtWidgets.QHeaderView.Stretch
+        )
+        self.active_table.horizontalHeader().setSectionResizeMode(
+            2, resize_mode.Fixed if hasattr(resize_mode, 'Fixed')
+            else QtWidgets.QHeaderView.Fixed
+        )
+        self.active_table.horizontalHeader().setSectionResizeMode(
+            3, resize_mode.Fixed if hasattr(resize_mode, 'Fixed')
+            else QtWidgets.QHeaderView.Fixed
+        )
+        self.active_table.horizontalHeader().setSectionResizeMode(
+            4, resize_mode.Fixed if hasattr(resize_mode, 'Fixed')
+            else QtWidgets.QHeaderView.Fixed
+        )
         self.active_table.setColumnWidth(0, 100)
         self.active_table.setColumnWidth(2, 50)
-        self.active_table.setColumnWidth(3, 180)
+        self.active_table.setColumnWidth(3, 200)
         self.active_table.setColumnWidth(4, 30)
         files_layout.addWidget(self.active_table)
         
@@ -1317,10 +1339,20 @@ class OpenDataDialog(QtWidgets.QDialog):
         label_edit.setText(f"File {row + 1}")
         self.active_table.setCellWidget(row, 0, label_edit)
         
-        # File path
+        # File path with browse
+        path_widget = QtWidgets.QWidget()
+        path_h = QtWidgets.QHBoxLayout(path_widget)
+        path_h.setContentsMargins(0, 0, 0, 0)
         path_edit = QtWidgets.QLineEdit()
         path_edit.setPlaceholderText("Select file...")
-        self.active_table.setCellWidget(row, 1, path_edit)
+        btn_browse = QtWidgets.QPushButton("...")
+        btn_browse.setMaximumWidth(30)
+        btn_browse.clicked.connect(
+            lambda checked, e=path_edit: self._browse_active_file(e)
+        )
+        path_h.addWidget(path_edit, 1)
+        path_h.addWidget(btn_browse)
+        self.active_table.setCellWidget(row, 1, path_widget)
         
         # Map button
         btn_map = QtWidgets.QPushButton("Map")
@@ -1341,11 +1373,13 @@ class OpenDataDialog(QtWidgets.QDialog):
         spectrum_h.addWidget(btn_spectrum)
         self.active_table.setCellWidget(row, 3, spectrum_layout)
         
-        # Browse button for main file
-        btn_browse = QtWidgets.QPushButton("...")
-        btn_browse.setMaximumWidth(30)
-        btn_browse.clicked.connect(lambda checked, e=path_edit: self._browse_active_file(e))
-        self.active_table.setCellWidget(row, 4, btn_browse)
+        # Remove button
+        btn_remove = QtWidgets.QPushButton("×")
+        btn_remove.setMaximumWidth(30)
+        btn_remove.clicked.connect(
+            lambda checked, r=row: self._remove_active_row_at(r)
+        )
+        self.active_table.setCellWidget(row, 4, btn_remove)
     
     def _remove_active_file_row(self):
         """Remove selected row from active files table."""
@@ -1353,6 +1387,13 @@ class OpenDataDialog(QtWidgets.QDialog):
         if row >= 0:
             self.active_table.removeRow(row)
             # Clean up mapping
+            if row in self.active_file_mappings:
+                del self.active_file_mappings[row]
+
+    def _remove_active_row_at(self, row: int):
+        """Remove specific row from active files table."""
+        if row < self.active_table.rowCount():
+            self.active_table.removeRow(row)
             if row in self.active_file_mappings:
                 del self.active_file_mappings[row]
     
@@ -1380,7 +1421,11 @@ class OpenDataDialog(QtWidgets.QDialog):
             return
         
         path_widget = self.active_table.cellWidget(row, 1)
-        path = path_widget.text().strip() if path_widget else ""
+        path = ""
+        if path_widget:
+            path_edit = path_widget.findChild(QtWidgets.QLineEdit)
+            if path_edit:
+                path = path_edit.text().strip()
         
         if not path:
             QtWidgets.QMessageBox.warning(self, "Map Columns", "Select a file first.")
@@ -1408,7 +1453,11 @@ class OpenDataDialog(QtWidgets.QDialog):
             spectrum_widget = self.active_table.cellWidget(row, 3)
             
             label = label_widget.text().strip() if label_widget else f"File {row + 1}"
-            path = path_widget.text().strip() if path_widget else ""
+            path = ""
+            if path_widget:
+                path_edit = path_widget.findChild(QtWidgets.QLineEdit)
+                if path_edit:
+                    path = path_edit.text().strip()
             
             # Get spectrum path from nested layout
             spectrum_path = ""

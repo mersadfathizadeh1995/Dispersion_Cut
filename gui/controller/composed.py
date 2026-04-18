@@ -81,6 +81,14 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):
         # Initialize inclined rectangle tools
         self._init_inclined_rect_tools()
 
+        # Render default averages at startup so checked-by-default
+        # items match what is shown on canvas.
+        try:
+            if bool(getattr(self, 'show_average', False)) or bool(getattr(self, 'show_average_wave', False)):
+                self._update_average_line()
+        except Exception:
+            log.debug("Initial average line render skipped", exc_info=True)
+
         log.info("Controller initialized with composition handlers")
 
     def _setup_toolbar_home(self) -> None:

@@ -27,13 +27,13 @@ class QuickActionsDock(QtWidgets.QDockWidget):
             )
         self.setAllowedAreas(areas)
         host = QtWidgets.QToolBar(self); host.setMovable(False)
-        try: host.setToolButtonStyle(QtCore.Qt.ToolButtonIconOnly)
-        except AttributeError: host.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
+        try: host.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        except AttributeError: host.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         try: host.setIconSize(QtCore.QSize(20, 20))
         except Exception: pass
         try: pol = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         except AttributeError: pol = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
-        host.setSizePolicy(pol); host.setMinimumHeight(28); host.setMinimumWidth(420); self.setWidget(host); self.tb = host
+        host.setSizePolicy(pol); host.setMinimumHeight(28); host.setMinimumWidth(640); self.setWidget(host); self.tb = host
         reg = getattr(self.c, 'actions', None)
 
         def _mk_action(id_: str, fallback_text: str, cb):
@@ -126,11 +126,11 @@ class QuickActionsDock(QtWidgets.QDockWidget):
             return QtGui.QIcon(pix)
 
         act_filter = _mk_action('tools.filter', 'Filter', lambda: self.c._on_filter_values(None)); act_filter.setIcon(_funnel_icon()); act_filter.setToolTip('Filter points (Delete Above/Below threshold)')
-        act_undo = _mk_action('edit.undo', 'Undo', lambda: self.c._on_undo(None)); act_undo.setIcon(_std_icon('undo'))
-        act_redo = _mk_action('edit.redo', 'Redo', lambda: self.c._on_redo(None)); act_redo.setIcon(_std_icon('redo'))
+        act_undo = _mk_action('edit.undo', 'Undo', lambda: self.c._on_undo(None)); act_undo.setIcon(_std_icon('undo')); act_undo.setToolTip('Undo last change')
+        act_redo = _mk_action('edit.redo', 'Redo', lambda: self.c._on_redo(None)); act_redo.setIcon(_std_icon('redo')); act_redo.setToolTip('Redo last undone change')
         # Avoid duplicate accelerators on actions and QShortcuts; do not set shortcuts on QAction here
-        act_delete = _mk_action('edit.delete', 'Delete', lambda: self.c._on_delete(None)); act_delete.setIcon(_std_icon('delete'))
-        act_cancel = _mk_action('edit.cancel', 'Can', lambda: self.c._on_cancel(None)); act_cancel.setIcon(_std_icon('cancel'))
+        act_delete = _mk_action('edit.delete', 'Delete', lambda: self.c._on_delete(None)); act_delete.setIcon(_std_icon('delete')); act_delete.setToolTip('Delete selected points')
+        act_cancel = _mk_action('edit.cancel', 'Cancel', lambda: self.c._on_cancel(None)); act_cancel.setIcon(_std_icon('cancel')); act_cancel.setToolTip('Cancel current selection')
         
         # Tool selection buttons (Box vs Line vs Inclined Rect)
         act_box_tool = _mk_action('edit.box_select', 'Box', lambda: self._activate_box_tool()); act_box_tool.setIcon(_box_icon()); act_box_tool.setToolTip('Box Select Tool (draw rectangle to select points)')
@@ -140,12 +140,12 @@ class QuickActionsDock(QtWidgets.QDockWidget):
         act_inclined_rect_tool = _mk_action('edit.inclined_rect', 'Inclined', lambda: self._activate_inclined_rect_tool()); act_inclined_rect_tool.setIcon(_inclined_rect_icon()); act_inclined_rect_tool.setToolTip('Inclined Rectangle Tool (draw line, expand to rotated rectangle)\nUp/Down arrows to adjust width')
         act_inclined_rect_tool.setCheckable(True); act_inclined_rect_tool.setChecked(False)
         self._act_box_tool = act_box_tool; self._act_line_tool = act_line_tool; self._act_inclined_rect_tool = act_inclined_rect_tool
-        act_avg = _mk_action('tools.avg_resolution', 'Avg', lambda: self.c._on_set_average_resolution(None)); act_avg.setIcon(_std_icon('add'))
-        act_add_data = _mk_action('data.add', 'Add Data', lambda: self.c._on_add_data(None)); act_add_data.setIcon(_std_icon('add'))
-        act_add_layer = _mk_action('data.add_layer', 'Add Layer', lambda: self.c._on_add_layer(None)); act_add_layer.setIcon(_std_icon('add'))
-        act_save_added = _mk_action('data.save_added', 'Save Data', lambda: self.c._on_save_added_data(None)); act_save_added.setIcon(_std_icon('save'))
-        act_save_state = _mk_action('file.save_state', 'Save State', lambda: self.c._on_save_session(None)); act_save_state.setIcon(_std_icon('save'))
-        act_save_txt = _mk_action('file.save_dc', 'Save Txt', lambda: self.c._on_quit(None)); act_save_txt.setIcon(_std_icon('save'))
+        act_avg = _mk_action('tools.avg_resolution', 'Avg', lambda: self.c._on_set_average_resolution(None)); act_avg.setIcon(_std_icon('add')); act_avg.setToolTip('Set average line resolution')
+        act_add_data = _mk_action('data.add', 'Add Data', lambda: self.c._on_add_data(None)); act_add_data.setIcon(_std_icon('add')); act_add_data.setToolTip('Append data to current session')
+        act_add_layer = _mk_action('data.add_layer', 'Add Layer', lambda: self.c._on_add_layer(None)); act_add_layer.setIcon(_std_icon('add')); act_add_layer.setToolTip('Create a new editable layer')
+        act_save_added = _mk_action('data.save_added', 'Save Data', lambda: self.c._on_save_added_data(None)); act_save_added.setIcon(_std_icon('save')); act_save_added.setToolTip('Save points added in Add mode')
+        act_save_state = _mk_action('file.save_state', 'Save State', lambda: self.c._on_save_session(None)); act_save_state.setIcon(_std_icon('save')); act_save_state.setToolTip('Save session state (.pkl)')
+        act_save_txt = _mk_action('file.save_dc', 'Save Txt', lambda: self.c._on_quit(None)); act_save_txt.setIcon(_std_icon('save')); act_save_txt.setToolTip('Export dispersion picks to TXT')
         actions = [act_box_tool, act_line_tool, act_inclined_rect_tool, act_filter, act_undo, act_redo, act_delete, act_cancel, act_avg, act_add_data, act_add_layer, act_save_added, act_save_state, act_save_txt]
         for i, act in enumerate(actions):
             self.tb.addAction(act)
