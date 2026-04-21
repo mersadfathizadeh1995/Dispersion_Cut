@@ -9,7 +9,11 @@ and any reach-in tests.
 """
 from __future__ import annotations
 
+import os
+import time
 from typing import List, Optional
+
+import numpy as np
 
 from .common import refresh_offset_checks
 from .constants import QtWidgets
@@ -20,6 +24,7 @@ from .prefs_io import load_dock_prefs, save_range_prefs
 from .reference_tab import ReferenceTab
 from .results_tab import ResultsTab
 
+from dc_cut.core.io.state import save_session
 from dc_cut.core.processing.nearfield.ranges import EvaluationRange
 
 from .constants import _MODE1_COLORS, _MODE2_COLORS
@@ -55,6 +60,36 @@ class NearFieldEvalDock(QtWidgets.QDockWidget):
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(2)
 
+        save_row = QtWidgets.QHBoxLayout()
+        self._btn_save_nf = QtWidgets.QPushButton("Save NF to PKL")
+        self._btn_save_nf.setToolTip(
+            "Write current session state (including NACD results and λ lines) to the .pkl file."
+        )
+        self._btn_save_nf.clicked.connect(self._save_nf_to_current_pkl)
+        save_menu_btn = QtWidgets.QToolButton()
+        save_menu_btn.setText("▾")
+        save_menu_btn.setToolTip("More save options")
+        _menu = QtWidgets.QMenu(save_menu_btn)
+        _act_save_as = _menu.addAction("Save As…")
+        _act_save_as.triggered.connect(self._save_nf_as_pkl)
+        _act_export_sidecar = _menu.addAction("Export NF for Report Studio…")
+        _act_export_sidecar.setToolTip(
+            "Write an NF evaluation sidecar JSON (third file in the\n"
+            "Report Studio 3-file bundle: PKL + NPZ + sidecar)."
+        )
+        _act_export_sidecar.triggered.connect(self._export_nf_sidecar)
+        save_menu_btn.setMenu(_menu)
+        try:
+            save_menu_btn.setPopupMode(
+                QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
+            )
+        except AttributeError:
+            save_menu_btn.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        save_row.addWidget(self._btn_save_nf)
+        save_row.addWidget(save_menu_btn)
+        save_row.addStretch()
+        root.addLayout(save_row)
+
         self._tabs = QtWidgets.QTabWidget()
         root.addWidget(self._tabs)
 
@@ -86,6 +121,209 @@ class NearFieldEvalDock(QtWidgets.QDockWidget):
 
         # Wire preferences now that every widget exists.
         load_dock_prefs(self)
+        self._update_save_button_state()
+
+    # ================================================================
+    #  NF results → controller (PKL persistence)
+    # ================================================================
+    @staticmethod
+    def _nf_offset_to_dict(entry: dict) -> dict:
+        """Serialize one NACD per-offset result for pickle/JSON-safe storage."""
+        out: dict = {}
+        for k, v in entry.items():
+            if k in ("f", "v", "w", "nacd"):
+                arr = np.asarray(v, float)
+                out[k] = arr.tolist()
+            elif k == "mask":
+                m = np.asarray(v, bool)
+                out[k] = m.tolist()
+            elif hasattr(v, "item"):
+                try:
+                    out[k] = v.item()
+                except Exception:
+                    out[k] = v
+            else:
+                out[k] = v
+        return out
+
+    @staticmethod
+    def _derived_limit_to_dict(derived) -> list:
+        if derived is None or not getattr(derived, "lines", None):
+            return []
+        lines = []
+        for ln in derived.lines:
+            lines.append({
+                "band_index": int(ln.band_index),
+                "kind": str(ln.kind),
+                "role": str(ln.role),
+                "value": float(ln.value),
+                "source": str(ln.source),
+                "valid": bool(ln.valid),
+                "derived_from": (
+                    None if ln.derived_from is None else float(ln.derived_from)
+                ),
+            })
+        return lines
+
+    def _publish_nf_results(
+        self,
+        *,
+        mode: str,
+        results: list,
+        eval_range: EvaluationRange,
+        derived_set,
+    ) -> None:
+        """Snapshot last NF run into controller for get_current_state() / PKL."""
+        tab = self._nacd_tab
+        settings = {
+            "n_recv": int(tab.n_recv.value()),
+            "dx": float(tab.dx.value()),
+            "first_pos": float(tab.first_pos.value()),
+            "threshold": float(tab.nacd_thr.value()),
+            "source_type": tab.source_type.currentData() or "sledgehammer",
+            "error_level": tab.error_level.currentData() or "10_15pct",
+            "transform": getattr(self.c, "view_mode", "freq_only"),
+            "eval_range": eval_range.to_dict(),
+            "mode1_colors": dict(self._mode1_colors),
+        }
+        payload = {
+            "mode": mode,
+            "timestamp": time.time(),
+            "per_offset": [self._nf_offset_to_dict(r) for r in results],
+            "derived_lines": self._derived_limit_to_dict(derived_set),
+        }
+        self.c._nf_results = payload
+        self.c._nf_settings = settings
+        self.c._nf_dirty = True
+        self._update_save_button_state()
+
+    def _update_save_button_state(self) -> None:
+        dirty = bool(getattr(self.c, "_nf_dirty", False))
+        self._btn_save_nf.setEnabled(True)
+        if dirty:
+            self._btn_save_nf.setText("Save NF to PKL *")
+            self._btn_save_nf.setToolTip(
+                "NACD results or λ-line metadata not yet saved to PKL."
+            )
+        else:
+            self._btn_save_nf.setText("Save NF to PKL")
+            self._btn_save_nf.setToolTip(
+                "Write current session state (including NACD results and λ lines) "
+                "to the .pkl file."
+            )
+
+    def _save_nf_parent_widget(self):
+        try:
+            return self.c.fig.canvas.manager.window
+        except Exception:
+            return self.window()
+
+    def _save_nf_to_current_pkl(self) -> None:
+        path = getattr(self.c, "_loaded_state_path", "") or ""
+        path = str(path).strip()
+        if not path or not os.path.isfile(path):
+            self._save_nf_as_pkl()
+            return
+        try:
+            state_dict = self.c.get_current_state()
+            save_session(state_dict, path)
+            self.c._nf_dirty = False
+            self._update_save_button_state()
+            QtWidgets.QMessageBox.information(
+                self._save_nf_parent_widget(),
+                "Save NF",
+                f"Saved session (including NF) →\n{path}",
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self._save_nf_parent_widget(),
+                "Save NF",
+                f"Failed to save:\n{e}",
+            )
+
+    def _save_nf_as_pkl(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self._save_nf_parent_widget(),
+            "Save Session with NF Data",
+            "",
+            "Pickle (*.pkl);;All Files (*.*)",
+        )
+        if not path:
+            return
+        try:
+            state_dict = self.c.get_current_state()
+            save_session(state_dict, path)
+            self.c._loaded_state_path = os.path.abspath(path)
+            self.c._nf_dirty = False
+            self._update_save_button_state()
+            QtWidgets.QMessageBox.information(
+                self._save_nf_parent_widget(),
+                "Save NF",
+                f"Saved →\n{path}",
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self._save_nf_parent_widget(),
+                "Save NF",
+                f"Failed to save:\n{e}",
+            )
+
+    def _limit_lines_ui_snapshot(self) -> dict:
+        """Visibility + color map from the Limit Lines tab, JSON-safe."""
+        try:
+            state = self._limits.current_state()
+            return state.to_dict() if state is not None else {}
+        except Exception:
+            return {}
+
+    def _export_nf_sidecar(self) -> None:
+        """Write a Report Studio NF evaluation sidecar JSON."""
+        from packages.report_studio.io.nf_sidecar import (
+            build_sidecar,
+            default_sidecar_path_for,
+            write_sidecar,
+        )
+
+        nf_results = getattr(self.c, "_nf_results", None)
+        nf_settings = getattr(self.c, "_nf_settings", None)
+        if not nf_results:
+            QtWidgets.QMessageBox.information(
+                self._save_nf_parent_widget(),
+                "Export NF for Report Studio",
+                "Run an NF evaluation first; there are no results to export.",
+            )
+            return
+
+        src_pkl = getattr(self.c, "_loaded_state_path", "") or ""
+        default_path = default_sidecar_path_for(src_pkl)
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self._save_nf_parent_widget(),
+            "Export NF for Report Studio",
+            default_path,
+            "JSON (*.json);;All Files (*.*)",
+        )
+        if not path:
+            return
+
+        try:
+            payload = build_sidecar(
+                nf_results=nf_results,
+                nf_settings=nf_settings,
+                limit_lines_ui=self._limit_lines_ui_snapshot() or None,
+                pkl_path=src_pkl,
+            )
+            write_sidecar(path, payload)
+            QtWidgets.QMessageBox.information(
+                self._save_nf_parent_widget(),
+                "Export NF for Report Studio",
+                f"Wrote NF sidecar →\n{path}",
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self._save_nf_parent_widget(),
+                "Export NF for Report Studio",
+                f"Failed to export:\n{e}",
+            )
 
     # ================================================================
     #  Dock-level operations (used by tabs + external callers)
@@ -329,6 +567,7 @@ class NearFieldEvalDock(QtWidgets.QDockWidget):
     # ================================================================
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self._update_save_button_state()
         refresh_offset_checks(
             self, self._nacd_tab.offset_checks, self._nacd_tab.offset_layout,
             default_checked=False,

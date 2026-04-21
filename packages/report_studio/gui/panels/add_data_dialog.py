@@ -10,14 +10,16 @@ The user selects:
 
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ...qt_compat import (
     QtWidgets, QtCore, Signal,
     DialogAccepted, DialogRejected,
     Checked, Unchecked,
 )
+from .collapsible import CollapsibleSection
 
 
 class AddDataDialog(QtWidgets.QDialog):
@@ -26,22 +28,34 @@ class AddDataDialog(QtWidgets.QDialog):
     def __init__(self, parent=None, subplot_key: str = "main"):
         super().__init__(parent)
         self.setWindowTitle(f"Add Data — {subplot_key}")
-        self.setMinimumWidth(480)
-        self.setMinimumHeight(400)
+        self.setMinimumWidth(640)
+        self.setMinimumHeight(520)
 
         self._subplot_key = subplot_key
         self._pkl_path = ""
         self._npz_path = ""
         self._offset_labels: List[str] = []
         self._selected_type_id = "source_offset"
+        self._plugin_value_getters: Dict[str, Callable[[], Any]] = {}
 
         self._build_ui()
         self._restore_default_paths()
+        self._rebuild_plugin_fields()
 
     # ── UI ──────────────────────────────────────────────────────────────
 
     def _build_ui(self):
         layout = QtWidgets.QVBoxLayout(self)
+        self._body = QtWidgets.QWidget()
+        self._body_layout = QtWidgets.QVBoxLayout(self._body)
+        self._body_layout.setContentsMargins(0, 0, 0, 0)
+        self._body_layout.setSpacing(8)
+
+        body_scroll = QtWidgets.QScrollArea()
+        body_scroll.setWidgetResizable(True)
+        body_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        body_scroll.setWidget(self._body)
+        layout.addWidget(body_scroll)
 
         # Figure type selector
         type_group = QtWidgets.QGroupBox("Figure Type")
@@ -49,7 +63,10 @@ class AddDataDialog(QtWidgets.QDialog):
         self._type_combo = QtWidgets.QComboBox()
         self._populate_type_combo()
         type_layout.addWidget(self._type_combo)
-        layout.addWidget(type_group)
+        self._type_combo.currentIndexChanged.connect(
+            lambda _i: self._rebuild_plugin_fields()
+        )
+        self._body_layout.addWidget(type_group)
 
         # File selection
         file_group = QtWidgets.QGroupBox("Data Files")
@@ -73,11 +90,27 @@ class AddDataDialog(QtWidgets.QDialog):
         npz_row.addWidget(npz_btn)
         file_layout.addRow("Spectrum (.npz):", npz_row)
 
-        layout.addWidget(file_group)
+        nf_row = QtWidgets.QHBoxLayout()
+        self._nf_edit = QtWidgets.QLineEdit()
+        self._nf_edit.setPlaceholderText(
+            "Optional: NF evaluation sidecar exported from DC Cut..."
+        )
+        self._nf_edit.setToolTip(
+            "Third file in the DC Cut 3-file bundle: overrides the NF "
+            "analysis embedded in the PKL when set."
+        )
+        nf_btn = QtWidgets.QPushButton("Browse...")
+        nf_btn.clicked.connect(self._browse_nf_sidecar)
+        nf_row.addWidget(self._nf_edit, stretch=1)
+        nf_row.addWidget(nf_btn)
+        file_layout.addRow("NF eval (.json):", nf_row)
 
-        # Offset checklist
-        offset_group = QtWidgets.QGroupBox("Select Offsets")
-        offset_layout = QtWidgets.QVBoxLayout(offset_group)
+        self._body_layout.addWidget(file_group)
+
+        # Offset checklist (collapsible)
+        self._offset_section = CollapsibleSection("Select Offsets", expanded=True)
+        offset_layout = QtWidgets.QVBoxLayout()
+        offset_layout.setContentsMargins(0, 0, 0, 0)
 
         btn_row = QtWidgets.QHBoxLayout()
         self._btn_all = QtWidgets.QPushButton("Select All")
@@ -96,7 +129,21 @@ class AddDataDialog(QtWidgets.QDialog):
         self._lbl_status.setStyleSheet("color: #888;")
         offset_layout.addWidget(self._lbl_status)
 
-        layout.addWidget(offset_group, stretch=1)
+        off_wrap = QtWidgets.QWidget()
+        off_wrap.setLayout(offset_layout)
+        self._offset_section.form.addRow(off_wrap)
+        self._body_layout.addWidget(self._offset_section)
+
+        self._plugin_outer = QtWidgets.QWidget()
+        self._plugin_vbox = QtWidgets.QVBoxLayout(self._plugin_outer)
+        self._plugin_vbox.setContentsMargins(0, 0, 0, 0)
+        self._plugin_vbox.setSpacing(4)
+        self._body_layout.addWidget(self._plugin_outer)
+        # Pool any leftover viewport space at the bottom rather than
+        # inflating any one section. Without this stretch, collapsing a
+        # CollapsibleSection leaves the freed area empty because the parent
+        # layout had already allocated the height to that section.
+        self._body_layout.addStretch(1)
 
         # Buttons
         try:
@@ -117,10 +164,110 @@ class AddDataDialog(QtWidgets.QDialog):
         # Import here to ensure plugins are registered
         from ...core.plugins import source_offset as _  # noqa: F401
         from ...core.plugins import average_curve as _ac  # noqa: F401
+        from ...core.plugins import nacd_only as _nf  # noqa: F401
         from ...core.figure_types import registry
 
         for plugin in registry.all_types():
             self._type_combo.addItem(plugin.display_name, plugin.type_id)
+
+    def _rebuild_plugin_fields(self) -> None:
+        """Dynamic rows from the selected figure type's ``settings_fields()``."""
+        self._plugin_value_getters.clear()
+        while self._plugin_vbox.count():
+            item = self._plugin_vbox.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        from ...core.figure_types import registry
+
+        tid = self.selected_type_id
+        plugin = registry.get(tid)
+        if not plugin:
+            self._plugin_outer.setVisible(False)
+            return
+
+        fields = []
+        try:
+            fields = plugin.settings_fields()
+        except Exception:
+            fields = []
+
+        if not fields:
+            self._plugin_outer.setVisible(False)
+            return
+
+        self._plugin_outer.setVisible(True)
+        groups: Dict[str, list] = defaultdict(list)
+        for spec in fields:
+            g = spec.get("group") or "Options"
+            groups[g].append(spec)
+
+        preferred_order = ["Layout", "Display", "Recompute / array geometry", "Options"]
+        ordered_names = [n for n in preferred_order if n in groups]
+        ordered_names += sorted(k for k in groups if k not in preferred_order)
+
+        try:
+            growth_policy = QtWidgets.QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
+            wrap_policy = QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows
+            label_alignment = QtCore.Qt.AlignmentFlag.AlignRight
+        except AttributeError:
+            growth_policy = QtWidgets.QFormLayout.ExpandingFieldsGrow
+            wrap_policy = QtWidgets.QFormLayout.WrapLongRows
+            label_alignment = QtCore.Qt.AlignRight
+
+        for gi, gname in enumerate(ordered_names):
+            sec = CollapsibleSection(
+                f"Figure options — {gname}",
+                expanded=(gname in ("Layout", "Display")),
+            )
+            form = sec.form
+            form.setFieldGrowthPolicy(growth_policy)
+            form.setRowWrapPolicy(wrap_policy)
+            form.setLabelAlignment(label_alignment)
+            for spec in groups[gname]:
+                key = spec.get("key", "")
+                label = spec.get("label", key)
+                typ = spec.get("type", "str")
+                default = spec.get("default")
+
+                if typ == "combo":
+                    w = QtWidgets.QComboBox()
+                    w.setMinimumWidth(260)
+                    for opt in spec.get("options") or []:
+                        w.addItem(str(opt), opt)
+                    idx = w.findData(default)
+                    if idx < 0:
+                        idx = 0
+                    w.setCurrentIndex(idx)
+                    self._plugin_value_getters[key] = lambda ww=w: ww.currentData()
+                    form.addRow(label, w)
+                elif typ == "int":
+                    w = QtWidgets.QSpinBox()
+                    w.setMinimumWidth(260)
+                    w.setRange(int(spec.get("min", -10**6)), int(spec.get("max", 10**6)))
+                    w.setValue(int(default if default is not None else 0))
+                    self._plugin_value_getters[key] = lambda ww=w: int(ww.value())
+                    form.addRow(label, w)
+                elif typ == "float":
+                    w = QtWidgets.QDoubleSpinBox()
+                    w.setMinimumWidth(260)
+                    w.setDecimals(3)
+                    w.setRange(float(spec.get("min", -1e9)), float(spec.get("max", 1e9)))
+                    v = float(default if default is not None else 0.0)
+                    w.setValue(v)
+                    self._plugin_value_getters[key] = lambda ww=w: float(ww.value())
+                    form.addRow(label, w)
+                elif typ == "bool":
+                    w = QtWidgets.QCheckBox(label)
+                    w.setChecked(bool(default))
+                    self._plugin_value_getters[key] = lambda ww=w: bool(ww.isChecked())
+                    form.addRow(w)
+                else:
+                    w = QtWidgets.QLineEdit(str(default if default is not None else ""))
+                    self._plugin_value_getters[key] = lambda ww=w: ww.text().strip()
+                    form.addRow(label, w)
+            self._plugin_vbox.addWidget(sec)
 
     # ── Browse handlers ────────────────────────────────────────────────
 
@@ -144,6 +291,21 @@ class AddDataDialog(QtWidgets.QDialog):
         )
         if path:
             self._npz_edit.setText(path)
+
+    def _browse_nf_sidecar(self):
+        """Pick the NF evaluation sidecar JSON (3rd file in the bundle)."""
+        import os
+        start = (
+            os.path.dirname(self._nf_edit.text())
+            or os.path.dirname(self._pkl_edit.text())
+            or ""
+        )
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select NF Evaluation Sidecar", start,
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if path:
+            self._nf_edit.setText(path)
 
     def _restore_default_paths(self):
         """Pre-fill PKL/NPZ from QSettings defaults."""
@@ -238,6 +400,10 @@ class AddDataDialog(QtWidgets.QDialog):
         return self._npz_edit.text().strip()
 
     @property
+    def nf_sidecar_path(self) -> str:
+        return self._nf_edit.text().strip()
+
+    @property
     def selected_offsets(self) -> List[str]:
         """Return the labels of checked offsets."""
         result = []
@@ -257,3 +423,7 @@ class AddDataDialog(QtWidgets.QDialog):
     @property
     def subplot_key(self) -> str:
         return self._subplot_key
+
+    @property
+    def plugin_kwargs(self) -> Dict[str, Any]:
+        return {k: fn() for k, fn in self._plugin_value_getters.items()}

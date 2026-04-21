@@ -1136,6 +1136,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
                 continue
 
+            try:
+                import os as _os
+                ctrl._loaded_state_path = _os.path.abspath(str(path))
+            except Exception:
+                pass
+
             v = S["velocity_arrays"]
             f = S["frequency_arrays"]
             w = S["wavelength_arrays"]

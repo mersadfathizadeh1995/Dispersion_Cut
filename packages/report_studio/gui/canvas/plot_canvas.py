@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 _ZOOM_STEP = 1.08   # per wheel-notch scale factor
 _MIN_SCALE = 0.05
 _MAX_SCALE = 20.0
-_DEFAULT_CANVAS_DPI = 72  # low DPI for fast interactive rendering
+_DEFAULT_CANVAS_DPI = 600  # high quality default
 
 
 # ── Qt compat helpers ─────────────────────────────────────────────────────

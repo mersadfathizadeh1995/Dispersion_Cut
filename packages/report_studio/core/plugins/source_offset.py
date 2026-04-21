@@ -35,6 +35,8 @@ class SourceOffsetPlugin:
         pkl_path: str = "",
         npz_path: str = "",
         selected_offsets: Optional[List[str]] = None,
+        *,
+        layout: str = "single",
         **kwargs,
     ) -> Dict[str, Any]:
         """Load curves from *pkl_path*, optionally filtered by offset labels.
@@ -70,12 +72,20 @@ class SourceOffsetPlugin:
             except Exception:
                 pass
 
-        return {"curves": curves, "spectra": spectra}
+        return {"curves": curves, "spectra": spectra, "layout": layout}
 
     def settings_fields(self) -> List[Dict[str, Any]]:
         return [
             {"key": "x_domain", "label": "X Axis", "type": "combo",
              "default": "frequency", "options": ["frequency", "wavelength"]},
+            {
+                "key": "layout",
+                "label": "Layout",
+                "type": "combo",
+                "default": "single",
+                "options": ["single", "grid"],
+                "group": "Layout",
+            },
         ]
 
 

@@ -328,6 +328,7 @@ class WavelengthLinesDock(QtWidgets.QDockWidget):
 
         self.c._wavelength_lines_data = results
         self.c._wl_visibility = {d['label']: True for d in results}
+        self.c._nf_dirty = True
 
         self._compute_status.setText(
             f"Computed {len(results)} λ line(s)."
@@ -367,6 +368,7 @@ class WavelengthLinesDock(QtWidgets.QDockWidget):
 
         self.c._wavelength_lines_data = results
         self.c._wl_visibility = {d['label']: True for d in results}
+        self.c._nf_dirty = True
 
         self._compute_status.setText(
             f"Created {len(results)} manual λ line(s)."
@@ -456,6 +458,7 @@ class WavelengthLinesDock(QtWidgets.QDockWidget):
         if not hasattr(self.c, '_wl_visibility'):
             self.c._wl_visibility = {}
         self.c._wl_visibility[label] = is_checked
+        self.c._nf_dirty = True
         # Auto-enable master flag when any line is turned on
         if is_checked:
             self.c.show_wavelength_lines = True
@@ -479,6 +482,7 @@ class WavelengthLinesDock(QtWidgets.QDockWidget):
         for entry in getattr(self.c, '_wavelength_lines_data', []):
             label = entry.get('label', '?')
             self.c._wl_visibility[label] = True
+        self.c._nf_dirty = True
         self._redraw()
 
     def _hide_all(self) -> None:
@@ -493,6 +497,7 @@ class WavelengthLinesDock(QtWidgets.QDockWidget):
         for entry in getattr(self.c, '_wavelength_lines_data', []):
             label = entry.get('label', '?')
             self.c._wl_visibility[label] = False
+        self.c._nf_dirty = True
         self._redraw()
 
     def _clear_all(self) -> None:
@@ -500,6 +505,7 @@ class WavelengthLinesDock(QtWidgets.QDockWidget):
         self.c._wl_visibility = {}
         self.c._wl_colors = {}
         self.c.show_wavelength_lines = False
+        self.c._nf_dirty = True
         self._populate_lines_list()
         self._redraw()
 
@@ -544,6 +550,7 @@ class WavelengthLinesDock(QtWidgets.QDockWidget):
                 self.c._wl_colors = {}
             self.c._wl_colors[label] = new_hex
             item.setIcon(self._color_icon(new_hex))
+            self.c._nf_dirty = True
             self._redraw()
 
     # ──────────────────────────────────────────────────────────────

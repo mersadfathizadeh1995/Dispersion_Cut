@@ -158,6 +158,14 @@ def _dict_to_spectrum(d: Dict) -> SpectrumData:
     )
 
 
+def _migrate_nf_uids_project(d: Dict) -> list:
+    uids = d.get("nf_uids")
+    if uids:
+        return [str(u) for u in uids if u]
+    legacy = d.get("nf_uid") or ""
+    return [legacy] if legacy else []
+
+
 def _subplot_to_dict(sp: SubplotState) -> Dict[str, Any]:
     return {
         "key": sp.key,
@@ -183,6 +191,7 @@ def _subplot_to_dict(sp: SubplotState) -> Dict[str, Any]:
         "legend_position": sp.legend_position,
         "legend_font_size": sp.legend_font_size,
         "legend_frame_on": sp.legend_frame_on,
+        "nf_uids": list(getattr(sp, "nf_uids", []) or []),
     }
 
 
@@ -213,6 +222,7 @@ def _dict_to_subplot(d: Dict) -> SubplotState:
         legend_position=d.get("legend_position", ""),
         legend_font_size=d.get("legend_font_size", 0),
         legend_frame_on=d.get("legend_frame_on"),
+        nf_uids=_migrate_nf_uids_project(d),
     )
 
 
@@ -239,9 +249,11 @@ def _sheet_to_dict(sheet: SheetState) -> Dict[str, Any]:
             "alpha": sheet.legend.alpha,
         },
         "typography": {
-            "title_size": sheet.typography.title_size,
-            "axis_label_size": sheet.typography.axis_label_size,
-            "tick_label_size": sheet.typography.tick_label_size,
+            "base_size": sheet.typography.base_size,
+            "title_scale": sheet.typography.title_scale,
+            "axis_label_scale": sheet.typography.axis_label_scale,
+            "tick_label_scale": sheet.typography.tick_label_scale,
+            "legend_scale": sheet.typography.legend_scale,
             "font_family": sheet.typography.font_family,
         },
     }
@@ -261,7 +273,7 @@ def _dict_to_sheet(d: Dict) -> SheetState:
     sheet.wspace = d.get("wspace", 0.3)
     sheet.figure_width = d.get("figure_width", 10.0)
     sheet.figure_height = d.get("figure_height", 7.0)
-    sheet.canvas_dpi = d.get("canvas_dpi", 72)
+    sheet.canvas_dpi = d.get("canvas_dpi", 600)
 
     leg_d = d.get("legend", {})
     sheet.legend = LegendConfig(
@@ -273,12 +285,28 @@ def _dict_to_sheet(d: Dict) -> SheetState:
     )
 
     typo_d = d.get("typography", {})
-    sheet.typography = TypographyConfig(
-        title_size=typo_d.get("title_size", 12),
-        axis_label_size=typo_d.get("axis_label_size", 10),
-        tick_label_size=typo_d.get("tick_label_size", 9),
-        font_family=typo_d.get("font_family", "sans-serif"),
-    )
+    if typo_d.get("base_size") is not None:
+        sheet.typography = TypographyConfig(
+            base_size=int(typo_d.get("base_size", 10)),
+            title_scale=float(typo_d.get("title_scale", 1.2)),
+            axis_label_scale=float(typo_d.get("axis_label_scale", 1.0)),
+            tick_label_scale=float(typo_d.get("tick_label_scale", 0.9)),
+            legend_scale=float(typo_d.get("legend_scale", 0.9)),
+            font_family=str(typo_d.get("font_family", "sans-serif")),
+        )
+    else:
+        base = 10
+        ts = int(typo_d.get("title_size", 12))
+        als = int(typo_d.get("axis_label_size", 10))
+        tls = int(typo_d.get("tick_label_size", 9))
+        sheet.typography = TypographyConfig(
+            base_size=base,
+            title_scale=max(0.5, ts / base),
+            axis_label_scale=max(0.5, als / base),
+            tick_label_scale=max(0.5, tls / base),
+            legend_scale=0.9,
+            font_family=str(typo_d.get("font_family", "sans-serif")),
+        )
 
     if not sheet.subplots:
         sheet.subplots = {"main": SubplotState(key="main", name="Main")}

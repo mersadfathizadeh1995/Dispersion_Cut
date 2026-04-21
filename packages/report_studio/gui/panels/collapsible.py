@@ -47,6 +47,20 @@ class CollapsibleSection(QtWidgets.QWidget):
             else QtCore.Qt.ArrowType.RightArrow
         )
         self.content.setVisible(checked)
+        # Tell the parent layout our preferred size has changed so any
+        # parent that uses ``SetMinimumSize`` (Add Data dialog, side
+        # panels…) re-flows and the freed space is reclaimed by sibling
+        # widgets / bottom stretch.
+        try:
+            self.updateGeometry()
+            parent = self.parentWidget()
+            if parent is not None:
+                parent.updateGeometry()
+                lay = parent.layout()
+                if lay is not None:
+                    lay.activate()
+        except Exception:
+            pass
 
     def set_expanded(self, expanded: bool):
         self._toggle.setChecked(expanded)

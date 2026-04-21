@@ -300,6 +300,7 @@ class NacdTab(QtWidgets.QWidget):
             results.append({
                 "label": lbl,
                 "offset_index": idx,
+                "source_offset": so,
                 "x_bar": x_bar,
                 "lambda_max": lam_max,
                 "n_total": len(f),
@@ -365,6 +366,14 @@ class NacdTab(QtWidgets.QWidget):
         self.status.setText(
             f"Evaluated {len(results)} offset(s), {n_total} points. "
             f"{n_contam} contaminated."
+        )
+
+        derived_set = dock._limits.current_derived_set
+        dock._publish_nf_results(
+            mode="nacd",
+            results=results,
+            eval_range=eval_range,
+            derived_set=derived_set,
         )
 
 

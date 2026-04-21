@@ -675,6 +675,16 @@ class LauncherWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(self, "State", f"Controller init failed:\n{e}")
             return False
 
+        try:
+            import os as _os
+            if len(files) == 1 and first_state is not None:
+                ctrl._loaded_state_path = _os.path.abspath(str(files[0]["path"]))
+                ctrl.apply_state(first_state)
+            elif files:
+                ctrl._loaded_state_path = _os.path.abspath(str(files[-1]["path"]))
+        except Exception:
+            pass
+
         # Restore k-guides from first state that has them
         for file_info in files:
             try:

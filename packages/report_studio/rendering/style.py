@@ -5,7 +5,10 @@ Rendering style configuration — colors, typography, axis styling.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from ..core.models import SheetState
 
 
 @dataclass
@@ -17,6 +20,10 @@ class StyleConfig:
     axis_label_size: int = 10
     tick_label_size: int = 9
     font_family: str = "sans-serif"
+    font_weight: str = "normal"  # "normal" | "bold"
+    # Decimal precision for frequency/wavelength labels (NACD/lambda lines)
+    freq_decimals: int = 1
+    lambda_decimals: int = 1
 
     # Axis
     grid_visible: bool = True
@@ -38,7 +45,7 @@ class StyleConfig:
     # Figure
     figure_facecolor: str = "#ffffff"
     subplot_facecolor: str = "#ffffff"
-    dpi: int = 150
+    dpi: int = 600
 
     # Axis labels
     frequency_label: str = "Frequency (Hz)"
@@ -59,6 +66,30 @@ class StyleConfig:
 
     def get_y_label(self) -> str:
         return self.velocity_label
+
+    @classmethod
+    def from_sheet(cls, sheet: "SheetState") -> "StyleConfig":
+        """Build style from sheet legend + typography (base size × scales)."""
+        t = sheet.typography
+        leg_fs = (
+            sheet.legend.font_size
+            if sheet.legend.font_size > 0
+            else t.legend_font_size
+        )
+        return cls(
+            title_size=t.title_size,
+            axis_label_size=t.axis_label_size,
+            tick_label_size=t.tick_label_size,
+            font_family=t.font_family,
+            font_weight=getattr(t, "font_weight", "normal"),
+            freq_decimals=int(getattr(t, "freq_decimals", 1)),
+            lambda_decimals=int(getattr(t, "lambda_decimals", 1)),
+            legend_visible=sheet.legend.visible,
+            legend_position=sheet.legend.position,
+            legend_font_size=leg_fs,
+            legend_frame_on=sheet.legend.frame_on,
+            legend_alpha=sheet.legend.alpha,
+        )
 
 
 # ── Color Palettes ────────────────────────────────────────────────────────

@@ -53,7 +53,23 @@ class DataHandlersMixin:
             return
         curves = [sheet.curves[u] for u in uids if u in sheet.curves]
         if curves and hasattr(self, "right_panel"):
-            self.right_panel.show_spectra_batch(uids, curves)
+            combined_bar = getattr(sheet, "combined_spectrum_bar", None)
+            self.right_panel.show_spectra_batch(
+                uids, curves, combined_bar=combined_bar,
+            )
+
+    def _on_combined_spectrum_bar_changed(self, attr: str, value):
+        """Write one attr onto ``SheetState.combined_spectrum_bar``."""
+        sheet = self._current_sheet()
+        if not sheet:
+            return
+        cfg = getattr(sheet, "combined_spectrum_bar", None)
+        if cfg is None:
+            return
+        if not hasattr(cfg, attr):
+            return
+        setattr(cfg, attr, value)
+        self._render_current()
 
     def _on_subplot_selected(self, key: str):
         """A subplot was selected in the data tree."""
@@ -62,7 +78,7 @@ class DataHandlersMixin:
             return
         sp = sheet.subplots[key]
         if hasattr(self, "right_panel"):
-            self.right_panel.show_subplot(sp)
+            self.right_panel.show_subplot(sp, sheet=sheet)
         self.statusBar().showMessage(f"Subplot: {sp.display_name}")
 
     def _on_subplots_selected(self, keys: list):
@@ -72,7 +88,7 @@ class DataHandlersMixin:
             return
         subplots = [sheet.subplots[k] for k in keys if k in sheet.subplots]
         if subplots and hasattr(self, "right_panel"):
-            self.right_panel.show_subplots_batch(keys, subplots)
+            self.right_panel.show_subplots_batch(keys, subplots, sheet=sheet)
         self.statusBar().showMessage(f"{len(subplots)} subplots selected")
 
     def _on_curve_moved(self, uid: str, new_subplot_key: str):
@@ -108,6 +124,21 @@ class DataHandlersMixin:
             self.data_tree.populate(sheet)
         if hasattr(self, "right_panel"):
             self.right_panel.show_empty()
+        self._selected_uid = None
+        self._render_current()
+
+    def _on_clear_subplot(self, key: str):
+        """User asked to wipe a subplot cell but keep it in the grid."""
+        sheet = self._current_sheet()
+        if not sheet or key not in sheet.subplots:
+            return
+        sheet.clear_subplot(key)
+        if hasattr(self, "data_tree"):
+            self.data_tree.populate(sheet)
+        if hasattr(self, "right_panel"):
+            self.right_panel.show_empty()
+            pkeys, pnames = sheet.populated_subplot_info()
+            self.right_panel.update_subplot_list(pkeys, pnames)
         self._selected_uid = None
         self._render_current()
 
@@ -153,7 +184,7 @@ class DataHandlersMixin:
             return
         sp = sheet.subplots[key]
         if hasattr(self, "right_panel"):
-            self.right_panel.show_subplot(sp)
+            self.right_panel.show_subplot(sp, sheet=sheet)
         self.statusBar().showMessage(f"Subplot: {sp.display_name}")
 
     def _on_curves_selected(self, uids: list):
@@ -309,4 +340,260 @@ class DataHandlersMixin:
             return
         sheet.move_aggregated(uid, new_subplot_key)
         self.data_tree.populate(sheet)
+        self._render_current()
+
+    def _on_lambda_visibility_changed(
+        self, curve_uid: str, lam_uid: str, visible: bool
+    ):
+        sheet = self._current_sheet()
+        if not sheet or curve_uid not in sheet.curves:
+            return
+        curve = sheet.curves[curve_uid]
+        for L in curve.lambda_lines:
+            if L.uid == lam_uid:
+                L.visible = visible
+                break
+        self._render_current()
+
+    def _on_lambda_line_selected(self, curve_uid: str, lam_uid: str):
+        sheet = self._current_sheet()
+        if not sheet or curve_uid not in sheet.curves:
+            return
+        curve = sheet.curves[curve_uid]
+        if hasattr(self, "right_panel"):
+            self.right_panel.show_lambda_line(curve, lam_uid)
+
+    def _on_lambda_style_changed(
+        self, curve_uid: str, lam_uid: str, attr: str, value
+    ):
+        sheet = self._current_sheet()
+        if not sheet or curve_uid not in sheet.curves:
+            return
+        curve = sheet.curves[curve_uid]
+        for L in curve.lambda_lines:
+            if L.uid == lam_uid and hasattr(L, attr):
+                setattr(L, attr, value)
+                break
+        if hasattr(self, "data_tree"):
+            self.data_tree.populate(sheet)
+        self._render_current()
+
+    def _on_nf_analysis_selected(self, nf_uid: str):
+        sheet = self._current_sheet()
+        if not sheet or nf_uid not in sheet.nf_analyses:
+            return
+        nf = sheet.nf_analyses[nf_uid]
+        if hasattr(self, "right_panel"):
+            self.right_panel.show_nf_analysis(nf)
+
+    def _on_nf_setting_changed(self, nf_uid: str, attr: str, value):
+        sheet = self._current_sheet()
+        if not sheet or nf_uid not in sheet.nf_analyses:
+            return
+        nf = sheet.nf_analyses[nf_uid]
+        if attr.startswith("palette:"):
+            key = attr.split(":", 1)[1]
+            nf.severity_palette[key] = str(value)
+        elif hasattr(nf, attr):
+            setattr(nf, attr, value)
+        self._render_current()
+
+    def _on_nf_recompute_requested(self, nf_uid: str):
+        if hasattr(self, "statusBar"):
+            self.statusBar().showMessage(
+                "Re-open Add Data with the same PKL to refresh NF analysis."
+            )
+
+    def _on_nf_guide_visibility_changed(
+        self, nf_uid: str, line_uid: str, visible: bool
+    ):
+        sheet = self._current_sheet()
+        if not sheet or nf_uid not in sheet.nf_analyses:
+            return
+        nf = sheet.nf_analyses[nf_uid]
+        for L in nf.lines:
+            if L.uid == line_uid:
+                L.visible = visible
+                break
+        self._render_current()
+
+    def _on_nf_guide_line_selected(self, nf_uid: str, line_uid: str):
+        sheet = self._current_sheet()
+        if not sheet or nf_uid not in sheet.nf_analyses:
+            return
+        nf = sheet.nf_analyses[nf_uid]
+        if hasattr(self, "right_panel"):
+            self.right_panel.show_nf_line(nf, line_uid)
+
+    def _on_nf_layer_visibility_changed(self, nf_uid: str, visible: bool):
+        sheet = self._current_sheet()
+        if not sheet or nf_uid not in sheet.nf_analyses:
+            return
+        nf = sheet.nf_analyses[nf_uid]
+        nf.visible = bool(visible)
+        self._render_current()
+
+    def _on_nf_per_offset_visibility_changed(
+        self, nf_uid: str, offset_index: int, visible: bool
+    ):
+        sheet = self._current_sheet()
+        if not sheet or nf_uid not in sheet.nf_analyses:
+            return
+        nf = sheet.nf_analyses[nf_uid]
+        if 0 <= int(offset_index) < len(nf.per_offset):
+            nf.per_offset[int(offset_index)].scatter_visible = bool(visible)
+            self._render_current()
+
+    def _on_nf_per_offset_selected(self, nf_uid: str, offset_index: int):
+        sheet = self._current_sheet()
+        if not sheet or nf_uid not in sheet.nf_analyses:
+            return
+        nf = sheet.nf_analyses[nf_uid]
+        if hasattr(self, "right_panel"):
+            self.right_panel.show_nf_per_offset(nf, int(offset_index))
+
+    def _on_nf_line_style_changed(
+        self, nf_uid: str, line_uid: str, attr: str, value
+    ):
+        sheet = self._current_sheet()
+        if not sheet or nf_uid not in sheet.nf_analyses:
+            return
+        nf = sheet.nf_analyses[nf_uid]
+        for L in nf.lines:
+            if L.uid == line_uid and hasattr(L, attr):
+                setattr(L, attr, value)
+                break
+        if hasattr(self, "data_tree"):
+            self.data_tree.populate(sheet)
+        self._render_current()
+
+    def _on_nf_ranges_apply_requested(self, nf_uid: str):
+        sheet = self._current_sheet()
+        if not sheet or nf_uid not in sheet.nf_analyses:
+            return
+        nf = sheet.nf_analyses[nf_uid]
+        from ...core.nf_eval_range import apply_eval_range_to_nf
+
+        er = {}
+        if hasattr(self, "right_panel"):
+            er = self.right_panel.nf_panel.get_eval_range_dict()
+        apply_eval_range_to_nf(nf, er)
+        if hasattr(self, "data_tree"):
+            self.data_tree.populate(sheet)
+        self._render_current()
+
+    # ── Legend layer ──────────────────────────────────────────────────
+
+    def _on_legend_layer_selected(self, key: str):
+        """Open the legend layer panel for a subplot."""
+        sheet = self._current_sheet()
+        if not sheet or key not in sheet.subplots:
+            return
+        sp = sheet.subplots[key]
+        if hasattr(self, "right_panel"):
+            self.right_panel.show_legend_layer(key, sp)
+
+    def _on_legends_selected(self, keys):
+        """Open the legend layer panel in batch mode for several subplots."""
+        sheet = self._current_sheet()
+        if not sheet or not keys:
+            return
+        valid = [k for k in keys if k in sheet.subplots]
+        if not valid:
+            return
+        if hasattr(self, "right_panel"):
+            self.right_panel.show_legends_batch(
+                valid, {k: sheet.subplots[k] for k in valid}
+            )
+
+    def _on_nacd_analyses_selected(self, uids):
+        """Open the NF settings panel in batch mode for several NACD layers.
+
+        Every attribute edit (outline, palette, legend name, overlay,
+        show-λ_max, etc.) fans out to each ``nf_uid`` via the existing
+        ``nf_setting_changed`` signal so the change lands on every
+        selected analysis.
+        """
+        sheet = self._current_sheet()
+        if not sheet or not uids:
+            return
+        nfs = [sheet.nf_analyses[u] for u in uids if u in sheet.nf_analyses]
+        if len(nfs) < 2:
+            return
+        if hasattr(self, "right_panel"):
+            self.right_panel.show_nf_analyses_batch(nfs)
+
+    def _on_nf_guides_selected(self, pairs):
+        """Open the NF-line panel in batch mode for several guide lines.
+
+        ``pairs`` is ``list[tuple[nf_uid, line_uid]]`` from the data
+        tree. We resolve each pair to the actual :class:`NFLine` and
+        hand the triples to the panel so widgets can seed from the
+        first line and fan every edit out to all of them.
+        """
+        sheet = self._current_sheet()
+        if not sheet or not pairs:
+            return
+        triples = []
+        for nf_uid, line_uid in pairs:
+            nf = sheet.nf_analyses.get(nf_uid)
+            if not nf:
+                continue
+            line = next((L for L in nf.lines if L.uid == line_uid), None)
+            if line is None:
+                continue
+            triples.append((nf_uid, line_uid, line))
+        if not triples:
+            return
+        if hasattr(self, "right_panel"):
+            self.right_panel.show_nf_lines_batch(triples)
+
+    def _on_legend_visibility_changed(self, key: str, visible: bool):
+        """Toggle ``SubplotLegendConfig.visible`` from the data tree."""
+        sheet = self._current_sheet()
+        if not sheet or key not in sheet.subplots:
+            return
+        sp = sheet.subplots[key]
+        if getattr(sp, "legend", None) is None:
+            return
+        sp.legend.visible = bool(visible)
+        self._render_current()
+
+    def _on_subplot_legend_changed(self, key: str, attr: str, value):
+        """Apply a legend layer attribute change to the model."""
+        sheet = self._current_sheet()
+        if not sheet or key not in sheet.subplots:
+            return
+        sp = sheet.subplots[key]
+        if getattr(sp, "legend", None) is None or not hasattr(sp.legend, attr):
+            return
+        setattr(sp.legend, attr, value)
+        # Mirror visibility on the data tree without rebuilding everything.
+        if attr == "visible" and hasattr(self, "data_tree"):
+            self.data_tree.populate(sheet)
+        self._render_current()
+
+    def _on_nf_per_offset_changed(
+        self, nf_uid: str, offset_index: int, attr: str, value
+    ):
+        sheet = self._current_sheet()
+        if not sheet or nf_uid not in sheet.nf_analyses:
+            return
+        nf = sheet.nf_analyses[nf_uid]
+        oi = int(offset_index)
+        if oi < 0 or oi >= len(nf.per_offset):
+            return
+        r = nf.per_offset[oi]
+        if attr == "scatter_visible":
+            r.scatter_visible = bool(value)
+        elif attr == "point_hidden":
+            import numpy as np
+
+            arr = np.asarray(value, dtype=bool)
+            m = np.asarray(r.mask_contaminated, dtype=bool)
+            if arr.size != m.size:
+                arr = np.zeros(m.size, dtype=bool)
+            r.point_hidden = arr
+        if hasattr(self, "data_tree"):
+            self.data_tree.populate(sheet)
         self._render_current()

@@ -66,6 +66,16 @@ class CurveSettingsPanel(QtWidgets.QWidget):
         self._lbl_name.setWordWrap(True)
         fl.addRow("Name:", self._lbl_name)
 
+        # Legend label override
+        self._le_legend_label = QtWidgets.QLineEdit()
+        self._le_legend_label.setPlaceholderText("(default: use Name)")
+        self._le_legend_label.editingFinished.connect(
+            lambda: self._emit_style(
+                "legend_label", self._le_legend_label.text()
+            )
+        )
+        fl.addRow("Legend name:", self._le_legend_label)
+
         # Color
         self._btn_color = QtWidgets.QPushButton()
         self._btn_color.setFixedSize(60, 24)
@@ -172,6 +182,7 @@ class CurveSettingsPanel(QtWidgets.QWidget):
         self._batch_uids = []
 
         self._lbl_name.setText(curve.display_name)
+        self._le_legend_label.setText(getattr(curve, "legend_label", "") or "")
         self._set_color_btn(curve.color)
         self._chk_show_line.setChecked(getattr(curve, "line_visible", True))
         self._spin_lw.setValue(curve.line_width)

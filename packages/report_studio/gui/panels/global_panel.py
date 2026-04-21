@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ...qt_compat import (
-    QtWidgets, QtCore, Signal,
+    QtWidgets, QtCore, QtGui, Signal,
     Horizontal, PolicyExpanding,
 )
 from .collapsible import CollapsibleSection
@@ -123,12 +123,115 @@ class GlobalSettingsPanel(QtWidgets.QWidget):
         ql.setSpacing(4)
 
         self._combo_quality = QtWidgets.QComboBox()
-        self._combo_quality.addItems(["Low (72 DPI)", "Medium (100 DPI)", "High (150 DPI)"])
-        self._combo_quality.setCurrentIndex(0)
+        self._combo_quality.addItems([
+            "Low (72 DPI)",
+            "Medium (100 DPI)",
+            "High (150 DPI)",
+            "Very High (300 DPI)",
+            "Ultra (600 DPI)",
+        ])
+        self._combo_quality.setCurrentIndex(4)
         self._combo_quality.currentIndexChanged.connect(self._on_quality)
         ql.addRow("Quality:", self._combo_quality)
 
         layout.addWidget(quality_sec)
+
+        # ── Typography (global base size × scales) ───────────────────
+        typo_sec = CollapsibleSection("Typography", expanded=True)
+        tf = typo_sec.form
+        tf.setSpacing(4)
+
+        self._spin_base_font = QtWidgets.QSpinBox()
+        self._spin_base_font.setRange(6, 32)
+        self._spin_base_font.setValue(10)
+        self._spin_base_font.setToolTip("Scales title, axis, tick, and legend fonts together")
+        self._spin_base_font.valueChanged.connect(
+            lambda v: self._emit_layout("base_size", int(v))
+        )
+        tf.addRow("Base font size:", self._spin_base_font)
+
+        from .fonts import CURATED_FONTS
+        self._font_combo = QtWidgets.QComboBox()
+        self._font_combo.addItems(CURATED_FONTS)
+        self._font_combo.setMaxVisibleItems(12)
+        self._font_combo.currentTextChanged.connect(self._on_font_family)
+        tf.addRow("Font family:", self._font_combo)
+
+        self._chk_bold = QtWidgets.QCheckBox("Bold")
+        self._chk_bold.setToolTip(
+            "Apply bold weight to title, axis labels, ticks, and legend"
+        )
+        self._chk_bold.toggled.connect(self._on_font_bold)
+        tf.addRow("", self._chk_bold)
+
+        self._spin_freq_dec = QtWidgets.QSpinBox()
+        self._spin_freq_dec.setRange(0, 6)
+        self._spin_freq_dec.setValue(1)
+        self._spin_freq_dec.setToolTip(
+            "Number of decimals shown for frequency labels (e.g. f = 9.2 Hz)"
+        )
+        self._spin_freq_dec.valueChanged.connect(
+            lambda v: self._emit_layout("freq_decimals", int(v)))
+        tf.addRow("Frequency decimals:", self._spin_freq_dec)
+
+        self._spin_lambda_dec = QtWidgets.QSpinBox()
+        self._spin_lambda_dec.setRange(0, 6)
+        self._spin_lambda_dec.setValue(1)
+        self._spin_lambda_dec.setToolTip(
+            "Number of decimals shown for wavelength labels (e.g. λ = 43.0 m)"
+        )
+        self._spin_lambda_dec.valueChanged.connect(
+            lambda v: self._emit_layout("lambda_decimals", int(v)))
+        tf.addRow("Wavelength decimals:", self._spin_lambda_dec)
+
+        expert = CollapsibleSection("Font scale factors (advanced)", expanded=False)
+        ef = expert.form
+        self._spin_title_sc = QtWidgets.QDoubleSpinBox()
+        self._spin_title_sc.setRange(0.5, 3.0)
+        self._spin_title_sc.setSingleStep(0.05)
+        self._spin_title_sc.setDecimals(2)
+        self._spin_title_sc.setValue(1.2)
+        self._spin_title_sc.valueChanged.connect(
+            lambda v: self._emit_layout("title_scale", float(v))
+        )
+        ef.addRow("Title ×:", self._spin_title_sc)
+
+        self._spin_axis_sc = QtWidgets.QDoubleSpinBox()
+        self._spin_axis_sc.setRange(0.5, 3.0)
+        self._spin_axis_sc.setSingleStep(0.05)
+        self._spin_axis_sc.setDecimals(2)
+        self._spin_axis_sc.setValue(1.0)
+        self._spin_axis_sc.valueChanged.connect(
+            lambda v: self._emit_layout("axis_label_scale", float(v))
+        )
+        ef.addRow("Axis label ×:", self._spin_axis_sc)
+
+        self._spin_tick_sc = QtWidgets.QDoubleSpinBox()
+        self._spin_tick_sc.setRange(0.5, 3.0)
+        self._spin_tick_sc.setSingleStep(0.05)
+        self._spin_tick_sc.setDecimals(2)
+        self._spin_tick_sc.setValue(0.9)
+        self._spin_tick_sc.valueChanged.connect(
+            lambda v: self._emit_layout("tick_label_scale", float(v))
+        )
+        ef.addRow("Tick label ×:", self._spin_tick_sc)
+
+        self._spin_leg_sc = QtWidgets.QDoubleSpinBox()
+        self._spin_leg_sc.setRange(0.5, 3.0)
+        self._spin_leg_sc.setSingleStep(0.05)
+        self._spin_leg_sc.setDecimals(2)
+        self._spin_leg_sc.setValue(0.9)
+        self._spin_leg_sc.valueChanged.connect(
+            lambda v: self._emit_layout("legend_scale", float(v))
+        )
+        ef.addRow("Legend ×:", self._spin_leg_sc)
+
+        typo_layout = QtWidgets.QVBoxLayout()
+        typo_layout.addWidget(typo_sec)
+        typo_layout.addWidget(expert)
+        typo_wrap = QtWidgets.QWidget()
+        typo_wrap.setLayout(typo_layout)
+        layout.addWidget(typo_wrap)
 
         # ── Legend ────────────────────────────────────────────────────
         legend_sec = CollapsibleSection("Legend", expanded=False)
@@ -182,13 +285,51 @@ class GlobalSettingsPanel(QtWidgets.QWidget):
         self._spin_wspace.setValue(sheet.wspace)
 
         # Canvas quality
-        dpi = getattr(sheet, "canvas_dpi", 72)
+        dpi = getattr(sheet, "canvas_dpi", 600)
         if dpi <= 72:
             self._combo_quality.setCurrentIndex(0)
         elif dpi <= 100:
             self._combo_quality.setCurrentIndex(1)
-        else:
+        elif dpi <= 150:
             self._combo_quality.setCurrentIndex(2)
+        elif dpi <= 300:
+            self._combo_quality.setCurrentIndex(3)
+        else:
+            self._combo_quality.setCurrentIndex(4)
+
+        typo = sheet.typography
+        for w in (
+            self._spin_base_font, self._spin_title_sc, self._spin_axis_sc,
+            self._spin_tick_sc, self._spin_leg_sc,
+        ):
+            w.blockSignals(True)
+        self._spin_base_font.setValue(int(typo.base_size))
+        self._spin_title_sc.setValue(float(typo.title_scale))
+        self._spin_axis_sc.setValue(float(typo.axis_label_scale))
+        self._spin_tick_sc.setValue(float(typo.tick_label_scale))
+        self._spin_leg_sc.setValue(float(typo.legend_scale))
+        for w in (
+            self._spin_base_font, self._spin_title_sc, self._spin_axis_sc,
+            self._spin_tick_sc, self._spin_leg_sc,
+        ):
+            w.blockSignals(False)
+        self._font_combo.blockSignals(True)
+        from .fonts import populate_font_combo
+        populate_font_combo(self._font_combo, typo.font_family)
+        self._font_combo.blockSignals(False)
+
+        self._chk_bold.blockSignals(True)
+        self._chk_bold.setChecked(
+            str(getattr(typo, "font_weight", "normal")).lower() == "bold"
+        )
+        self._chk_bold.blockSignals(False)
+
+        for w in (self._spin_freq_dec, self._spin_lambda_dec):
+            w.blockSignals(True)
+        self._spin_freq_dec.setValue(int(getattr(typo, "freq_decimals", 1)))
+        self._spin_lambda_dec.setValue(int(getattr(typo, "lambda_decimals", 1)))
+        for w in (self._spin_freq_dec, self._spin_lambda_dec):
+            w.blockSignals(False)
 
         # Legend
         leg = sheet.legend
@@ -211,8 +352,8 @@ class GlobalSettingsPanel(QtWidgets.QWidget):
     def _on_quality(self, idx):
         if self._updating:
             return
-        dpi_map = {0: 72, 1: 100, 2: 150}
-        self._emit_layout("canvas_dpi", dpi_map.get(idx, 72))
+        dpi_map = {0: 72, 1: 100, 2: 150, 3: 300, 4: 600}
+        self._emit_layout("canvas_dpi", dpi_map.get(idx, 600))
 
     def _emit_layout(self, attr: str, value):
         if not self._updating:
@@ -221,3 +362,13 @@ class GlobalSettingsPanel(QtWidgets.QWidget):
     def _emit_legend(self, attr: str, value):
         if not self._updating:
             self.legend_changed.emit(attr, value)
+
+    def _on_font_family(self, family: str):
+        if self._updating:
+            return
+        self._emit_layout("font_family", str(family))
+
+    def _on_font_bold(self, checked: bool):
+        if self._updating:
+            return
+        self._emit_layout("font_weight", "bold" if checked else "normal")

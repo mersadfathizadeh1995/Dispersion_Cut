@@ -66,6 +66,12 @@ class FileIOHandler:
 
             state_dict = self._ctrl.get_current_state()
             save_session(state_dict, path)
+            try:
+                import os
+                self._ctrl._loaded_state_path = os.path.abspath(path)
+                self._ctrl._nf_dirty = False
+            except Exception:
+                pass
 
             QtWidgets.QMessageBox.information(
                 self._ctrl.fig.canvas.manager.window,

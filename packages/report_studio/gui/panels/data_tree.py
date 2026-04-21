@@ -46,6 +46,21 @@ _TYPE_AGG_AVG = "agg_avg"
 _TYPE_AGG_UNC = "agg_unc"
 _TYPE_AGG_SHADOW_GROUP = "agg_shadow_group"
 _TYPE_AGG_SHADOW = "agg_shadow"
+_TYPE_NF_ANALYSIS = "nf_analysis"
+_TYPE_NF_GUIDE = "nf_guide_line"
+_TYPE_NF_PER_OFFSET = "nf_per_offset"
+_TYPE_LAMBDA_LINE = "lambda_line"
+_TYPE_LEGEND = "legend"
+
+_LAMBDA_UID_ROLE = UserRole + 5
+_NF_LINE_UID_ROLE = UserRole + 6
+_NF_OFFSET_INDEX_ROLE = UserRole + 7
+# Store the raw kind/role/lambda_max_curve flags from NFLine on the tree
+# item so the bottom selection toolbar can filter without parsing the
+# display label back out.
+_NF_KIND_ROLE = UserRole + 8
+_NF_ROLE_ROLE = UserRole + 9
+_NF_LAMBDA_MAX_CURVE_ROLE = UserRole + 10
 
 
 class _DragTreeWidget(QtWidgets.QTreeWidget):
@@ -168,6 +183,22 @@ class DataTreePanel(QtWidgets.QWidget):
     aggregated_visibility_changed = Signal(str, str, bool)  # (agg_uid, sub_layer, visible)
     aggregated_moved = Signal(str, str)  # (agg_uid, new_subplot_key)
     remove_aggregated_requested = Signal(str)  # aggregated uid
+    lambda_visibility_changed = Signal(str, str, bool)
+    lambda_line_selected = Signal(str, str)
+    nf_analysis_selected = Signal(str)
+    nf_guide_visibility_changed = Signal(str, str, bool)
+    nf_guide_line_selected = Signal(str, str)
+    nf_layer_visibility_changed = Signal(str, bool)
+    nf_per_offset_visibility_changed = Signal(str, int, bool)
+    nf_per_offset_selected = Signal(str, int)
+    legend_layer_selected = Signal(str)            # subplot_key
+    legend_visibility_changed = Signal(str, bool)  # (subplot_key, visible)
+    legends_selected = Signal(list)                # list[str] subplot_keys
+    # list[tuple[str, str]] — (nf_uid, line_uid) pairs for batch NF-line edit.
+    nf_guides_selected = Signal(list)
+    # list[str] — NACD analysis UIDs for batch NF-settings edit
+    nacd_analyses_selected = Signal(list)
+    clear_subplot_requested = Signal(str)          # subplot_key
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -206,6 +237,9 @@ class DataTreePanel(QtWidgets.QWidget):
             "}"
         )
         layout.addWidget(self._tree)
+
+        # ── Bottom toolbar: collapse/expand, select-by-type, bulk on/off
+        self._build_bottom_toolbar(layout)
 
         # Context menu
         self._tree.setContextMenuPolicy(QtCore.Qt.CustomContextMenu
@@ -261,6 +295,23 @@ class DataTreePanel(QtWidgets.QWidget):
                 c_item = self._make_curve_item(curve, key, sheet)
                 sp_item.addChild(c_item)
                 self._curve_items[uid] = c_item
+
+            self._add_nf_items_for_subplot(sp_item, sp, sheet)
+
+            # ── Legend layer node (always present) ─────────────────────
+            lc = getattr(sp, "legend", None)
+            if lc is not None:
+                leg_item = QtWidgets.QTreeWidgetItem(["Legend"])
+                leg_item.setData(0, _ITEM_TYPE_ROLE, _TYPE_LEGEND)
+                leg_item.setData(0, _KEY_ROLE, key)
+                leg_item.setFlags(
+                    ItemIsEnabled | ItemIsSelectable | ItemIsUserCheckable
+                )
+                leg_item.setCheckState(
+                    0, Checked if bool(lc.visible) else Unchecked
+                )
+                leg_item.setForeground(0, QtGui.QColor("#444477"))
+                sp_item.addChild(leg_item)
 
             self._tree.addTopLevelItem(sp_item)
             self._subplot_items[key] = sp_item
@@ -407,7 +458,272 @@ class DataTreePanel(QtWidgets.QWidget):
             spec_item.setForeground(0, QtGui.QColor("#666699"))
             c_item.addChild(spec_item)
 
+        if curve.lambda_lines:
+            lam_root = QtWidgets.QTreeWidgetItem(["λ guide lines"])
+            lam_root.setData(0, _ITEM_TYPE_ROLE, _TYPE_INFO)
+            lam_root.setData(0, _UID_ROLE, curve.uid)
+            lam_root.setFlags(ItemIsEnabled | ItemIsSelectable)
+            for ll in curve.lambda_lines:
+                li = QtWidgets.QTreeWidgetItem([
+                    f"λ = {ll.lambda_value:.1f} m",
+                ])
+                li.setData(0, _ITEM_TYPE_ROLE, _TYPE_LAMBDA_LINE)
+                li.setData(0, _UID_ROLE, curve.uid)
+                li.setData(0, _LAMBDA_UID_ROLE, ll.uid)
+                li.setFlags(
+                    ItemIsEnabled | ItemIsSelectable | ItemIsUserCheckable
+                )
+                li.setCheckState(0, Checked if ll.visible else Unchecked)
+                lam_root.addChild(li)
+            c_item.addChild(lam_root)
+
         return c_item
+
+    def _add_nf_items_for_subplot(self, sp_item, sp, sheet: "SheetState"):
+        """Nest NACD analyses under this subplot with guide-line toggles."""
+        for nf_uid in getattr(sp, "nf_uids", None) or []:
+            nf = sheet.nf_analyses.get(nf_uid)
+            if not nf:
+                continue
+            nf_item = QtWidgets.QTreeWidgetItem([nf.display_name])
+            nf_item.setData(0, _ITEM_TYPE_ROLE, _TYPE_NF_ANALYSIS)
+            nf_item.setData(0, _UID_ROLE, nf.uid)
+            nf_item.setFlags(ItemIsEnabled | ItemIsSelectable | ItemIsUserCheckable)
+            nf_item.setCheckState(0, Checked if getattr(nf, "visible", True) else Unchecked)
+
+            guide_root = QtWidgets.QTreeWidgetItem(["Guide lines"])
+            guide_root.setData(0, _ITEM_TYPE_ROLE, _TYPE_INFO)
+            guide_root.setData(0, _UID_ROLE, nf.uid)
+            guide_root.setFlags(ItemIsEnabled | ItemIsSelectable)
+            from ...rendering.label_format import fmt_freq, fmt_lambda
+            freq_dec = int(getattr(sheet.typography, "freq_decimals", 1))
+            lam_dec = int(getattr(sheet.typography, "lambda_decimals", 1))
+            for ln in nf.lines:
+                disp = (ln.display_label or "").strip()
+                if not disp:
+                    if ln.kind == "freq":
+                        disp = (
+                            f"{ln.kind} / {ln.role} = "
+                            f"{fmt_freq(ln.value, freq_dec)} Hz"
+                        )
+                    else:
+                        disp = (
+                            f"{ln.kind} / {ln.role} = "
+                            f"{fmt_lambda(ln.value, lam_dec)} m"
+                        )
+                li = QtWidgets.QTreeWidgetItem([disp])
+                li.setData(0, _ITEM_TYPE_ROLE, _TYPE_NF_GUIDE)
+                li.setData(0, _UID_ROLE, nf.uid)
+                li.setData(0, _NF_LINE_UID_ROLE, ln.uid)
+                li.setData(0, _NF_KIND_ROLE, str(ln.kind or ""))
+                li.setData(0, _NF_ROLE_ROLE, str(ln.role or ""))
+                li.setData(
+                    0, _NF_LAMBDA_MAX_CURVE_ROLE,
+                    bool(getattr(ln, "lambda_max_curve", False)),
+                )
+                li.setFlags(
+                    ItemIsEnabled | ItemIsSelectable | ItemIsUserCheckable
+                )
+                li.setCheckState(0, Checked if ln.visible else Unchecked)
+                if ln.color:
+                    px = QtGui.QPixmap(12, 12)
+                    px.fill(QtGui.QColor(ln.color))
+                    li.setIcon(0, QtGui.QIcon(px))
+                guide_root.addChild(li)
+            nf_item.addChild(guide_root)
+            guide_root.setExpanded(True)
+
+            for offset_idx, r in enumerate(nf.per_offset):
+                stats = QtWidgets.QTreeWidgetItem(
+                    [
+                        f"Per-offset stats: {r.label or '—'}: "
+                        f"λ_max={r.lambda_max:.1f} m, "
+                        f"{r.n_contaminated}/{r.n_total} flagged"
+                    ]
+                )
+                stats.setData(0, _ITEM_TYPE_ROLE, _TYPE_NF_PER_OFFSET)
+                stats.setData(0, _UID_ROLE, nf.uid)
+                stats.setData(0, _NF_OFFSET_INDEX_ROLE, int(offset_idx))
+                stats.setFlags(ItemIsEnabled | ItemIsSelectable | ItemIsUserCheckable)
+                stats.setCheckState(
+                    0,
+                    Checked if bool(getattr(r, "scatter_visible", True)) else Unchecked,
+                )
+                stats.setForeground(0, QtGui.QColor("#555555"))
+                nf_item.addChild(stats)
+            sp_item.addChild(nf_item)
+            nf_item.setExpanded(True)
+
+    # ── Bottom toolbar ─────────────────────────────────────────────────
+
+    # Display name → internal filter key. Kept in one place so the popup
+    # menu and ``_select_by_mode`` stay in sync.
+    _SELECTION_MODES = (
+        ("Legend",                      "legend"),
+        ("Spectrum",                    "spectrum"),
+        ("Source offset data",          "curve"),
+        ("Source-offset guide lines",   "source_offset_guide"),
+        ("NACD guide lines",            "guide"),
+        ("NACD",                        "nacd"),
+        ("NACD \u03bb_max",             "nacd_lambda_max"),
+        ("NACD f_min",                  "nacd_f_min"),
+        ("Subplots",                    "subplot"),
+    )
+
+    def _build_bottom_toolbar(self, parent_layout):
+        """Create the collapse/expand + select-by-type + on/off bar.
+
+        Ordered to match the left-to-right flow the user asked for:
+        fold/unfold the tree, pick *what* to select, then act on the
+        selection. The selection menu opens **upwards** so it does not
+        clip against the bottom of the dock.
+        """
+        bar = QtWidgets.QWidget(self)
+        hl = QtWidgets.QHBoxLayout(bar)
+        hl.setContentsMargins(0, 4, 0, 0)
+        hl.setSpacing(4)
+
+        btn_collapse = QtWidgets.QToolButton(bar)
+        btn_collapse.setText("Collapse all")
+        btn_collapse.clicked.connect(self._collapse_all)
+        hl.addWidget(btn_collapse)
+
+        btn_expand = QtWidgets.QToolButton(bar)
+        btn_expand.setText("Expand all")
+        btn_expand.clicked.connect(self._expand_all)
+        hl.addWidget(btn_expand)
+
+        self._btn_select = QtWidgets.QToolButton(bar)
+        self._btn_select.setText("Select by \u25b2")
+        self._btn_select.setToolTip(
+            "Select every item of a given kind across all subplots."
+        )
+        self._btn_select.clicked.connect(self._show_selection_popup)
+        hl.addWidget(self._btn_select)
+
+        hl.addStretch(1)
+
+        btn_on = QtWidgets.QToolButton(bar)
+        btn_on.setText("Turn on")
+        btn_on.setToolTip("Turn every selected layer on.")
+        btn_on.clicked.connect(lambda: self._set_selected_visibility(True))
+        hl.addWidget(btn_on)
+
+        btn_off = QtWidgets.QToolButton(bar)
+        btn_off.setText("Turn off")
+        btn_off.setToolTip("Turn every selected layer off.")
+        btn_off.clicked.connect(lambda: self._set_selected_visibility(False))
+        hl.addWidget(btn_off)
+
+        parent_layout.addWidget(bar)
+
+    def _collapse_all(self) -> None:
+        self._tree.collapseAll()
+
+    def _expand_all(self) -> None:
+        self._tree.expandAll()
+
+    def _show_selection_popup(self) -> None:
+        """Pop the selection menu *above* the button (drop-up behaviour)."""
+        menu = QtWidgets.QMenu(self)
+        for label, mode in self._SELECTION_MODES:
+            act = menu.addAction(label)
+            act.triggered.connect(
+                lambda _checked=False, m=mode: self._select_by_mode(m)
+            )
+        size = menu.sizeHint()
+        anchor = self._btn_select.mapToGlobal(
+            QtCore.QPoint(0, -size.height())
+        )
+        menu.exec(anchor)
+
+    def _iter_all_items(self):
+        """Yield every QTreeWidgetItem in the tree, depth-first."""
+        def _walk(parent):
+            for i in range(parent.childCount()):
+                child = parent.child(i)
+                yield child
+                yield from _walk(child)
+        root = self._tree.invisibleRootItem()
+        yield from _walk(root)
+
+    def _item_matches_mode(self, item, mode: str) -> bool:
+        itype = item.data(0, _ITEM_TYPE_ROLE)
+        if mode == "legend":
+            return itype == _TYPE_LEGEND
+        if mode == "spectrum":
+            return itype == _TYPE_SPECTRUM
+        if mode == "curve":
+            return itype == _TYPE_CURVE
+        if mode == "source_offset_guide":
+            return itype == _TYPE_LAMBDA_LINE
+        if mode == "guide":
+            return itype == _TYPE_NF_GUIDE
+        if mode == "nacd":
+            return itype == _TYPE_NF_ANALYSIS
+        if mode == "subplot":
+            return itype == _TYPE_SUBPLOT
+        if mode == "nacd_lambda_max":
+            if itype != _TYPE_NF_GUIDE:
+                return False
+            if bool(item.data(0, _NF_LAMBDA_MAX_CURVE_ROLE)):
+                return True
+            return (
+                item.data(0, _NF_KIND_ROLE) == "lambda"
+                and item.data(0, _NF_ROLE_ROLE) == "max"
+            )
+        if mode == "nacd_f_min":
+            if itype != _TYPE_NF_GUIDE:
+                return False
+            return (
+                item.data(0, _NF_KIND_ROLE) == "freq"
+                and item.data(0, _NF_ROLE_ROLE) == "min"
+            )
+        return False
+
+    def _select_by_mode(self, mode: str) -> None:
+        """Clear the current selection and select every matching item.
+
+        Uses the selection model's ``NoUpdate`` flag when seating the
+        "current" item so it doesn't wipe out the multi-select we just
+        built up.
+        """
+        selection_model = self._tree.selectionModel()
+        self._tree.blockSignals(True)
+        try:
+            self._tree.clearSelection()
+            last = None
+            for item in self._iter_all_items():
+                if self._item_matches_mode(item, mode):
+                    item.setSelected(True)
+                    last = item
+        finally:
+            self._tree.blockSignals(False)
+        if last is not None:
+            try:
+                NoUpdate = QtCore.QItemSelectionModel.SelectionFlag.NoUpdate
+            except AttributeError:
+                NoUpdate = QtCore.QItemSelectionModel.NoUpdate
+            index = self._tree.indexFromItem(last)
+            selection_model.setCurrentIndex(index, NoUpdate)
+            # Drive the click path once so the right panel's batch-select
+            # signals fire with every selected item.
+            self._on_item_clicked(last, 0)
+
+    def _set_selected_visibility(self, visible: bool) -> None:
+        """Turn every selected (check-able) item on or off in one pass.
+
+        Re-uses the existing ``itemChanged`` path so each visibility
+        handler updates the sheet model exactly as it would for a user
+        click. The main window's render timer coalesces the flurry of
+        signals into a single redraw.
+        """
+        state = Checked if visible else Unchecked
+        items = [it for it in self._tree.selectedItems()
+                 if (it.flags() & ItemIsUserCheckable)]
+        for it in items:
+            if it.checkState(0) != state:
+                it.setCheckState(0, state)
 
     # ── Event handlers ─────────────────────────────────────────────────
 
@@ -429,13 +745,35 @@ class DataTreePanel(QtWidgets.QWidget):
             self.curve_selected.emit(uid)
         elif item_type == _TYPE_AGG_SHADOW_GROUP and uid:
             self.aggregated_selected.emit(uid)
+        elif item_type == _TYPE_NF_ANALYSIS and uid:
+            self.nf_analysis_selected.emit(uid)
+        elif item_type == _TYPE_NF_GUIDE and uid:
+            line_uid = item.data(0, _NF_LINE_UID_ROLE)
+            if line_uid:
+                self.nf_guide_line_selected.emit(uid, line_uid)
+        elif item_type == _TYPE_NF_PER_OFFSET and uid:
+            offset_idx = item.data(0, _NF_OFFSET_INDEX_ROLE)
+            if offset_idx is not None:
+                self.nf_per_offset_selected.emit(uid, int(offset_idx))
+        elif item_type == _TYPE_LAMBDA_LINE and uid:
+            lam_uid = item.data(0, _LAMBDA_UID_ROLE)
+            if lam_uid:
+                self.lambda_line_selected.emit(uid, lam_uid)
+        elif item_type == _TYPE_LEGEND and key:
+            self.legend_layer_selected.emit(key)
         elif item_type in (_TYPE_CURVE, _TYPE_INFO) and uid:
-            self.curve_selected.emit(uid)
+            if item_type == _TYPE_CURVE:
+                self.curve_selected.emit(uid)
+            elif item.parent() and item.parent().data(0, _ITEM_TYPE_ROLE) == _TYPE_CURVE:
+                self.curve_selected.emit(uid)
 
         # ── Multi-select: gather per type ─────────────────────────────
         sel_curve_uids = []
         sel_spectrum_uids = []
         sel_subplot_keys = []
+        sel_legend_keys: list = []
+        sel_nf_guides: list = []  # list[tuple[str, str]]
+        sel_nacd_uids: list = []
 
         for sel_item in self._tree.selectedItems():
             sel_type = sel_item.data(0, _ITEM_TYPE_ROLE)
@@ -454,6 +792,18 @@ class DataTreePanel(QtWidgets.QWidget):
             elif sel_type == _TYPE_INFO and sel_uid:
                 if sel_uid not in sel_curve_uids:
                     sel_curve_uids.append(sel_uid)
+            elif sel_type == _TYPE_LEGEND and sel_key:
+                if sel_key not in sel_legend_keys:
+                    sel_legend_keys.append(sel_key)
+            elif sel_type == _TYPE_NF_GUIDE and sel_uid:
+                line_uid = sel_item.data(0, _NF_LINE_UID_ROLE)
+                if line_uid:
+                    pair = (sel_uid, line_uid)
+                    if pair not in sel_nf_guides:
+                        sel_nf_guides.append(pair)
+            elif sel_type == _TYPE_NF_ANALYSIS and sel_uid:
+                if sel_uid not in sel_nacd_uids:
+                    sel_nacd_uids.append(sel_uid)
 
         # Emit batch signals when >1 items of same type
         if len(sel_curve_uids) > 1:
@@ -462,6 +812,12 @@ class DataTreePanel(QtWidgets.QWidget):
             self.spectra_selected.emit(sel_spectrum_uids)
         if len(sel_subplot_keys) > 1:
             self.subplots_selected.emit(sel_subplot_keys)
+        if len(sel_legend_keys) > 1:
+            self.legends_selected.emit(sel_legend_keys)
+        if len(sel_nf_guides) > 1:
+            self.nf_guides_selected.emit(sel_nf_guides)
+        if len(sel_nacd_uids) > 1:
+            self.nacd_analyses_selected.emit(sel_nacd_uids)
 
     def _on_item_changed(self, item, column):
         item_type = item.data(0, _ITEM_TYPE_ROLE)
@@ -519,6 +875,36 @@ class DataTreePanel(QtWidgets.QWidget):
             checked = item.checkState(0) == Checked
             self.curve_visibility_changed.emit(uid, checked)
 
+        elif item_type == _TYPE_LAMBDA_LINE and uid:
+            lam_uid = item.data(0, _LAMBDA_UID_ROLE)
+            checked = item.checkState(0) == Checked
+            if lam_uid:
+                self.lambda_visibility_changed.emit(uid, lam_uid, checked)
+
+        elif item_type == _TYPE_NF_GUIDE and uid:
+            line_uid = item.data(0, _NF_LINE_UID_ROLE)
+            checked = item.checkState(0) == Checked
+            if line_uid:
+                self.nf_guide_visibility_changed.emit(uid, line_uid, checked)
+
+        elif item_type == _TYPE_NF_ANALYSIS and uid:
+            checked = item.checkState(0) == Checked
+            self.nf_layer_visibility_changed.emit(uid, checked)
+
+        elif item_type == _TYPE_LEGEND:
+            key = item.data(0, _KEY_ROLE)
+            checked = item.checkState(0) == Checked
+            if key:
+                self.legend_visibility_changed.emit(key, checked)
+
+        elif item_type == _TYPE_NF_PER_OFFSET and uid:
+            offset_idx = item.data(0, _NF_OFFSET_INDEX_ROLE)
+            checked = item.checkState(0) == Checked
+            if offset_idx is not None:
+                self.nf_per_offset_visibility_changed.emit(
+                    uid, int(offset_idx), checked
+                )
+
     def _on_add_clicked(self):
         """Determine target subplot and emit add_data_requested(subplot_key)."""
         # Use currently selected subplot, or the first one
@@ -552,6 +938,11 @@ class DataTreePanel(QtWidgets.QWidget):
                 lambda: self.add_data_requested.emit(key or "main"))
             act_rename = menu.addAction("Rename subplot")
             act_rename.triggered.connect(lambda: self._begin_rename(item))
+            menu.addSeparator()
+            act_clear = menu.addAction("Clear subplot...")
+            act_clear.triggered.connect(
+                lambda: self._confirm_clear_subplot(key or "main", item.text(0))
+            )
 
         if item_type == _TYPE_CURVE:
             # Collect all selected curve UIDs
@@ -587,6 +978,26 @@ class DataTreePanel(QtWidgets.QWidget):
 
         if menu.actions():
             menu.exec(self._tree.viewport().mapToGlobal(pos))
+
+    def _confirm_clear_subplot(self, key: str, display: str) -> None:
+        """Ask before wiping every layer from a subplot cell."""
+        try:
+            Yes = QtWidgets.QMessageBox.StandardButton.Yes
+            No = QtWidgets.QMessageBox.StandardButton.No
+        except AttributeError:
+            Yes = QtWidgets.QMessageBox.Yes
+            No = QtWidgets.QMessageBox.No
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Clear subplot",
+            f"Remove all data from \"{display}\"?\n\n"
+            "This drops its curves, aggregated figure, and NACD analyses. "
+            "The subplot cell itself stays in the grid.",
+            Yes | No,
+            No,
+        )
+        if reply == Yes:
+            self.clear_subplot_requested.emit(key)
 
     def _begin_rename(self, item):
         """Start inline editing of a subplot name."""
