@@ -692,6 +692,84 @@ def _coerce_power(power: np.ndarray, n_vel: int, n_freq: int) -> np.ndarray:
     return arr
 
 
+def _is_uniform(axis: np.ndarray, rtol: float = 1e-3) -> bool:
+    """Return True if ``axis`` is (near-)uniformly spaced.
+
+    The renderer plots spectra with ``imshow(extent=...)`` which assumes
+    equal-width cells. SW-Transform can emit a log-spaced velocity axis
+    (``vspace='log'``) — that case fails this check and triggers
+    resampling in :func:`_resample_to_uniform`.
+    """
+    if axis.ndim != 1 or axis.size < 3:
+        return True
+    diffs = np.diff(axis.astype(np.float64))
+    span = float(axis[-1] - axis[0])
+    if span == 0:
+        return True
+    tol = rtol * abs(span) / max(1, axis.size - 1)
+    return bool(np.max(np.abs(diffs - diffs.mean())) <= tol)
+
+
+def _resample_to_uniform(
+    freqs: np.ndarray,
+    vels: np.ndarray,
+    power: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Resample a spectrum onto uniformly spaced axes.
+
+    DC_Cut renders the power array with ``imshow(extent=[f0, f1, v0, v1])``,
+    which implicitly places each row/column at a uniform fraction of the
+    span. When the NPZ was produced with ``vspace='log'`` (or any other
+    non-uniform axis), the raw grid does not match that assumption and
+    bright dispersion ridges end up shifted relative to the picked
+    velocities in ``combined_*_fdbf.csv``. This helper linearly
+    interpolates the power grid onto uniform axes of the same length and
+    span so the extent-based renderer produces correct geometry.
+    """
+    freqs = np.asarray(freqs)
+    vels = np.asarray(vels)
+    power = np.asarray(power)
+    if power.ndim != 2 or power.shape != (vels.size, freqs.size):
+        return freqs, vels, power
+
+    freqs_uniform = _is_uniform(freqs)
+    vels_uniform = _is_uniform(vels)
+    if freqs_uniform and vels_uniform:
+        return freqs, vels, power
+
+    out_freqs = freqs
+    out_vels = vels
+    out_power = power.astype(np.float32, copy=False)
+
+    if not vels_uniform and vels.size >= 2:
+        new_vels = np.linspace(float(vels[0]), float(vels[-1]), vels.size, dtype=np.float64)
+        # Interpolate each frequency column along the velocity axis.
+        # np.interp requires the x-coordinates to be increasing.
+        vx = vels.astype(np.float64)
+        if vx[0] > vx[-1]:
+            vx = vx[::-1]
+            out_power = out_power[::-1, :]
+        resampled = np.empty((new_vels.size, out_power.shape[1]), dtype=np.float32)
+        for j in range(out_power.shape[1]):
+            resampled[:, j] = np.interp(new_vels, vx, out_power[:, j])
+        out_power = resampled
+        out_vels = new_vels.astype(vels.dtype, copy=False)
+
+    if not freqs_uniform and freqs.size >= 2:
+        new_freqs = np.linspace(float(freqs[0]), float(freqs[-1]), freqs.size, dtype=np.float64)
+        fx = freqs.astype(np.float64)
+        if fx[0] > fx[-1]:
+            fx = fx[::-1]
+            out_power = out_power[:, ::-1]
+        resampled = np.empty((out_power.shape[0], new_freqs.size), dtype=np.float32)
+        for i in range(out_power.shape[0]):
+            resampled[i, :] = np.interp(new_freqs, fx, out_power[i, :])
+        out_power = resampled
+        out_freqs = new_freqs.astype(freqs.dtype, copy=False)
+
+    return out_freqs, out_vels, out_power
+
+
 def _build_record(
     *,
     data: Mapping[str, Any],
@@ -707,6 +785,11 @@ def _build_record(
     freqs = np.asarray(data[key_map["frequencies"]])
     vels = np.asarray(data[key_map["velocities"]])
     power = _coerce_power(np.asarray(data[key_map["power"]]), len(vels), len(freqs))
+
+    # SW-Transform may emit log-spaced velocity axes (vspace='log'). The
+    # renderer plots with imshow(extent=...) which assumes uniform
+    # spacing, so resample onto a linear grid of the same span/length.
+    freqs, vels, power = _resample_to_uniform(freqs, vels, power)
 
     picked: Optional[np.ndarray] = None
     picked_key = key_map.get("picked_velocities")

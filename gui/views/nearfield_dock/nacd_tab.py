@@ -207,7 +207,7 @@ class NacdTab(QtWidgets.QWidget):
         )
         self.single_zone_editor = SingleGroupEditor(
             show_position=False,
-            show_lambda_toggle=False,
+            show_lambda_toggle=True,
             parent=self,
         )
         # Default: one NACD threshold at 1.0 giving two zones
@@ -220,6 +220,8 @@ class NacdTab(QtWidgets.QWidget):
                 ZoneFill(zone_label="Zone 2"),
                 ZoneFill(zone_label="Zone 1"),
             ],
+            draw_lambda=True,
+            draw_freq=True,
         ).normalised())
         self.single_zone_editor.group_changed.connect(self._on_spec_edited)
         self._zones_sec.add_widget(self.single_zone_editor)
@@ -236,12 +238,16 @@ class NacdTab(QtWidgets.QWidget):
                 thresholds=[ZoneThreshold(nacd=1.0)],
                 zones=[ZoneFill(), ZoneFill()],
                 label_position="top",
+                draw_lambda=True,
+                draw_freq=True,
             ).normalised(),
             ZoneGroup(
                 name="Group B",
                 thresholds=[ZoneThreshold(nacd=0.8)],
                 zones=[ZoneFill(), ZoneFill()],
                 label_position="bottom",
+                draw_lambda=True,
+                draw_freq=True,
             ).normalised(),
         ])
         self.multi_group_editor.groups_changed.connect(self._on_spec_edited)

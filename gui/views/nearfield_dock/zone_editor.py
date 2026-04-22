@@ -427,11 +427,13 @@ class SingleGroupEditor(QtWidgets.QWidget):
         else:
             self.pos_combo = None
 
-        # Draw toggles — multi_zone users typically only want the f
-        # vertical line, so the λ toggle is hidden by default and the
-        # underlying spec keeps draw_lambda=False.
-        self.chk_lambda = QtWidgets.QCheckBox("Draw λ lines (advanced)")
-        self.chk_lambda.setChecked(False)
+        # Draw toggles — both axes default on so new groups draw the
+        # f vertical marker AND the λ hyperbola / λ-axis line. The λ
+        # toggle is shown by default; callers can hide it per-editor
+        # via show_lambda_toggle=False but the underlying spec still
+        # keeps draw_lambda=True.
+        self.chk_lambda = QtWidgets.QCheckBox("Draw λ lines")
+        self.chk_lambda.setChecked(True)
         self.chk_lambda.toggled.connect(self._emit_changed)
         self.chk_freq = QtWidgets.QCheckBox("Draw f lines")
         self.chk_freq.setChecked(True)
@@ -620,6 +622,8 @@ class MultiGroupEditor(QtWidgets.QWidget):
             thresholds=[ZoneThreshold(nacd=1.0)],
             zones=[ZoneFill(), ZoneFill()],
             label_position=pos,
+            draw_lambda=True,
+            draw_freq=True,
         )
         new_group = new_group.normalised()
         self._groups.append(new_group)

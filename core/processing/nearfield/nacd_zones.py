@@ -115,15 +115,17 @@ class ZoneGroup:
 
     ``draw_lambda`` / ``draw_freq`` gate whether the group's λ lines
     and their derived ``f`` partners are emitted into the
-    :class:`DerivedLimitSet`. The multi_zone mode defaults
-    ``draw_lambda=False`` — the user asked for a single vertical ``f``
-    marker labelled "NACD = <value>", not a λ hyperbola.
+    :class:`DerivedLimitSet`. Both default to ``True`` so that out of
+    the box each NACD threshold draws a vertical ``f`` marker *and* a
+    λ hyperbola / λ-axis vertical line, matching the reference
+    rendering. Users can turn either axis off per-group via the
+    SingleGroupEditor toggles.
     """
 
     name: str = "Group"
     thresholds: List[ZoneThreshold] = field(default_factory=list)
     zones: List[ZoneFill] = field(default_factory=list)
-    draw_lambda: bool = False
+    draw_lambda: bool = True
     draw_freq: bool = True
     label_position: LabelPosition = "top"
     palette_hint: str = ""
@@ -350,7 +352,9 @@ def _group_from_dict(d: dict) -> ZoneGroup:
         name=str(d.get("name", "Group") or "Group"),
         thresholds=thresholds,
         zones=zones,
-        draw_lambda=bool(d.get("draw_lambda", False)),
+        # Default to True so legacy specs saved before the default
+        # flip still draw λ lines after loading.
+        draw_lambda=bool(d.get("draw_lambda", True)),
         draw_freq=bool(d.get("draw_freq", True)),
         label_position=pos,  # type: ignore[arg-type]
         palette_hint=str(d.get("palette_hint", "") or ""),
