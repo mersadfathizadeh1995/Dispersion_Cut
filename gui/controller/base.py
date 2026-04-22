@@ -179,6 +179,25 @@ class BaseInteractiveRemoval:
 
         self._apply_axis_scales()
 
+        # Blit manager — speeds up interactive previews when a spectrum
+        # is loaded. The fast path is gated by the
+        # ``spectrum_perf_use_blitting`` preference and the throttle by
+        # ``spectrum_perf_draw_throttle_ms``; both are read lazily here
+        # so they can be flipped live from the Preferences dialog.
+        try:
+            from dc_cut.gui.controller.blit_manager import BlitManager
+            from dc_cut.services.prefs import get_pref
+
+            self.blit_manager = BlitManager(self.fig.canvas, [self.ax_freq, self.ax_wave])
+            self.blit_manager.set_enabled(
+                bool(get_pref('spectrum_perf_use_blitting', True))
+            )
+            self.blit_manager.set_throttle_ms(
+                int(get_pref('spectrum_perf_draw_throttle_ms', 0))
+            )
+        except Exception:
+            self.blit_manager = None
+
         try:
             self.fig.canvas.draw_idle()
         except Exception:

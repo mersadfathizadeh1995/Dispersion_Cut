@@ -28,6 +28,17 @@ _DEFAULTS: Dict[str, Any] = {
     "spectrum_display_mode": "per_layer",  # "active_only", "all_visible", or "per_layer"
     "spectrum_render_mode": "imshow",  # "imshow" (fast pixel grid) or "contour" (smooth contours)
     "auto_load_spectra": True,  # Auto-detect and load spectrum files at startup
+    # Spectrum performance (all default ON; turn off to restore legacy behaviour)
+    "spectrum_perf_downsample": True,        # stride-downsample large power arrays before imshow
+    "spectrum_perf_max_px": 400,             # target max pixels per axis when downsampling is on
+    "spectrum_perf_interpolation": "auto",   # "auto" | "bilinear" | "nearest"
+    "spectrum_perf_rgba_cache": True,        # pre-bake colormap into RGBA uint8 once
+    "spectrum_perf_rasterized": True,        # mark the AxesImage rasterized=True
+    "spectrum_perf_contour_levels": 12,      # level count for contourf render mode (was 30)
+    "spectrum_perf_incremental_update": True,  # re-use existing AxesImage on toggles
+    "spectrum_perf_hide_during_gesture": True,  # blank spectrum while a cut/add drag is active
+    "spectrum_perf_use_blitting": True,      # interactive tools use restore_region + blit
+    "spectrum_perf_draw_throttle_ms": 0,     # 0 = off; positive int coalesces draw_idle via QTimer
 }
 
 
@@ -60,6 +71,18 @@ def load_prefs() -> Dict[str, Any]:
         if out.get("freq_tick_style") == "decades":
             out["freq_tick_style"] = "ruler"
         out["_migrated_freq_tick_ruler_v1"] = True
+        try:
+            save_prefs(out)
+        except Exception:
+            pass
+
+    # One-shot migration for the spectrum performance knobs added in this
+    # revision. Only touches the flag; the defaults above already provide
+    # fast-path values on first read. The flag lets a future revision
+    # distinguish "user explicitly accepted this default" from "never seen
+    # the new pref before".
+    if not out.get("_migrated_spectrum_perf_v1"):
+        out["_migrated_spectrum_perf_v1"] = True
         try:
             save_prefs(out)
         except Exception:

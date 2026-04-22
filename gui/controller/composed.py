@@ -354,12 +354,14 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):
                 on_select=lambda x1, y1, x2, y2, side: self.tools.on_line_delete_freq(
                     x1, y1, x2, y2, side
                 ),
+                controller=self,
             )
             self._line_selector_wave = LineSelector(
                 self.ax_wave,
                 on_select=lambda x1, y1, x2, y2, side: self.tools.on_line_delete_wave(
                     x1, y1, x2, y2, side
                 ),
+                controller=self,
             )
         except Exception:
             pass
@@ -375,12 +377,14 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):
                 on_confirm=lambda corners, patch: self._on_inclined_rect_confirm_freq(
                     corners, patch
                 ),
+                controller=self,
             )
             self._inclined_rect_tool_wave = InclinedRectTool(
                 self.ax_wave,
                 on_confirm=lambda corners, patch: self._on_inclined_rect_confirm_wave(
                     corners, patch
                 ),
+                controller=self,
             )
         except Exception:
             pass
