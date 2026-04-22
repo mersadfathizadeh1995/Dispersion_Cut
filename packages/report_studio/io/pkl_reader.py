@@ -57,7 +57,10 @@ def _attach_lambda_lines_from_state(curves: List[OffsetCurve], state: dict) -> N
             so = parse_source_offset_from_label(label)
 
         key = label
-        color = wl_colors.get(key, "#000000")
+        # When the PKL doesn't record an explicit color for this label,
+        # fall back to the curve's own color so the lambda line matches
+        # its dispersion curve instead of defaulting to generic black.
+        explicit_color = wl_colors.get(key)
         visible = bool(wl_visibility.get(key, True))
 
         matched: List[OffsetCurve] = []
@@ -71,6 +74,11 @@ def _attach_lambda_lines_from_state(curves: List[OffsetCurve], state: dict) -> N
         if not matched:
             continue
         for curve in matched:
+            color = (
+                str(explicit_color)
+                if explicit_color
+                else (curve.color or "#000000")
+            )
             curve.add_lambda_line(
                 NFLambdaLine(
                     lambda_value=lam,
@@ -82,6 +90,71 @@ def _attach_lambda_lines_from_state(curves: List[OffsetCurve], state: dict) -> N
                     transform_used=str(entry.get("transform_used", "") or ""),
                 )
             )
+
+
+def _promote_per_offset_lambda_max(curves: List[OffsetCurve], state: dict) -> None:
+    """Promote ``nf_results.per_offset.lambda_max`` onto curve ``lambda_lines``.
+
+    The lambda_max hyperbola used to live on the NACD-Only analysis as
+    an explicit ``NFLine(lambda_max_curve=True)`` row. The new model is
+    that the hyperbola belongs to the dispersion curve it was computed
+    for — same color as the curve, listed under the curve's "λ guide
+    lines" sub-tab — and never as a NACD layer.
+
+    This helper walks ``state['nf_results']['per_offset']`` after
+    :func:`_attach_lambda_lines_from_state` has already applied any
+    user-owned ``wavelength_lines_data``. If a curve still has no
+    ``NFLambdaLine`` within ``1e-3`` of the PKL's ``lambda_max``, we add
+    one using the curve's own color. This way explicit user choices in
+    ``wavelength_lines_data`` (colors, labels, visibility) always win
+    and promotion only fills the gaps.
+    """
+    block = state.get("nf_results") or {}
+    per = block.get("per_offset") or []
+    if not per:
+        return
+
+    curves_by_label: Dict[str, OffsetCurve] = {}
+    for c in curves:
+        if c.name:
+            curves_by_label[c.name] = c
+
+    for row in per:
+        label = str(row.get("label", ""))
+        try:
+            lam = float(row.get("lambda_max", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if lam <= 0:
+            continue
+        curve = curves_by_label.get(label)
+        if curve is None:
+            continue
+        already = False
+        for L in (getattr(curve, "lambda_lines", None) or []):
+            try:
+                if abs(float(L.lambda_value) - lam) < 1e-3:
+                    already = True
+                    break
+            except (TypeError, ValueError):
+                continue
+        if already:
+            continue
+        try:
+            so = row.get("source_offset", None)
+            so_f = float(so) if so is not None else None
+        except (TypeError, ValueError):
+            so_f = None
+        curve.add_lambda_line(
+            NFLambdaLine(
+                lambda_value=lam,
+                source_offset=so_f,
+                label=label,
+                color=(curve.color or "#000000"),
+                visible=True,
+                show_label=False,
+            )
+        )
 
 
 def read_nf_analysis(state: dict) -> Optional[NFAnalysis]:
@@ -213,25 +286,18 @@ def split_nf_per_offset(
 ) -> List[NFAnalysis]:
     """One :class:`NFAnalysis` per source offset (grid / per-subplot linking).
 
-    When ``curves`` is supplied and one of them already owns a matching
-    ``NFLambdaLine`` for this offset's ``lambda_max`` (within 1e-3), the
-    explicit ``lambda_max_curve=True`` NFLine is suppressed so the tree
-    doesn't show a duplicate row next to the derived ``λ / max`` entry and
-    the renderer doesn't draw two overlapping hyperbolas.
+    The ``lambda_max`` hyperbola is no longer emitted as a NACD layer —
+    it lives on the dispersion curve (see
+    :func:`_promote_per_offset_lambda_max`). The ``curves`` argument is
+    kept for backwards compatibility but is no longer consulted.
     """
+    del curves  # kept for API compat with older callers
     try:
         from dc_cut.core.processing.nearfield.range_derivation import (
             derive_limits_from_lambda_values,
         )
     except ImportError:
         derive_limits_from_lambda_values = None  # type: ignore
-
-    curves_by_label: Dict[str, Any] = {}
-    if curves:
-        for c in curves:
-            lbl = getattr(c, "name", "")
-            if lbl:
-                curves_by_label[lbl] = c
 
     def _dedupe_key(
         band_index: int, kind: str, role: str, value: float
@@ -315,37 +381,11 @@ def split_nf_per_offset(
                     seen.add(key)
             except Exception:
                 pass
-        if nf.show_lambda_max and r.lambda_max > 0:
-            lam = float(r.lambda_max)
-            curve = curves_by_label.get(r.label)
-            curve_has_matching_lambda = False
-            if curve is not None:
-                for L in (getattr(curve, "lambda_lines", None) or []):
-                    try:
-                        if abs(float(L.lambda_value) - lam) < 1e-3:
-                            curve_has_matching_lambda = True
-                            break
-                    except (TypeError, ValueError):
-                        continue
-            if not curve_has_matching_lambda:
-                lines.append(
-                    NFLine(
-                        kind="lambda",
-                        role="max",
-                        value=lam,
-                        source="user",
-                        valid=True,
-                        color=nf.severity_palette.get("marginal", "#ff7f0e"),
-                        line_style=":",
-                        line_width=1.2,
-                        alpha=0.75,
-                        show_label=False,
-                        lambda_max_curve=True,
-                        source_offset=so,
-                        offset_label=r.label,
-                        display_label=f"λ_max = {lam:g} m",
-                    )
-                )
+        # The per-offset lambda_max hyperbola is no longer emitted as a
+        # NACD layer here — it lives on the dispersion curve itself (see
+        # :func:`_promote_per_offset_lambda_max`). Legacy projects that
+        # still have ``NFLine(lambda_max_curve=True)`` rows survive via
+        # the seeding loop above; we simply don't mint fresh ones.
         nf_one = NFAnalysis(
             uid="",
             name=nf.name,
@@ -411,6 +451,7 @@ def curves_from_state(state: dict) -> List[OffsetCurve]:
         curves.append(curve)
 
     _attach_lambda_lines_from_state(curves, state)
+    _promote_per_offset_lambda_max(curves, state)
     return curves
 
 

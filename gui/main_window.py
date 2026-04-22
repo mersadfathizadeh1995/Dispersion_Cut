@@ -678,6 +678,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 m_file.addAction(act_save)
             except Exception: pass
             try:
+                a_save_as = reg.get('file.save_state_as')
+                act_save_as = QtGui.QAction(a_save_as.text, self)
+                if a_save_as.shortcut:
+                    act_save_as.setShortcut(a_save_as.shortcut)
+                act_save_as.triggered.connect(a_save_as.callback)
+                m_file.addAction(act_save_as)
+            except Exception: pass
+            try:
                 a_txt = reg.get('file.save_dc'); act_txt = QtGui.QAction(a_txt.text, self);
                 if a_txt.shortcut: act_txt.setShortcut(a_txt.shortcut)
                 act_txt.triggered.connect(a_txt.callback)
@@ -712,6 +720,7 @@ class MainWindow(QtWidgets.QMainWindow):
         <tr><td>Preferences</td><td>Ctrl+,</td></tr>
         <tr><td>Append Data</td><td>Ctrl+Shift+O</td></tr>
         <tr><td>Save State</td><td>Ctrl+S</td></tr>
+        <tr><td>Save State As</td><td>Ctrl+Shift+S</td></tr>
         <tr><td>Exit</td><td>Ctrl+Q</td></tr>
         <tr><td><b>Edit</b></td><td></td></tr>
         <tr><td>Undo</td><td>Ctrl+Z</td></tr>
@@ -1562,6 +1571,21 @@ class MainWindow(QtWidgets.QMainWindow):
                     sc_save.activated.connect(a_save.callback)
                     sc_save.setEnabled(True)
                     self._save_shortcut = sc_save
+                except Exception:
+                    pass
+                try:
+                    a_save_as = reg.get('file.save_state_as')
+                    sc_save_as = QtGui.QShortcut(
+                        QtGui.QKeySequence('Ctrl+Shift+S'), self
+                    )
+                    sc_save_as.setContext(
+                        QtCore.Qt.WindowShortcut
+                        if hasattr(QtCore.Qt, 'WindowShortcut')
+                        else QtCore.Qt.ShortcutContext.WindowShortcut
+                    )
+                    sc_save_as.activated.connect(a_save_as.callback)
+                    sc_save_as.setEnabled(True)
+                    self._save_as_shortcut = sc_save_as
                 except Exception:
                     pass
         except Exception as e:

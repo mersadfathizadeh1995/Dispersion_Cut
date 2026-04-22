@@ -499,6 +499,12 @@ class DataTreePanel(QtWidgets.QWidget):
             freq_dec = int(getattr(sheet.typography, "freq_decimals", 1))
             lam_dec = int(getattr(sheet.typography, "lambda_decimals", 1))
             for ln in nf.lines:
+                # Legacy projects may still carry
+                # ``NFLine(lambda_max_curve=True)`` rows. The hyperbola
+                # now lives on the dispersion curve's "λ guide lines"
+                # sub-tab, so hide the duplicate NACD tree entry.
+                if bool(getattr(ln, "lambda_max_curve", False)):
+                    continue
                 disp = (ln.display_label or "").strip()
                 if not disp:
                     if ln.kind == "freq":

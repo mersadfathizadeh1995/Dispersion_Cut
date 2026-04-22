@@ -275,35 +275,12 @@ def draw(
                 label=scatter_label,
             )
 
-    has_lambda_max_line = any(ln.lambda_max_curve for ln in nf.lines)
-    if nf.show_lambda_max and not has_lambda_max_line:
-        for r in nf.per_offset:
-            if r.lambda_max <= 0:
-                continue
-            if _curve_owns_lambda(r.lambda_max):
-                # Curve's own lambda_drawer step already drew this hyperbola.
-                continue
-            tmp = OffsetCurve(name="_nf_lambda_max")
-            tmp.add_lambda_line(
-                NFLambdaLine(
-                    lambda_value=float(r.lambda_max),
-                    label="",
-                    color=nf.severity_palette.get("marginal", "#ff7f0e"),
-                    visible=True,
-                    line_style=":",
-                    line_width=1.2,
-                    alpha=0.75,
-                    show_label=False,
-                )
-            )
-            if "lambda_max" in legend_seen:
-                ll = None
-            else:
-                ll = f"\u03bb_max = {fmt_lambda(r.lambda_max, lambda_dec)} m"
-                legend_seen.add("lambda_max")
-            lambda_drawer.draw(
-                ax, tmp, x_domain, style, zorder=zorder - 1, legend_label=ll,
-            )
+    # Per-offset lambda_max hyperbolas now live on the dispersion curve
+    # (via ``OffsetCurve.lambda_lines``) and are drawn by the renderer's
+    # lambda_drawer pass. The NACD drawer no longer mints synthetic
+    # hyperbolas from ``nf.per_offset.lambda_max``; legacy
+    # ``NFLine(lambda_max_curve=True)`` rows remain handled in the loop
+    # below for backwards compatibility with old projects.
 
     for ln in nf.lines:
         if not ln.valid or not ln.visible or ln.value <= 0:

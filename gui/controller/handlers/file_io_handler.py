@@ -43,7 +43,55 @@ class FileIOHandler:
         return qt_compat.QtWidgets
 
     def save_session(self, event=None) -> bool:
-        """Save current session state to file.
+        """Save current session state, silently overwriting the loaded file.
+
+        When the controller has a ``_loaded_state_path`` pointing at an
+        existing ``.pkl``, this writes to that path without prompting.
+        Otherwise it falls through to :meth:`save_session_as` so the
+        first save of a new session still asks where to put the file.
+        This matches the standard "File ▸ Save" pattern — silent
+        overwrite of the currently loaded file, with a separate "Save
+        As..." action for explicit destinations.
+
+        Returns
+        -------
+        bool
+            True if saved successfully.
+        """
+        if not self._is_qt_backend():
+            return False
+
+        try:
+            import os
+
+            loaded = getattr(self._ctrl, "_loaded_state_path", "") or ""
+            if not loaded or not os.path.isfile(loaded):
+                return self.save_session_as(event)
+
+            QtWidgets = self._get_qt_widgets()
+            state_dict = self._ctrl.get_current_state()
+            save_session(state_dict, loaded)
+            try:
+                self._ctrl._loaded_state_path = os.path.abspath(loaded)
+                self._ctrl._nf_dirty = False
+            except Exception:
+                pass
+
+            QtWidgets.QMessageBox.information(
+                self._ctrl.fig.canvas.manager.window,
+                "Save State",
+                f"Saved → {loaded}",
+            )
+            return True
+        except Exception as e:
+            log.error(f"Failed to save session: {e}")
+            return False
+
+    def save_session_as(self, event=None) -> bool:
+        """Save current session state to a user-chosen path (always prompts).
+
+        Also updates ``_loaded_state_path`` so a subsequent "Save State"
+        silently overwrites the newly chosen file.
 
         Returns
         -------
@@ -55,10 +103,11 @@ class FileIOHandler:
 
         try:
             QtWidgets = self._get_qt_widgets()
+            loaded = getattr(self._ctrl, "_loaded_state_path", "") or ""
             path, _ = QtWidgets.QFileDialog.getSaveFileName(
                 self._ctrl.fig.canvas.manager.window,
-                "Save Interactive Session",
-                "",
+                "Save State As",
+                loaded or "",
                 "Session State (*.pkl);;All Files (*.*)",
             )
             if not path:
@@ -75,12 +124,12 @@ class FileIOHandler:
 
             QtWidgets.QMessageBox.information(
                 self._ctrl.fig.canvas.manager.window,
-                "Save State",
+                "Save State As",
                 f"Saved → {path}",
             )
             return True
         except Exception as e:
-            log.error(f"Failed to save session: {e}")
+            log.error(f"Failed to save session as: {e}")
             return False
 
     def save_dispersion_txt(self, event=None) -> bool:

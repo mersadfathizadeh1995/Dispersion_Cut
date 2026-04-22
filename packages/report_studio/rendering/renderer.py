@@ -293,7 +293,15 @@ def _visible_data_extent(
     x_domain: str,
     curves: Optional[List["OffsetCurve"]],
 ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-    """Union of visible curve + visible spectrum samples (no padding)."""
+    """Union of visible dispersion curve samples (spectra are excluded).
+
+    Auto-axis limits must track the dispersion data only. Including
+    spectrum extents here would hijack the view whenever the user turns
+    a spectrum on — even after they unchecked "Auto" — because the
+    renderer re-applies the extent on the next auto pass. Spectra
+    still draw at their own ``imshow`` extent; they just don't drive
+    the frame anymore.
+    """
     all_x: List[np.ndarray] = []
     all_y: List[np.ndarray] = []
     if not curves:
@@ -306,12 +314,6 @@ def _visible_data_extent(
         else:
             all_x.append(np.asarray(c.frequency, dtype=float))
         all_y.append(np.asarray(c.velocity, dtype=float))
-    for c in curves:
-        if not c.visible or not c.spectrum_uid or not c.spectrum_visible:
-            continue
-        spec = state.spectra.get(c.spectrum_uid)
-        if spec and spec.has_data:
-            _append_spectrum_extent(all_x, all_y, spec, x_domain)
     if not all_x or not all_y:
         return None, None
     return np.concatenate(all_x), np.concatenate(all_y)

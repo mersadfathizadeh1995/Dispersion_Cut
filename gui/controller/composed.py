@@ -242,6 +242,13 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):
                     shortcut="Ctrl+S",
                     callback=lambda: self.file_io.save_session(),
                 )
+            if self.actions.try_get('file.save_state_as') is None:
+                self.actions.add(
+                    id="file.save_state_as",
+                    text="Save State As…",
+                    shortcut="Ctrl+Shift+S",
+                    callback=lambda: self.file_io.save_session_as(),
+                )
             if self.actions.try_get('file.save_dc') is None:
                 self.actions.add(
                     id="file.save_dc",

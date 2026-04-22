@@ -13,7 +13,7 @@ import numpy as np
 
 from ..figure_types import FigureTypePlugin, registry
 from .. import subplot_types as ST
-from ..models import NFAnalysis, NFLine, NFOffsetResult
+from ..models import NFAnalysis, NFLambdaLine, NFLine, NFOffsetResult
 
 
 class NacdOnlyPlugin:
@@ -312,46 +312,33 @@ class NacdOnlyPlugin:
             elif so is not None:
                 so = float(so)
             lines = list(lines_by_curve.get(lbl, []))
-            if show_lambda_max and r.lambda_max > 0:
+            # Promote the recomputed ``lambda_max`` onto the dispersion
+            # curve's own λ lines (using the curve's color). This mirrors
+            # :func:`_promote_per_offset_lambda_max` for the recompute
+            # path so the hyperbola never shows up as a NACD layer.
+            if r.lambda_max > 0:
                 lam = float(r.lambda_max)
-                # When the source-offset curve itself already imported a
-                # matching λ line (via ``OffsetCurve.lambda_lines`` /
-                # ``wavelength_lines_data``), the dedicated lambda_drawer
-                # step in the renderer will draw the hyperbola. In that
-                # case skip the explicit ``lambda_max_curve=True`` NFLine
-                # append so the tree doesn't show a second "λ_max = …"
-                # row on top of the derived ``λ / max`` entry. Only append
-                # the explicit hyperbola NFLine when the curve has no
-                # matching λ (so the user still gets a visible λ_max line).
                 curve = curves_by_label.get(lbl)
-                curve_has_matching_lambda = False
                 if curve is not None:
+                    already = False
                     for L in (getattr(curve, "lambda_lines", None) or []):
                         try:
                             if abs(float(L.lambda_value) - lam) < 1e-3:
-                                curve_has_matching_lambda = True
+                                already = True
                                 break
                         except (TypeError, ValueError):
                             continue
-                if not curve_has_matching_lambda:
-                    lines.append(
-                        NFLine(
-                            kind="lambda",
-                            role="max",
-                            value=lam,
-                            source="user",
-                            valid=True,
-                            color="#ff7f0e",
-                            line_style=":",
-                            line_width=1.2,
-                            alpha=0.75,
-                            show_label=False,
-                            lambda_max_curve=True,
-                            source_offset=so,
-                            offset_label=lbl,
-                            display_label=f"λ_max = {lam:g} m",
+                    if not already:
+                        curve.add_lambda_line(
+                            NFLambdaLine(
+                                lambda_value=lam,
+                                source_offset=so,
+                                label=lbl,
+                                color=(getattr(curve, "color", "") or "#000000"),
+                                visible=True,
+                                show_label=False,
+                            )
                         )
-                    )
             analyses.append(
                 NFAnalysis(
                     uid="",

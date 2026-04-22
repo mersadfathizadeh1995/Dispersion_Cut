@@ -60,10 +60,6 @@ class NFSettingsPanel(QtWidgets.QWidget):
             self._palette_btns[key] = b
         layout.addRow("Severity palette:", row)
 
-        self._show_lam = QtWidgets.QCheckBox("Show λ_max curves")
-        self._show_lam.toggled.connect(self._emit_show_lam)
-        layout.addRow(self._show_lam)
-
         self._overlay = QtWidgets.QComboBox()
         for m in ("scatter_on_top", "off"):
             self._overlay.addItem(m, m)
@@ -133,13 +129,11 @@ class NFSettingsPanel(QtWidgets.QWidget):
         self._batch_banner.setVisible(False)
         self._nf = nf
         self._nf_uid = nf.uid
-        self._show_lam.blockSignals(True)
         self._overlay.blockSignals(True)
         self._use_range_mask.blockSignals(True)
         self._le_legend_label.blockSignals(True)
         self._le_legend_label.setText(getattr(nf, "legend_label", "") or "")
         self._le_legend_label.blockSignals(False)
-        self._show_lam.setChecked(nf.show_lambda_max)
         idx = self._overlay.findData(nf.severity_overlay_mode)
         self._overlay.setCurrentIndex(max(0, idx))
         for k, b in self._palette_btns.items():
@@ -161,7 +155,6 @@ class NFSettingsPanel(QtWidgets.QWidget):
         )
         self._chk_outline_visible.blockSignals(False)
         self._spin_outline_w.blockSignals(False)
-        self._show_lam.blockSignals(False)
         self._overlay.blockSignals(False)
         self._use_range_mask.blockSignals(False)
 
@@ -190,9 +183,6 @@ class NFSettingsPanel(QtWidgets.QWidget):
         c = QtWidgets.QColorDialog.getColor(QtGui.QColor(cur), self, key)
         if c.isValid():
             self._emit(f"palette:{key}", c.name())
-
-    def _emit_show_lam(self, on: bool):
-        self._emit("show_lambda_max", bool(on))
 
     def _emit_overlay(self, _i: int):
         self._emit("severity_overlay_mode", self._overlay.currentData())
