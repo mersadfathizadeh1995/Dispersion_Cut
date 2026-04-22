@@ -235,6 +235,13 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):
                     shortcut=None,
                     callback=lambda: self.file_io.load_spectrum_dialog(),
                 )
+            if self.actions.try_get('file.open_spectrum_npz') is None:
+                self.actions.add(
+                    id="file.open_spectrum_npz",
+                    text="Open Spectrum NPZ…",
+                    shortcut=None,
+                    callback=lambda: self.file_io.open_spectrum_npz_dialog(),
+                )
             if self.actions.try_get('file.save_state') is None:
                 self.actions.add(
                     id="file.save_state",

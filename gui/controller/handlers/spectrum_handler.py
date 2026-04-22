@@ -42,6 +42,12 @@ class SpectrumHandler:
     def load_for_layer(self, layer_idx: int, npz_path: str) -> bool:
         """Load power spectrum background for a specific layer.
 
+        The tolerant core reader is tried first; if that fails, any
+        previously-persisted :class:`NpzKeySpec` for this file's
+        layout is applied before giving up. GUI callers that still
+        need a manual recovery step prompt :class:`MapNpzDialog`
+        themselves.
+
         Parameters
         ----------
         layer_idx : int
@@ -54,25 +60,54 @@ class SpectrumHandler:
         bool
             True if successful, False otherwise.
         """
+        spectrum_data = None
         try:
             spectrum_data = load_spectrum_npz(npz_path)
-            
+        except Exception as e:
+            log.warning(f"Tolerant spectrum load failed for {npz_path}: {e}")
+            spectrum_data = self._load_with_saved_spec(npz_path)
+
+        if spectrum_data is None:
+            return False
+
+        try:
             if not hasattr(self._ctrl, '_layers_model') or self._ctrl._layers_model is None:
                 return False
-            
+
             if not (0 <= layer_idx < len(self._ctrl._layers_model.layers)):
                 return False
-            
+
             layer = self._ctrl._layers_model.layers[layer_idx]
             layer.spectrum_data = spectrum_data
             layer.spectrum_alpha = get_pref('default_spectrum_alpha', 0.5)
             layer.spectrum_visible = get_pref('show_spectra', True)
-            
+
             self.render_backgrounds()
             return True
         except Exception as e:
-            log.error(f"Failed to load spectrum: {e}")
+            log.error(f"Failed to apply spectrum to layer: {e}")
             return False
+
+    def _load_with_saved_spec(self, npz_path: str):
+        """Apply a previously-saved NPZ mapping spec if one exists."""
+        try:
+            from dc_cut.gui.dialogs.map_npz import (
+                load_saved_spec,
+                read_npz_with_spec,
+            )
+        except Exception:
+            return None
+        try:
+            spec = load_saved_spec(npz_path)
+            if spec is None:
+                return None
+            records = read_npz_with_spec(npz_path, spec)
+            if not records:
+                return None
+            return records[0].to_dict()
+        except Exception as exc:
+            log.warning(f"Saved spec load failed for {npz_path}: {exc}")
+            return None
 
     def load_combined_for_layers(self, npz_path: str) -> Dict[int, bool]:
         """Load combined power spectrum NPZ and assign to matching layers.
@@ -217,28 +252,56 @@ class SpectrumHandler:
             cmap = cm.get_cmap('viridis')
         
         render_mode = get_pref('spectrum_render_mode', 'imshow')
-        
-        if render_mode == 'contour':
-            F, V = np.meshgrid(frequencies, velocities)
-            layer.spectrum_image = self._ctrl.ax_freq.contourf(
-                F, V, power,
-                levels=30,
-                cmap=cmap,
-                alpha=layer.spectrum_alpha,
-                zorder=0,
-            )
-        else:
-            extent = [frequencies[0], frequencies[-1], velocities[0], velocities[-1]]
-            layer.spectrum_image = self._ctrl.ax_freq.imshow(
-                power,
-                aspect='auto',
-                origin='lower',
-                extent=extent,
-                cmap=cmap,
-                alpha=layer.spectrum_alpha,
-                zorder=0,
-                interpolation='bilinear',
-            )
+
+        # Snapshot the current axis limits so the spectrum image does not
+        # drive matplotlib's autoscale — axis extents must remain tied to
+        # the source-offset (curve) data, not the full frequency/velocity
+        # span of the spectrum NPZ.
+        ax = self._ctrl.ax_freq
+        saved_xlim = ax.get_xlim()
+        saved_ylim = ax.get_ylim()
+        prev_autoscale_x = ax.get_autoscalex_on()
+        prev_autoscale_y = ax.get_autoscaley_on()
+        ax.set_autoscale_on(False)
+
+        try:
+            if render_mode == 'contour':
+                F, V = np.meshgrid(frequencies, velocities)
+                layer.spectrum_image = ax.contourf(
+                    F, V, power,
+                    levels=30,
+                    cmap=cmap,
+                    alpha=layer.spectrum_alpha,
+                    zorder=0,
+                )
+            else:
+                extent = [frequencies[0], frequencies[-1], velocities[0], velocities[-1]]
+                layer.spectrum_image = ax.imshow(
+                    power,
+                    aspect='auto',
+                    origin='lower',
+                    extent=extent,
+                    cmap=cmap,
+                    alpha=layer.spectrum_alpha,
+                    zorder=0,
+                    interpolation='bilinear',
+                )
+        finally:
+            # Restore the user-facing viewport and the previous autoscale
+            # state. Using set_xlim/set_ylim here is safe even when the
+            # saved limits are the matplotlib default (0, 1) — the next
+            # apply_axis_limits() call will overwrite them with values
+            # derived from the curves.
+            try:
+                ax.set_xlim(saved_xlim)
+                ax.set_ylim(saved_ylim)
+            except Exception:
+                pass
+            try:
+                ax.set_autoscalex_on(prev_autoscale_x)
+                ax.set_autoscaley_on(prev_autoscale_y)
+            except Exception:
+                pass
 
     def _remove_spectrum_image(self, layer) -> None:
         """Remove spectrum image from layer (handles both imshow and contourf)."""

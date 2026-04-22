@@ -302,6 +302,7 @@ class ResultsTab(QtWidgets.QWidget):
             return
         _, f_arr, v_arr, w_arr, nacd, mask, vr, severity = data
         filt = self.del_filter.currentIndex()
+        thr = float(getattr(dock.eval, "thr", 1.0) or 1.0)
 
         self.points_table.blockSignals(True)
         for row in range(self.points_table.rowCount()):
@@ -318,7 +319,13 @@ class ResultsTab(QtWidgets.QWidget):
                 else:
                     match = bool(mask[row])
             elif filt == 2:
-                match = bool(mask[row])
+                # "NACD below threshold" — use NACD directly so the
+                # eval-range OR branch in ``mask`` doesn't silently add
+                # out-of-range points to the NACD-only filter.
+                try:
+                    match = bool(float(nacd[row]) < thr)
+                except (TypeError, ValueError, IndexError):
+                    match = bool(mask[row])
 
             flag_item = self.points_table.item(row, 6)
             if flag_item:

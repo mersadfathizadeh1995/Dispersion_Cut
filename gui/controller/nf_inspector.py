@@ -221,10 +221,16 @@ class NearFieldInspector:
     def get_current_arrays(self, eval_range: Optional[EvaluationRange] = None):
         """Return (idx, f, v, w, nacd, mask, vr, severity).
 
+        ``mask[i] == True`` means the point is **contaminated** (flagged
+        for deletion). Per the classical Rahimi et al. (2022) NACD rule,
+        a point is contaminated when ``NACD < threshold`` — below the
+        threshold the wave is near-field-influenced and should be cut.
+        Points outside the user's evaluation range are also flagged
+        (they're unreliable / not evaluated for NF).
+
         vr and severity are None when no reference curve is set. When
         *eval_range* is provided, points outside the range have V_R
-        forced to NaN (classified as ``"unknown"``) and are also marked
-        contaminated in the geometry-only mask.
+        forced to NaN (classified as ``"unknown"``).
         """
         if self._current_idx is None:
             return None
@@ -236,7 +242,12 @@ class NearFieldInspector:
         array_pos = self._get_array_positions()
         nacd = compute_nacd_array(array_pos, f, v, source_offset=self._source_offset)
         in_range = compute_range_mask(f, v, eval_range)
-        mask = (nacd >= self.thr) | (~in_range)
+        # Contaminated = NACD below the threshold OR out of range.
+        # The previous code used ``nacd >= self.thr`` which inverted the
+        # Rahimi rule; the scatter drew correct red/blue (it uses the
+        # ``nacd_tab`` mask), but the Results points-table, auto-select,
+        # and Delete button all ended up operating on the opposite set.
+        mask = (nacd < self.thr) | (~in_range)
 
         vr: Optional[np.ndarray] = None
         severity: Optional[np.ndarray] = None
