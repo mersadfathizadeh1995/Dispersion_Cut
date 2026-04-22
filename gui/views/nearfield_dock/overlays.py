@@ -45,6 +45,48 @@ def draw_nacd_overlay(
         pass
 
 
+def draw_nacd_overlay_colored(
+    controller,
+    offset_idx: int,
+    f,
+    v,
+    w,
+    colors: Sequence[str],
+    fallback_color: str = "#9E9E9E",
+) -> None:
+    """Draw per-point circles on both axes using an explicit color list.
+
+    Unlike :func:`draw_nacd_overlay`, which flips between two colors
+    driven by a binary ``mask``, this helper paints pick ``i`` with
+    ``colors[i]``.  Used by the NACD multi-zone view to colour points
+    by their zone index.  Missing / empty colors fall back to
+    ``fallback_color`` so no pick is ever rendered invisible.
+    """
+    c = controller
+    for i in range(len(f)):
+        col = colors[i] if i < len(colors) else ""
+        if not col:
+            col = fallback_color
+        key = (offset_idx, i)
+        lf = c.ax_freq.plot(
+            [f[i]], [v[i]], 'o', linestyle='None',
+            mfc='none', mec=col, mew=1.6, ms=6, zorder=10,
+            label='_nf_overlay',
+        )[0]
+        lw = c.ax_wave.plot(
+            [w[i]], [v[i]], 'o', linestyle='None',
+            mfc='none', mec=col, mew=1.6, ms=6, zorder=10,
+            label='_nf_overlay',
+        )[0]
+        if not hasattr(c, '_nf_point_overlay'):
+            c._nf_point_overlay = {}
+        c._nf_point_overlay[key] = (lf, lw)
+    try:
+        c.fig.canvas.draw_idle()
+    except Exception:
+        pass
+
+
 def draw_reference_overlay(
     controller,
     offset_idx: int,
@@ -100,4 +142,9 @@ def clear_nf_overlays(controller, limit_artists: list) -> None:
         pass
 
 
-__all__ = ["draw_nacd_overlay", "draw_reference_overlay", "clear_nf_overlays"]
+__all__ = [
+    "draw_nacd_overlay",
+    "draw_nacd_overlay_colored",
+    "draw_reference_overlay",
+    "clear_nf_overlays",
+]

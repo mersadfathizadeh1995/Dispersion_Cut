@@ -268,6 +268,38 @@ class NearFieldInspector:
 
         return i, f, v, w, nacd, mask, vr, severity
 
+    def get_zone_indices_for_current(
+        self, spec=None,
+    ) -> Optional[np.ndarray]:
+        """Return per-pick zone indices for the currently inspected offset.
+
+        ``spec`` is a :class:`NACDZoneSpec`.  When it is ``None`` or has
+        style ``"classic"``, this method returns ``None`` — the caller
+        should not show a Zone column in that case.  For
+        ``multi_zone`` / ``multi_group`` styles the primary group is
+        used to classify, matching the scatter's zone coloring.
+        """
+        if spec is None or getattr(spec, "style", "classic") == "classic":
+            return None
+        if not getattr(spec, "groups", None):
+            return None
+        if self._current_idx is None:
+            return None
+
+        from dc_cut.core.processing.nearfield.nacd_zones import (
+            classify_points_into_zones,
+        )
+
+        i = int(self._current_idx)
+        f = np.asarray(self.c.frequency_arrays[i], float)
+        v = np.asarray(self.c.velocity_arrays[i], float)
+        recv = self._get_array_positions()
+        nacd = compute_nacd_array(
+            recv, f, v, source_offset=self._source_offset,
+        )
+        primary = (spec.primary_group() or spec.groups[0]).normalised()
+        return classify_points_into_zones(nacd, primary.sorted_thresholds())
+
     def get_all_offsets_vr(
         self, eval_range: Optional[EvaluationRange] = None,
     ) -> List[Tuple[str, np.ndarray, np.ndarray]]:

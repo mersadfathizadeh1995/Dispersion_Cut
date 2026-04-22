@@ -227,12 +227,20 @@ def read_nf_analysis(state: dict) -> Optional[NFAnalysis]:
         band_idx = int(d.get("band_index", 0))
         kind = str(d.get("kind", "lambda"))
         role = str(d.get("role", "max"))
+        # ``zone`` rows are a DC Cut Limit-Lines-tree bookkeeping
+        # artefact (they drive zone visibility / color edits there)
+        # and are NOT real limit lines to draw on a Report Studio
+        # figure.  The zone band / label painting is driven separately
+        # by ``nacd_zone_spec`` in the sidecar.
+        if kind == "zone":
+            continue
         value = float(d.get("value", 0.0))
         # Default the color to DC Cut's band palette when the PKL
         # didn't ship one; that way multi-band tress render with the
         # same distinct per-band hues as in the DC Cut Limit Lines tab.
         raw_color = d.get("color")
         color = str(raw_color) if raw_color else _default_band_color(band_idx)
+        custom_lbl = str(d.get("custom_label", "") or "")
         nf.lines.append(
             NFLine(
                 band_index=band_idx,
@@ -243,6 +251,7 @@ def read_nf_analysis(state: dict) -> Optional[NFAnalysis]:
                 valid=bool(d.get("valid", True)),
                 derived_from=df_f,
                 color=color,
+                custom_label=custom_lbl,
                 display_label=_nf_line_display_label_parts(kind, role, value),
             )
         )

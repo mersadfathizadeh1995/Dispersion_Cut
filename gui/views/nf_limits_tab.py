@@ -267,6 +267,13 @@ class NFLimitsTab(QtWidgets.QWidget):
     def _add_band_node(
         self, band_index: int, lines: List[DerivedLine],
     ) -> None:
+        # Zone pseudo-band: every line has ``kind == "zone"``.  Render
+        # as a flat list of zone leaves (no λ / f subgroups) so the
+        # user can toggle and recolor each zone individually.
+        if lines and all(ln.kind == "zone" for ln in lines):
+            self._add_zone_band_node(band_index, lines)
+            return
+
         color = default_band_color(band_index)
         # Pick a representative f-range for the label.
         f_lines = [ln for ln in lines if ln.kind == "freq"]
@@ -339,6 +346,63 @@ class NFLimitsTab(QtWidgets.QWidget):
         item.setCheckState(0, _Checked)
         return item
 
+    def _add_zone_band_node(
+        self, band_index: int, lines: List[DerivedLine],
+    ) -> None:
+        """Top-level zone pseudo-band: flat children, one per zone."""
+        color = default_band_color(band_index)
+        # The group name (if the caller stored it under
+        # ``derived_from``) is the 0-based group_index; prefer a
+        # stable title that works even when only one group exists.
+        try:
+            gi = int(lines[0].derived_from or 0)
+        except (TypeError, ValueError):
+            gi = 0
+        title = f"Zones — Group {gi + 1}" if len(lines) > 0 else "Zones"
+
+        band_item = QtWidgets.QTreeWidgetItem([title, ""])
+        band_item.setFlags(band_item.flags() | _ItemIsUserCheckable)
+        band_key: LineKey = (band_index, "band", "band")
+        band_item.setData(0, _UserRole, band_key)
+        self._apply_color_cell(
+            band_item, self._state.get_color(band_key, color),
+        )
+        self._tree.addTopLevelItem(band_item)
+
+        # One leaf per zone, sorted by zone index.
+        for ln in sorted(lines, key=lambda x: (int(x.value), x.role)):
+            self._add_zone_leaf(band_item, ln, color)
+        band_item.setCheckState(0, _Checked)
+
+    def _add_zone_leaf(
+        self, band_item: QtWidgets.QTreeWidgetItem,
+        ln: DerivedLine, default_color: str,
+    ) -> None:
+        """Single-zone leaf under a zone pseudo-band."""
+        # Roles for zones use the zone-index suffix so every zone
+        # gets a unique persistence key even within the same band.
+        try:
+            zi = int(ln.value)
+        except (TypeError, ValueError):
+            zi = 0
+        role = f"z{zi}"
+        key: LineKey = (ln.band_index, "zone", role)
+        custom = (getattr(ln, "custom_label", "") or "").strip()
+        text = custom or f"Zone {zi + 1}"
+
+        item = QtWidgets.QTreeWidgetItem([text, ""])
+        flags = (
+            item.flags()
+            | _ItemIsUserCheckable | _ItemIsEnabled | _ItemIsSelectable
+        )
+        item.setFlags(flags)
+        item.setData(0, _UserRole, key)
+        color = self._state.get_color(key, default_color)
+        self._apply_color_cell(item, color)
+        band_item.addChild(item)
+        visible = self._state.get_visible(key, True)
+        item.setCheckState(0, _Checked if visible else _Unchecked)
+
     def _add_leaf(
         self, group: QtWidgets.QTreeWidgetItem,
         ln: DerivedLine, default_color: str,
@@ -366,7 +430,11 @@ class NFLimitsTab(QtWidgets.QWidget):
             suffix = "   (user)"
         if not ln.valid:
             suffix += "  \u2014 outside curve coverage"
-        text = f"{label_prefix}_{ln.role} = {ln.value:g} {unit}{suffix}"
+        custom = (getattr(ln, "custom_label", "") or "").strip()
+        if custom:
+            text = f"{custom}   ({ln.value:g} {unit}){suffix}"
+        else:
+            text = f"{label_prefix}_{ln.role} = {ln.value:g} {unit}{suffix}"
 
         item = QtWidgets.QTreeWidgetItem([text, ""])
         flags = item.flags() | _ItemIsUserCheckable | _ItemIsEnabled | _ItemIsSelectable

@@ -20,6 +20,15 @@ from dc_cut.core.processing.nearfield.criteria import (
     SOURCE_TYPE_LABELS,
     ERROR_LEVEL_LABELS,
 )
+from dc_cut.core.processing.nearfield.nacd_zones import (
+    NACDZoneSpec,
+    ZoneFill,
+    ZoneGroup,
+    ZoneThreshold,
+    classify_points_into_zones,
+    spec_to_derived_limit_set,
+    spec_to_zone_bands,
+)
 from dc_cut.core.processing.nearfield.ranges import (
     EvaluationRange,
     compute_range_mask,
@@ -30,6 +39,11 @@ from dc_cut.gui.widgets.nf_limit_lines import (
     clear_nf_limit_lines,
     draw_nf_limit_lines,
 )
+from dc_cut.gui.widgets.nf_zone_bands import (
+    clear_nf_zone_artists,
+    draw_zone_bands,
+    draw_zone_labels,
+)
 
 from .common import (
     get_array_positions,
@@ -38,7 +52,8 @@ from .common import (
     set_all_offset_checks,
 )
 from .constants import QtWidgets
-from .overlays import draw_nacd_overlay
+from .overlays import draw_nacd_overlay, draw_nacd_overlay_colored
+from .zone_editor import MultiGroupEditor, SingleGroupEditor
 
 
 class NacdTab(QtWidgets.QWidget):
@@ -47,6 +62,15 @@ class NacdTab(QtWidgets.QWidget):
     def __init__(self, dock) -> None:
         super().__init__()
         self.dock = dock
+        # Cached multi-zone rendering inputs, populated by ``run()`` and
+        # reused by ``_on_limits_state_changed`` so visibility / color
+        # edits in the Limit Lines tab can re-paint zone bands and
+        # labels without re-running the whole evaluation.
+        self._last_spec: Optional[NACDZoneSpec] = None
+        self._last_x_bar: float = 0.0
+        self._last_f_rep: Optional[np.ndarray] = None
+        self._last_v_rep: Optional[np.ndarray] = None
+        self._limits_wired: bool = False
         self._build()
 
     # ================================================================
@@ -64,6 +88,20 @@ class NacdTab(QtWidgets.QWidget):
 
         layout = QtWidgets.QVBoxLayout(page)
         layout.setContentsMargins(6, 6, 6, 6)
+
+        # ── View style selector ───────────────────────────────────
+        view_row = QtWidgets.QHBoxLayout()
+        view_row.addWidget(QtWidgets.QLabel("View style:"))
+        self.view_style = QtWidgets.QComboBox()
+        for code, label in (
+            ("classic", "Classic (single threshold)"),
+            ("multi_zone", "Multi-zone (one group)"),
+            ("multi_group", "Multi-zone groups"),
+        ):
+            self.view_style.addItem(label, code)
+        self.view_style.currentIndexChanged.connect(self._on_view_style_changed)
+        view_row.addWidget(self.view_style, 1)
+        layout.addLayout(view_row)
 
         # ── Array Geometry (collapsible) ──
         geom_sec = CollapsibleSection("Array Geometry", initially_expanded=True)
@@ -91,6 +129,7 @@ class NacdTab(QtWidgets.QWidget):
 
         # ── NACD Criteria (collapsible) ──
         crit_sec = CollapsibleSection("NACD Criteria", initially_expanded=True)
+        self._crit_sec = crit_sec
         crit_form = QtWidgets.QFormLayout()
 
         self.source_type = QtWidgets.QComboBox()
@@ -117,6 +156,7 @@ class NacdTab(QtWidgets.QWidget):
 
         # ── Colors (collapsible) ──
         color_sec = CollapsibleSection("Colors", initially_expanded=False)
+        self._color_sec = color_sec
         color_form = QtWidgets.QFormLayout()
 
         self.clean_color_btn = make_color_button(
@@ -156,9 +196,57 @@ class NacdTab(QtWidgets.QWidget):
         lim_sec = CollapsibleSection(
             "Evaluation Ranges (f bands + λ bounds)", initially_expanded=True
         )
+        self._lim_sec = lim_sec
         self.ranges_widget = NFEvalRangesWidget()
         lim_sec.add_widget(self.ranges_widget)
         layout.addWidget(lim_sec)
+
+        # ── Zones (collapsible, visible for multi_zone) ────────
+        self._zones_sec = CollapsibleSection(
+            "Zones", initially_expanded=True,
+        )
+        self.single_zone_editor = SingleGroupEditor(
+            show_position=False,
+            show_lambda_toggle=False,
+            parent=self,
+        )
+        # Default: one NACD threshold at 1.0 giving two zones
+        # (red/contaminated on the left, blue/clean on the right),
+        # matching the mock-up the user provided.
+        self.single_zone_editor.set_group(ZoneGroup(
+            name="Zones",
+            thresholds=[ZoneThreshold(nacd=1.0)],
+            zones=[
+                ZoneFill(zone_label="Zone 2"),
+                ZoneFill(zone_label="Zone 1"),
+            ],
+        ).normalised())
+        self.single_zone_editor.group_changed.connect(self._on_spec_edited)
+        self._zones_sec.add_widget(self.single_zone_editor)
+        layout.addWidget(self._zones_sec)
+
+        # ── Zone groups (collapsible, visible for multi_group) ─
+        self._groups_sec = CollapsibleSection(
+            "Zone groups", initially_expanded=True,
+        )
+        self.multi_group_editor = MultiGroupEditor(parent=self)
+        self.multi_group_editor.set_groups([
+            ZoneGroup(
+                name="Group A",
+                thresholds=[ZoneThreshold(nacd=1.0)],
+                zones=[ZoneFill(), ZoneFill()],
+                label_position="top",
+            ).normalised(),
+            ZoneGroup(
+                name="Group B",
+                thresholds=[ZoneThreshold(nacd=0.8)],
+                zones=[ZoneFill(), ZoneFill()],
+                label_position="bottom",
+            ).normalised(),
+        ])
+        self.multi_group_editor.groups_changed.connect(self._on_spec_edited)
+        self._groups_sec.add_widget(self.multi_group_editor)
+        layout.addWidget(self._groups_sec)
 
         # ── Run Button ──
         run_btn = QtWidgets.QPushButton("▶  Run NACD Evaluation")
@@ -178,6 +266,9 @@ class NacdTab(QtWidgets.QWidget):
         # Pre-fill from prefs (geometry only; ranges handled by load_dock_prefs).
         from .prefs_io import m1_load_geometry_prefs
         m1_load_geometry_prefs(self.dock)
+
+        # Initial visibility — classic view hides the zone editors.
+        self._on_view_style_changed()
 
     # ================================================================
     #  Handlers
@@ -225,40 +316,100 @@ class NacdTab(QtWidgets.QWidget):
         )
 
     # ================================================================
+    #  View-style / Multi-zone spec
+    # ================================================================
+    def current_style(self) -> str:
+        return str(self.view_style.currentData() or "classic")
+
+    def current_spec(self) -> NACDZoneSpec:
+        style = self.current_style()
+        if style == "multi_zone":
+            return NACDZoneSpec(
+                style="multi_zone",
+                groups=[self.single_zone_editor.get_group()],
+                primary_group_index=0,
+            )
+        if style == "multi_group":
+            return NACDZoneSpec(
+                style="multi_group",
+                groups=list(self.multi_group_editor.get_groups()),
+                primary_group_index=0,
+            )
+        return NACDZoneSpec(style="classic")
+
+    def set_spec(self, spec: Optional[NACDZoneSpec]) -> None:
+        spec = spec or NACDZoneSpec()
+        idx = max(0, self.view_style.findData(spec.style))
+        # Block signals so ``_on_view_style_changed`` fires exactly once
+        # after the editors have been populated.
+        self.view_style.blockSignals(True)
+        try:
+            self.view_style.setCurrentIndex(idx)
+        finally:
+            self.view_style.blockSignals(False)
+
+        if spec.style == "multi_zone" and spec.groups:
+            self.single_zone_editor.set_group(spec.groups[0])
+        elif spec.style == "multi_group" and spec.groups:
+            self.multi_group_editor.set_groups(spec.groups)
+
+        self._on_view_style_changed()
+
+    def _on_view_style_changed(self, *_args) -> None:
+        style = self.current_style()
+        is_classic = (style == "classic")
+        # Classic sections
+        self._crit_sec.setVisible(is_classic)
+        self._color_sec.setVisible(is_classic)
+        self._lim_sec.setVisible(is_classic)
+        # Multi-zone editor
+        self._zones_sec.setVisible(style == "multi_zone")
+        # Multi-group editor
+        self._groups_sec.setVisible(style == "multi_group")
+
+    def _on_spec_edited(self) -> None:
+        # Any change to the editor contents invalidates previously drawn
+        # NF bands / lines.  The actual redraw happens on Run.
+        self.dock._m1_invalidate_limit_lines()
+
+    # ================================================================
     #  Run
     # ================================================================
     def run(self) -> None:
         """Run NACD-only evaluation on selected offsets.
 
-        Per user design, the filter used depends on what the user asked
-        for:
+        Behaviour depends on the active view style:
 
-        * **Single offset + non-empty evaluation range** — the range is
-          trusted as the definitive filter.  ``contaminated = ~in_range``.
-          The x\u0305/threshold criterion is *not* applied, because the
-          user has already told us which part of the curve they consider
-          valid.
-        * **Single offset + empty range**, OR **multiple offsets** — the
-          classical NACD rule takes over:
-          ``contaminated = (NACD < thr)`` (Rahimi et al. 2022; see
-          ``nearfield/criteria.py`` — "NACD threshold *below* which data
-          is considered near-field contaminated").  The user range is
-          irrelevant here.
-
-        This matches the rationale the user wrote out: "the maximum
-        Wavelength consideration should be for the condition in which we
-        don't give range or we select multiple source offsets."
+        * **classic** — the historical single-threshold path.  Filter
+          chosen from the user's range + offset selection:
+          * single offset + explicit range → ``contaminated = ~in_range``;
+          * otherwise → ``contaminated = (NACD < thr)``
+            (Rahimi et al. 2022).
+        * **multi_zone** / **multi_group** — the user-configured
+          :class:`NACDZoneSpec` drives both the point coloring (in
+          ``multi_zone``) and the Limit Lines tree population.  The
+          classical ``(NACD < thr)`` mask is still computed (using the
+          primary group's lowest-NACD level as the contamination
+          threshold) so the Results tab / auto-select / delete flow
+          keeps working.
         """
         dock = self.dock
         dock._clear_nf_overlays()
         dock._last_mode = "nacd"
 
-        thr = self.nacd_thr.value()
+        spec = self.current_spec()
+        style = spec.style
+
         recv = self.array_positions()
         selected = get_selected_indices(self.offset_checks)
-
         if not selected:
             self.status.setText("Select at least one offset.")
+            return
+
+        if style != "classic" and not spec.groups:
+            self.status.setText(
+                "Configure at least one zone group, then Run again."
+            )
             return
 
         from dc_cut.core.processing.nearfield.nacd import compute_nacd_array
@@ -266,15 +417,31 @@ class NacdTab(QtWidgets.QWidget):
             parse_source_offset_from_label,
         )
 
+        # Determine the contamination threshold used for the Results
+        # tab's legacy binary mask.  In multi-zone mode we take the
+        # lowest NACD threshold of the primary group as "below this is
+        # contaminated"; in multi_group we take the global minimum.
+        if style == "classic":
+            thr = self.nacd_thr.value()
+        else:
+            all_nacds = [
+                float(t.nacd)
+                for g in spec.groups
+                for t in g.thresholds
+                if t.nacd > 0
+            ]
+            thr = min(all_nacds) if all_nacds else self.nacd_thr.value()
+
         single_offset = (len(selected) == 1)
         eval_range = (
-            self.ranges_widget.get_range() if single_offset
+            self.ranges_widget.get_range() if (single_offset and style == "classic")
             else EvaluationRange()
         )
-        # Which filter do we apply?  Range-only when the user has given
-        # us an explicit range for a single offset; otherwise fall back
-        # to the classical NACD < threshold rule.
-        use_range_only = single_offset and not eval_range.is_empty()
+        use_range_only = (
+            style == "classic"
+            and single_offset
+            and not eval_range.is_empty()
+        )
 
         results = []
         for idx in selected:
@@ -297,7 +464,7 @@ class NacdTab(QtWidgets.QWidget):
             lam_max = x_bar / max(thr, 1e-12)
             n_contam = int(np.sum(mask))
 
-            results.append({
+            entry = {
                 "label": lbl,
                 "offset_index": idx,
                 "source_offset": so,
@@ -309,51 +476,83 @@ class NacdTab(QtWidgets.QWidget):
                 "clean_pct": 100.0 * (len(f) - n_contam) / max(len(f), 1),
                 "contam_pct": 100.0 * n_contam / max(len(f), 1),
                 "f": f, "v": v, "w": w, "nacd": nacd, "mask": mask,
-            })
+            }
 
-            draw_nacd_overlay(dock.c, idx, f, v, w, mask, dock._mode1_colors)
+            # ── Point coloring ────────────────────────────────
+            if style == "multi_zone" and spec.groups:
+                primary = (spec.primary_group() or spec.groups[0]).normalised()
+                zone_idx = classify_points_into_zones(
+                    nacd, primary.sorted_thresholds(),
+                )
+                colors = self._zone_colors_for_points(primary, zone_idx)
+                draw_nacd_overlay_colored(dock.c, idx, f, v, w, colors)
+                entry["zone_idx"] = zone_idx.tolist()
+            elif style == "classic":
+                # Classic path keeps the binary clean / contaminated
+                # scatter overlay the users have relied on.
+                draw_nacd_overlay(
+                    dock.c, idx, f, v, w, mask, dock._mode1_colors,
+                )
+            # style == "multi_group" intentionally skips any scatter
+            # recoloring — the user asked for lines + background
+            # zone tints only, leaving the existing peak colors
+            # untouched.
 
-        # ── Draw λ- and f-limit lines on the canvas (only now!) ────
-        # NACD-Only lines are computed against a SPECIFIC offset's
-        # V(f) curve.  So:
-        # * single offset + user range -> derive the full DerivedLimitSet
-        #   via the Limit Lines tab machinery;
-        # * multiple offsets          -> draw each offset's own
-        #   auto-derived λ_max line only (no cross-domain derivation);
-        # * single offset + empty range -> legacy λ_max only.
+            results.append(entry)
+
+        # ── Limit Lines tab population ────────────────────────────
         dock._limits.active_mode = "m1"
         clear_nf_limit_lines(dock._nf_limit_artists)
         dock._nf_limit_artists = []
 
-        if single_offset and not eval_range.is_empty():
-            only_idx = selected[0]
-            dock._limits.force_vf_idx = only_idx
-            try:
-                dock._limits.rebuild_tree()
-            finally:
-                dock._limits.force_vf_idx = None
-        elif self.ranges_widget.show_lines() and results:
-            # No evaluation range: publish one band per evaluated
-            # offset to the Limit Lines tree.  Each band holds the
-            # offset's own λ_max plus the *derived* f_min from that
-            # offset's V(f), so both kinds of line are toggle-able
-            # from the tree.  f-lines are hidden by default (as
-            # requested) — the user can tick them on.
-            from dc_cut.core.processing.nearfield.range_derivation import (
-                derive_limits_from_lambda_values,
+        if style == "classic":
+            if single_offset and not eval_range.is_empty():
+                only_idx = selected[0]
+                dock._limits.force_vf_idx = only_idx
+                try:
+                    dock._limits.rebuild_tree()
+                finally:
+                    dock._limits.force_vf_idx = None
+            elif self.ranges_widget.show_lines() and results:
+                from dc_cut.core.processing.nearfield.range_derivation import (
+                    derive_limits_from_lambda_values,
+                )
+                lam_triples = []
+                for r in results:
+                    lam = float(r.get("lambda_max", 0.0))
+                    if lam <= 0:
+                        continue
+                    f_arr = np.asarray(r.get("f", []), float)
+                    v_arr = np.asarray(r.get("v", []), float)
+                    lam_triples.append((lam, f_arr, v_arr))
+                derived = derive_limits_from_lambda_values(lam_triples)
+                dock._limits.rebuild_tree_with_set(
+                    derived, hide_freq_by_default=True,
+                )
+        else:
+            # Multi-zone / multi-group: build the DerivedLimitSet from
+            # the spec using a representative x_bar and V(f) curve
+            # (use the first evaluated offset as representative).
+            first = results[0]
+            x_bar_rep = float(first["x_bar"])
+            f_rep = np.asarray(first["f"], float)
+            v_rep = np.asarray(first["v"], float)
+            derived = spec_to_derived_limit_set(
+                spec, x_bar_rep, f_rep, v_rep,
             )
-            lam_triples = []
-            for r in results:
-                lam = float(r.get("lambda_max", 0.0))
-                if lam <= 0:
-                    continue
-                f_arr = np.asarray(r.get("f", []), float)
-                v_arr = np.asarray(r.get("v", []), float)
-                lam_triples.append((lam, f_arr, v_arr))
-            derived = derive_limits_from_lambda_values(lam_triples)
             dock._limits.rebuild_tree_with_set(
-                derived, hide_freq_by_default=True,
+                derived, hide_freq_by_default=False,
             )
+
+            # Cache enough to re-render zone bands / labels on
+            # subsequent Limit Lines tree edits without re-running.
+            self._last_spec = spec
+            self._last_x_bar = x_bar_rep
+            self._last_f_rep = f_rep
+            self._last_v_rep = v_rep
+            self._ensure_limits_wired()
+
+            self._redraw_zone_overlays()
 
         dock._last_batch = results
         dock._overlay_offsets = selected
@@ -363,10 +562,21 @@ class NacdTab(QtWidgets.QWidget):
 
         n_total = sum(r["n_total"] for r in results)
         n_contam = sum(r["n_contaminated"] for r in results)
-        self.status.setText(
-            f"Evaluated {len(results)} offset(s), {n_total} points. "
-            f"{n_contam} contaminated."
-        )
+        if style == "classic":
+            self.status.setText(
+                f"Evaluated {len(results)} offset(s), {n_total} points. "
+                f"{n_contam} contaminated."
+            )
+        else:
+            n_thr = sum(len(g.thresholds) for g in spec.groups)
+            n_zones = sum(
+                len(g.thresholds) + 1 for g in spec.groups if g.thresholds
+            )
+            self.status.setText(
+                f"Evaluated {len(results)} offset(s), {n_total} points "
+                f"across {n_zones} zone(s) / {n_thr} NACD threshold(s) "
+                f"in {len(spec.groups)} group(s)."
+            )
 
         derived_set = dock._limits.current_derived_set
         dock._publish_nf_results(
@@ -375,6 +585,155 @@ class NacdTab(QtWidgets.QWidget):
             eval_range=eval_range,
             derived_set=derived_set,
         )
+
+    # ================================================================
+    #  Zone overlay redraw (shared by Run + Limit Lines state edits)
+    # ================================================================
+    def _ensure_limits_wired(self) -> None:
+        """Subscribe to Limit Lines state changes once."""
+        if self._limits_wired:
+            return
+        try:
+            self.dock._limits.tab.state_changed.connect(
+                self._on_limits_state_changed
+            )
+            self._limits_wired = True
+        except Exception:
+            pass
+
+    def _zone_state_from_tree(self) -> tuple:
+        """Return ``(visible_keys, color_overrides)`` for zones.
+
+        Keys are ``(group_index, zone_index)``.  Missing entries mean
+        "default" — zone visible, band color taken from the spec.
+        """
+        from dc_cut.core.processing.nearfield.nacd_zones import (
+            ZONE_BAND_INDEX_OFFSET,
+        )
+        visible: dict = {}
+        colors: dict = {}
+        try:
+            state = self.dock._limits.current_state()
+        except Exception:
+            return visible, colors
+        if not state:
+            return visible, colors
+        # Visibility entries.
+        for key, vis in state.visible.items():
+            try:
+                bi, kind, role = key
+            except Exception:
+                continue
+            if kind != "zone" or not role.startswith("z"):
+                continue
+            gi = int(bi) - ZONE_BAND_INDEX_OFFSET
+            try:
+                zi = int(role[1:])
+            except ValueError:
+                continue
+            visible[(gi, zi)] = bool(vis)
+        # Explicit color overrides.
+        for key, col in state.colors.items():
+            try:
+                bi, kind, role = key
+            except Exception:
+                continue
+            if kind != "zone" or not role.startswith("z") or not col:
+                continue
+            gi = int(bi) - ZONE_BAND_INDEX_OFFSET
+            try:
+                zi = int(role[1:])
+            except ValueError:
+                continue
+            colors[(gi, zi)] = str(col)
+        return visible, colors
+
+    def _redraw_zone_overlays(self) -> None:
+        """Paint zone bands + labels from the cached spec + tree state.
+
+        Clears any previous zone artists first so this can be called
+        on every Limit Lines edit.
+        """
+        from dc_cut.gui.widgets.nf_zone_bands import clear_nf_zone_artists
+
+        dock = self.dock
+        clear_nf_zone_artists(dock._nf_zone_artists)
+
+        spec = self._last_spec
+        if spec is None or spec.is_classic() or not spec.groups:
+            try:
+                dock.c.fig.canvas.draw_idle()
+            except Exception:
+                pass
+            return
+
+        lam_lim = dock.c.ax_wave.get_xlim()
+        f_lim = dock.c.ax_freq.get_xlim()
+        bands = spec_to_zone_bands(
+            spec, self._last_x_bar,
+            f_curve=self._last_f_rep,
+            v_curve=self._last_v_rep,
+            f_axis_min=float(f_lim[0]),
+            f_axis_max=float(f_lim[1]),
+            lambda_axis_min=float(lam_lim[0]),
+            lambda_axis_max=float(lam_lim[1]),
+        )
+        visible, colors = self._zone_state_from_tree()
+        dock._nf_zone_artists.extend(
+            draw_zone_bands(
+                dock.c.ax_freq, dock.c.ax_wave, bands,
+                visible_keys=visible, color_overrides=colors,
+            )
+        )
+        dock._nf_zone_artists.extend(
+            draw_zone_labels(
+                dock.c.ax_freq, dock.c.ax_wave, bands,
+                visible_keys=visible, color_overrides=colors,
+            )
+        )
+        try:
+            dock.c.fig.canvas.draw_idle()
+        except Exception:
+            pass
+
+    def _on_limits_state_changed(self) -> None:
+        """Limit Lines tab emitted ``state_changed`` — redraw zones."""
+        if self._last_spec is None:
+            return
+        self._redraw_zone_overlays()
+
+    # ================================================================
+    #  Helpers
+    # ================================================================
+    def _zone_colors_for_points(
+        self,
+        group: ZoneGroup,
+        zone_idx: np.ndarray,
+    ) -> List[str]:
+        """Return one hex color per pick based on its zone index.
+
+        Uses :attr:`ZoneFill.point_color` of ``zones[zone_idx]``.
+        When a zone does not have a point color configured, we fall
+        through to the mode1 "clean" / "contaminated" palette so the
+        scatter is never invisible: zone 0 reads as contaminated, the
+        top zone as clean, and middle zones reuse the contaminated
+        palette (user can always override per-zone).
+        """
+        g = group.normalised()
+        zones = list(g.zones)
+        n_zones = len(zones)
+        n_last = max(0, n_zones - 1)
+        colors: List[str] = []
+        for z in np.asarray(zone_idx, int).tolist():
+            z_clamped = max(0, min(int(z), n_last))
+            if zones and zones[z_clamped].point_color:
+                colors.append(zones[z_clamped].point_color)
+            else:
+                if z_clamped == n_last and n_zones > 1:
+                    colors.append(self.dock._mode1_colors["clean"])
+                else:
+                    colors.append(self.dock._mode1_colors["contaminated"])
+        return colors
 
 
 __all__ = ["NacdTab"]

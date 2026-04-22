@@ -48,6 +48,7 @@ def build_sidecar(
     nf_settings: Optional[Dict[str, Any]],
     limit_lines_ui: Optional[Dict[str, Any]] = None,
     pkl_path: str = "",
+    ui_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build the sidecar dict ready to be written with :func:`write_sidecar`.
 
@@ -61,7 +62,25 @@ def build_sidecar(
     pkl_path:
         Source PKL absolute path (human-debug breadcrumb only; not a
         security boundary — Report Studio never validates it).
+    ui_state:
+        Optional dict of cross-panel UI state.  Currently carries
+        ``nacd_zone_spec`` (serialised :class:`NACDZoneSpec`) but the
+        key is kept open-ended so future viewer settings can be added
+        without another schema bump.  When absent, the sidecar still
+        contains an effectively empty ``ui_state`` block and readers
+        fall back to ``nf_settings.nacd_zone_spec`` for backward
+        compatibility.
     """
+    # Derive ``nacd_zone_spec`` from ``nf_settings`` if the caller did
+    # not pass an explicit ``ui_state``.  Keeps current callers working
+    # without requiring them to duplicate the spec.
+    if ui_state is None:
+        ui_state = {}
+        if nf_settings and isinstance(nf_settings, dict):
+            spec = nf_settings.get("nacd_zone_spec")
+            if spec:
+                ui_state["nacd_zone_spec"] = spec
+
     return {
         "_version": SIDECAR_VERSION,
         "kind": SIDECAR_KIND,
@@ -72,6 +91,7 @@ def build_sidecar(
         "nf_results": _jsonify(nf_results) if nf_results else None,
         "nf_settings": _jsonify(nf_settings) if nf_settings else None,
         "limit_lines_ui": _jsonify(limit_lines_ui) if limit_lines_ui else None,
+        "ui_state": _jsonify(ui_state) if ui_state else {},
     }
 
 
@@ -110,6 +130,115 @@ def default_sidecar_path_for(pkl_path: str) -> str:
     return f"{base}_nf_eval.json"
 
 
+_VALID_ZONE_STYLES = ("classic", "multi_zone", "multi_group")
+_VALID_LABEL_POSITIONS = ("top", "bottom", "left", "right")
+
+
+def _validate_nacd_zone_spec(spec: Any) -> List[str]:
+    """Return issues with a ``nacd_zone_spec`` payload; empty = OK.
+
+    Accepts both the current shape (each group has ``thresholds`` +
+    ``zones``) and the legacy shape (each group has ``levels``) so
+    older sidecars continue to load.
+    """
+    issues: List[str] = []
+    if spec is None:
+        return issues
+    if not isinstance(spec, dict):
+        issues.append("'nacd_zone_spec' is not an object.")
+        return issues
+    style = spec.get("style", "classic")
+    if style not in _VALID_ZONE_STYLES:
+        issues.append(f"nacd_zone_spec: unknown style {style!r}.")
+    groups = spec.get("groups", [])
+    if not isinstance(groups, list):
+        issues.append("nacd_zone_spec: 'groups' must be a list.")
+        return issues
+    for gi, g in enumerate(groups):
+        if not isinstance(g, dict):
+            issues.append(f"nacd_zone_spec.groups[{gi}] is not an object.")
+            continue
+        pos = g.get("label_position", "top")
+        if pos not in _VALID_LABEL_POSITIONS:
+            issues.append(
+                f"nacd_zone_spec.groups[{gi}]: invalid label_position "
+                f"{pos!r}."
+            )
+
+        # ── Preferred shape: "thresholds" + "zones" ───────────────
+        if "thresholds" in g or "zones" in g:
+            thresholds = g.get("thresholds", [])
+            zones = g.get("zones", [])
+            if not isinstance(thresholds, list):
+                issues.append(
+                    f"nacd_zone_spec.groups[{gi}].thresholds must be a list."
+                )
+                continue
+            if not isinstance(zones, list):
+                issues.append(
+                    f"nacd_zone_spec.groups[{gi}].zones must be a list."
+                )
+                continue
+            nacds: List[float] = []
+            for ti, t in enumerate(thresholds):
+                if not isinstance(t, dict):
+                    issues.append(
+                        f"nacd_zone_spec.groups[{gi}].thresholds[{ti}] "
+                        "is not an object."
+                    )
+                    continue
+                try:
+                    nacds.append(float(t.get("nacd", 0.0)))
+                except (TypeError, ValueError):
+                    issues.append(
+                        f"nacd_zone_spec.groups[{gi}].thresholds[{ti}]: "
+                        "non-numeric 'nacd'."
+                    )
+            if nacds and nacds != sorted(nacds):
+                issues.append(
+                    f"nacd_zone_spec.groups[{gi}]: thresholds must be "
+                    "ascending by NACD."
+                )
+            # Zones must match N+1 (warn but do not reject — the
+            # loader normalises via ZoneGroup.normalised()).
+            if zones and thresholds and len(zones) != len(thresholds) + 1:
+                issues.append(
+                    f"nacd_zone_spec.groups[{gi}]: expected "
+                    f"{len(thresholds) + 1} zones for "
+                    f"{len(thresholds)} thresholds, got {len(zones)}."
+                )
+            continue
+
+        # ── Legacy shape: "levels" ────────────────────────────────
+        levels = g.get("levels", [])
+        if not isinstance(levels, list):
+            issues.append(
+                f"nacd_zone_spec.groups[{gi}].levels must be a list."
+            )
+            continue
+        nacds = []
+        for li, lv in enumerate(levels):
+            if not isinstance(lv, dict):
+                issues.append(
+                    f"nacd_zone_spec.groups[{gi}].levels[{li}] is "
+                    "not an object."
+                )
+                continue
+            try:
+                nacds.append(float(lv.get("nacd", 0.0)))
+            except (TypeError, ValueError):
+                issues.append(
+                    f"nacd_zone_spec.groups[{gi}].levels[{li}]: "
+                    "non-numeric 'nacd'."
+                )
+        if nacds and nacds != sorted(nacds):
+            issues.append(
+                f"nacd_zone_spec.groups[{gi}]: NACD levels must be "
+                "ascending."
+            )
+    return issues
+
+
 def validate(payload: Dict[str, Any]) -> List[str]:
     """Return a list of human-readable issues; empty list = OK."""
     issues: List[str] = []
@@ -123,6 +252,15 @@ def validate(payload: Dict[str, Any]) -> List[str]:
         issues.append(f"Unsupported sidecar version: {version!r}.")
     if payload.get("nf_results") is None:
         issues.append("Sidecar has no 'nf_results' block.")
+    # Optional ui_state validation.
+    ui_state = payload.get("ui_state")
+    if ui_state is not None:
+        if not isinstance(ui_state, dict):
+            issues.append("'ui_state' must be an object.")
+        else:
+            issues.extend(
+                _validate_nacd_zone_spec(ui_state.get("nacd_zone_spec"))
+            )
     return issues
 
 
@@ -143,4 +281,14 @@ def merge_into_state(state: Dict[str, Any], sidecar: Dict[str, Any]) -> Dict[str
         merged["nf_results"] = nf_res
     if nf_set is not None:
         merged["nf_settings"] = nf_set
+    # Surface the zone spec explicitly so consumers can treat it as a
+    # first-class field without peeking inside ``nf_settings``.  Falls
+    # back to ``nf_settings.nacd_zone_spec`` for sidecars written by
+    # older DC Cut versions that didn't populate ``ui_state``.
+    ui_state = sidecar.get("ui_state") or {}
+    spec = ui_state.get("nacd_zone_spec") if isinstance(ui_state, dict) else None
+    if not spec and isinstance(nf_set, dict):
+        spec = nf_set.get("nacd_zone_spec")
+    if spec:
+        merged["nacd_zone_spec"] = spec
     return merged

@@ -148,6 +148,177 @@ def _align_mask_to_curve_f(f_r: np.ndarray, mask: np.ndarray, curve: OffsetCurve
     return out
 
 
+def _draw_zone_bands_and_labels(
+    ax: "Axes",
+    spec: dict,
+    x_domain: str,
+    nf: NFAnalysis,
+) -> None:
+    """Paint multi-zone translucent bands + zone labels on a single axes.
+
+    Report Studio figures use only one axes per NF subplot (either ``f``
+    or ``λ`` on the x-axis, ``V`` on the y-axis), so we can't reuse the
+    dual-axes ``draw_zone_bands`` helper from DC Cut directly.  We
+    translate the :class:`NACDZoneSpec` dict into ``axvspan`` rectangles
+    + text labels aligned to the current x-domain.  Unrelated bands
+    (e.g. frequency bands on a wavelength subplot) are silently skipped.
+    """
+    try:
+        from dc_cut.core.processing.nearfield.nacd_zones import (
+            NACDZoneSpec, spec_to_zone_bands,
+        )
+    except Exception:
+        return
+
+    if not isinstance(spec, dict) or not spec.get("groups"):
+        return
+    try:
+        zs = NACDZoneSpec.from_dict(spec)
+    except Exception:
+        return
+    if zs.style == "classic" or not zs.groups:
+        return
+
+    # Derive a representative ``x_bar`` from the NFAnalysis.  When the
+    # sidecar / PKL round-tripped with per-offset results, ``per_offset``
+    # carries the same ``x_bar`` DC Cut used when building the spec, so
+    # the zone boundaries reproduce byte-for-byte.  Otherwise fall back
+    # to the first ``lambda_max`` it can find (``x_bar = λ_max * NACD``
+    # when NACD is the threshold) or a benign default.
+    x_bar = 0.0
+    for r in getattr(nf, "per_offset", []) or []:
+        xb = float(getattr(r, "x_bar", 0.0) or 0.0)
+        if np.isfinite(xb) and xb > 0:
+            x_bar = xb
+            break
+    if x_bar <= 0:
+        for r in getattr(nf, "per_offset", []) or []:
+            lm = float(getattr(r, "lambda_max", 0.0) or 0.0)
+            if np.isfinite(lm) and lm > 0:
+                x_bar = lm  # NACD=1 → x_bar == λ_max
+                break
+    if x_bar <= 0:
+        x_bar = 1.0
+
+    x_lim = ax.get_xlim()
+    y_lim = ax.get_ylim()
+    axis_want = "freq" if x_domain == "frequency" else "lambda"
+    # Pick a V(f) curve so the adapter can solve f-boundaries for each
+    # λ level.  Using the first per-offset result works because all
+    # offsets share the same V(f) sampling upstream.
+    f_curve = None
+    v_curve = None
+    for r in getattr(nf, "per_offset", []) or []:
+        fc = np.asarray(getattr(r, "f", []), float)
+        vc = np.asarray(getattr(r, "v", []), float)
+        if fc.size >= 2 and vc.size >= 2:
+            f_curve, v_curve = fc, vc
+            break
+    if axis_want == "freq":
+        bands = spec_to_zone_bands(
+            zs, x_bar,
+            f_curve=f_curve, v_curve=v_curve,
+            f_axis_min=float(x_lim[0]), f_axis_max=float(x_lim[1]),
+        )
+    else:
+        bands = spec_to_zone_bands(
+            zs, x_bar,
+            f_curve=f_curve, v_curve=v_curve,
+            lambda_axis_min=float(x_lim[0]), lambda_axis_max=float(x_lim[1]),
+        )
+
+    edge_groups: dict = {"top": [], "bottom": [], "left": [], "right": []}
+    seen_pos: dict = {}
+    for b in bands:
+        gi = int(getattr(b, "group_index", 0))
+        pos = str(getattr(b, "label_position", "top"))
+        if pos not in edge_groups:
+            pos = "top"
+        if gi not in seen_pos:
+            seen_pos[gi] = pos
+            if gi not in edge_groups[pos]:
+                edge_groups[pos].append(gi)
+    group_row: dict = {}
+    for pos, gids in edge_groups.items():
+        for row, gi in enumerate(gids):
+            group_row[gi] = row
+
+    drawn_labels: set = set()
+    for b in bands:
+        if getattr(b, "axis", "lambda") != axis_want:
+            continue
+        color = getattr(b, "color", "") or ""
+        alpha = float(getattr(b, "alpha", 0.15) or 0.15)
+        lo = float(getattr(b, "lo", 0.0))
+        hi = float(getattr(b, "hi", 0.0))
+        if hi <= lo:
+            continue
+        if not np.isfinite(hi):
+            hi = float(x_lim[1])
+        if color:
+            ax.axvspan(
+                lo, hi, facecolor=color, alpha=alpha,
+                linewidth=0, zorder=0.5, label="_nf_zone_band",
+            )
+
+        gi = int(getattr(b, "group_index", 0))
+        zi = int(getattr(b, "zone_index", 0))
+        pos = str(getattr(b, "label_position", "top"))
+        if pos not in edge_groups:
+            pos = "top"
+        key = (gi, zi, pos)
+        if key in drawn_labels:
+            continue
+        drawn_labels.add(key)
+
+        label = str(getattr(b, "label", "") or f"Zone {zi + 1}")
+        row = int(group_row.get(gi, 0))
+        row_offset = 0.04 * row
+        x_mid = 0.5 * (lo + hi)
+        if pos == "top":
+            y_frac = 1.0 - row_offset
+            va = "top"
+        elif pos == "bottom":
+            y_frac = 0.02 + row_offset
+            va = "bottom"
+        elif pos == "left":
+            # Sideways labels — pin to the left spine and use band
+            # midpoint as the y-coordinate.
+            y_mid = 0.5 * (y_lim[0] + y_lim[1])
+            ax.text(
+                0.02 + row_offset, y_mid, label,
+                transform=ax.get_yaxis_transform(),
+                fontsize=8, fontweight="bold",
+                ha="left", va="center", rotation=90,
+                zorder=9, label="_nf_zone_label",
+                bbox=dict(facecolor="white", edgecolor="none",
+                          alpha=0.6, pad=1.0),
+            )
+            continue
+        else:  # right
+            y_mid = 0.5 * (y_lim[0] + y_lim[1])
+            ax.text(
+                1.0 - row_offset, y_mid, label,
+                transform=ax.get_yaxis_transform(),
+                fontsize=8, fontweight="bold",
+                ha="right", va="center", rotation=90,
+                zorder=9, label="_nf_zone_label",
+                bbox=dict(facecolor="white", edgecolor="none",
+                          alpha=0.6, pad=1.0),
+            )
+            continue
+
+        ax.text(
+            x_mid, y_frac, label,
+            transform=ax.get_xaxis_transform(),
+            fontsize=8, fontweight="bold",
+            ha="center", va=va,
+            zorder=9, label="_nf_zone_label",
+            bbox=dict(facecolor="white", edgecolor="none",
+                      alpha=0.6, pad=1.0),
+        )
+
+
 def draw(
     ax: "Axes",
     nf: NFAnalysis,
@@ -157,6 +328,7 @@ def draw(
     *,
     zorder: int = 8,
     legend_seen: Optional[set] = None,
+    nacd_zone_spec: Optional[dict] = None,
 ) -> None:
     """Draw NF overlays for one subplot.
 
@@ -370,3 +542,9 @@ def draw(
                 ll = custom or f"f_{ln.role} = {fmt_freq(ln.value, freq_dec)} Hz"
                 legend_seen.add(key)
             _draw_freq_line(ax, ln, style, zorder=zorder, legend_label=ll)
+
+    if nacd_zone_spec:
+        try:
+            _draw_zone_bands_and_labels(ax, nacd_zone_spec, x_domain, nf)
+        except Exception:
+            pass

@@ -132,6 +132,12 @@ def draw_nf_limits_from_set(
         return artists
 
     for ln in limit_set.lines:
+        # Zone entries are rendered separately by ``draw_zone_bands``
+        # / ``draw_zone_labels``.  The Limit Lines tree still owns
+        # their visibility / color state, but this line drawer skips
+        # them entirely.
+        if ln.kind == "zone":
+            continue
         if not ln.valid or ln.value <= 0:
             continue
         key = (ln.band_index, ln.kind, ln.role)
@@ -153,6 +159,7 @@ def draw_nf_limits_from_set(
                 artists_out=artists, nf_key=key,
             )
         else:  # "freq"
+            custom = (getattr(ln, "custom_label", "") or "").strip()
             _draw_freq_marker(
                 ax_freq, float(ln.value),
                 tag=f"f_{ln.role}",
@@ -164,6 +171,7 @@ def draw_nf_limits_from_set(
                 label_fontsize=max(8, label_fontsize - 1),
                 zorder=zorder,
                 artists_out=artists, nf_key=key,
+                custom_label=custom or None,
             )
 
     try:
@@ -251,6 +259,7 @@ def _draw_freq_marker(
     label_fontsize: int,
     artists_out: list,
     nf_key,
+    custom_label: Optional[str] = None,
 ) -> None:
     """Draw a single vertical f-line on ``ax_freq``.
 
@@ -270,9 +279,14 @@ def _draw_freq_marker(
     artists_out.append(ln)
     if show_labels:
         trans = blended_transform_factory(ax_freq.transData, ax_freq.transAxes)
+        label_text = (
+            f" {custom_label}"
+            if custom_label
+            else f" {tag}={f_edge:g} Hz"
+        )
         txt = ax_freq.text(
             f_edge, 0.04,
-            f" {tag}={f_edge:g} Hz",
+            label_text,
             fontsize=label_fontsize, color=color,
             alpha=min(1.0, alpha + 0.2),
             rotation=90, ha="left", va="bottom",

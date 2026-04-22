@@ -647,6 +647,7 @@ def _sheet_to_dict(sheet: SheetState) -> Dict[str, Any]:
         "combined_spectrum_bar": _combined_spectrum_bar_to_dict(
             getattr(sheet, "combined_spectrum_bar", None)
         ),
+        "nacd_zone_spec": getattr(sheet, "nacd_zone_spec", None),
     }
 
 
@@ -762,6 +763,8 @@ def _dict_to_sheet_skeleton(d: Dict) -> SheetState:
     sheet.combined_spectrum_bar = _dict_to_combined_spectrum_bar(
         d.get("combined_spectrum_bar", {})
     )
+    zone_spec = d.get("nacd_zone_spec")
+    sheet.nacd_zone_spec = zone_spec if isinstance(zone_spec, dict) else None
     sheet._last_render_warnings = []
 
     return sheet

@@ -240,6 +240,38 @@ class ResultsTab(QtWidgets.QWidget):
 
         idx, f_arr, v_arr, w_arr, nacd, mask, vr, severity = data
         n = len(f_arr)
+
+        # Multi-zone Zone column (only when NACD tab has a non-classic spec).
+        zone_idx = None
+        spec = None
+        try:
+            tab = dock._nacd_tab
+            if (
+                dock._last_mode == "nacd"
+                and hasattr(tab, "current_spec")
+            ):
+                spec = tab.current_spec()
+                if spec.style != "classic":
+                    zone_idx = dock.eval.get_zone_indices_for_current(spec)
+        except Exception:
+            spec = None
+            zone_idx = None
+
+        if zone_idx is not None:
+            self.points_table.setColumnCount(8)
+            self.points_table.setHorizontalHeaderLabels([
+                "f (Hz)", "V (m/s)", "λ (m)", "NACD", "V_R",
+                "Severity", "Zone", "☑",
+            ])
+            flag_col = 7
+        else:
+            self.points_table.setColumnCount(7)
+            self.points_table.setHorizontalHeaderLabels([
+                "f (Hz)", "V (m/s)", "λ (m)", "NACD", "V_R",
+                "Severity", "☑",
+            ])
+            flag_col = 6
+
         self.points_table.setRowCount(n)
 
         colors = (
@@ -247,6 +279,7 @@ class ResultsTab(QtWidgets.QWidget):
             else dock._mode2_colors
         )
         n_flagged = 0
+        primary = spec.primary_group() if spec is not None else None
         for i in range(n):
             if severity is not None:
                 issue = severity[i]
@@ -263,6 +296,9 @@ class ResultsTab(QtWidgets.QWidget):
                 f"{vr[i]:.3f}" if vr is not None and np.isfinite(vr[i]) else "—",
                 issue,
             ]
+            if zone_idx is not None and primary is not None:
+                zi = int(zone_idx[i]) if i < len(zone_idx) else 0
+                vals.append(primary.zone_name(zi))
             for col, txt in enumerate(vals):
                 item = QtWidgets.QTableWidgetItem(txt)
                 item.setForeground(row_color)
@@ -277,7 +313,7 @@ class ResultsTab(QtWidgets.QWidget):
             if severity is not None and severity[i] in ("contaminated", "marginal"):
                 is_flagged = True
             flag_item.setCheckState(_Checked if is_flagged else _Unchecked)
-            self.points_table.setItem(i, 6, flag_item)
+            self.points_table.setItem(i, flag_col, flag_item)
             if is_flagged:
                 n_flagged += 1
 
@@ -288,10 +324,14 @@ class ResultsTab(QtWidgets.QWidget):
     # ================================================================
     #  Flag toggles / auto-select
     # ================================================================
+    def _flag_column(self) -> int:
+        """Return the index of the flag column (last column in the table)."""
+        return self.points_table.columnCount() - 1
+
     def on_flag_toggled(self, changed_item) -> None:
         if changed_item is not None:
             col = changed_item.column() if hasattr(changed_item, 'column') else -1
-            if col != 6:
+            if col != self._flag_column():
                 return
 
     def on_auto_select(self) -> None:
@@ -327,7 +367,7 @@ class ResultsTab(QtWidgets.QWidget):
                 except (TypeError, ValueError, IndexError):
                     match = bool(mask[row])
 
-            flag_item = self.points_table.item(row, 6)
+            flag_item = self.points_table.item(row, self._flag_column())
             if flag_item:
                 flag_item.setCheckState(_Checked if match else _Unchecked)
         self.points_table.blockSignals(False)
@@ -337,8 +377,9 @@ class ResultsTab(QtWidgets.QWidget):
     # ================================================================
     def on_apply_deletions(self) -> None:
         indices = []
+        flag_col = self._flag_column()
         for row in range(self.points_table.rowCount()):
-            flag_item = self.points_table.item(row, 6)
+            flag_item = self.points_table.item(row, flag_col)
             if flag_item and flag_item.checkState() == _Checked:
                 indices.append(row)
         self.dock.eval.apply_deletions(indices)

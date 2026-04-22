@@ -100,6 +100,7 @@ class NearFieldEvalDock(QtWidgets.QDockWidget):
         self._last_mode: Optional[str] = None  # 'nacd' or 'reference'
         self._overlay_offsets: list = []
         self._nf_limit_artists: list = []
+        self._nf_zone_artists: list = []
 
         # User-configurable severity colors (tabs write into these).
         self._mode1_colors = dict(_MODE1_COLORS)
@@ -162,6 +163,7 @@ class NearFieldEvalDock(QtWidgets.QDockWidget):
                 "derived_from": (
                     None if ln.derived_from is None else float(ln.derived_from)
                 ),
+                "custom_label": str(getattr(ln, "custom_label", "") or ""),
             })
         return lines
 
@@ -186,6 +188,13 @@ class NearFieldEvalDock(QtWidgets.QDockWidget):
             "eval_range": eval_range.to_dict(),
             "mode1_colors": dict(self._mode1_colors),
         }
+        # Zone spec (only serialised when non-default).
+        try:
+            spec = tab.current_spec()
+            if spec.style != "classic" or spec.groups:
+                settings["nacd_zone_spec"] = spec.to_dict()
+        except Exception:
+            pass
         payload = {
             "mode": mode,
             "timestamp": time.time(),
@@ -329,6 +338,8 @@ class NearFieldEvalDock(QtWidgets.QDockWidget):
     #  Dock-level operations (used by tabs + external callers)
     # ================================================================
     def _clear_nf_overlays(self) -> None:
+        from dc_cut.gui.widgets.nf_zone_bands import clear_nf_zone_artists
+        clear_nf_zone_artists(self._nf_zone_artists)
         clear_nf_overlays(self.c, self._nf_limit_artists)
 
     def _save_range_prefs(self, *args) -> None:
@@ -565,9 +576,31 @@ class NearFieldEvalDock(QtWidgets.QDockWidget):
     # ================================================================
     #  showEvent – refresh offset lists
     # ================================================================
+    def restore_zone_spec_from_controller(self) -> None:
+        """Re-populate the NACD tab's zone editors from ``_nf_settings``.
+
+        Called on show / after state-load so reopening a PKL with a
+        non-classic NACD spec restores the view style and the level
+        tables.  Missing or malformed entries silently fall back to
+        ``classic``.
+        """
+        try:
+            settings = getattr(self.c, "_nf_settings", None) or {}
+            raw = settings.get("nacd_zone_spec")
+            if not raw:
+                return
+            from dc_cut.core.processing.nearfield.nacd_zones import (
+                NACDZoneSpec,
+            )
+            spec = NACDZoneSpec.from_dict(raw)
+            self._nacd_tab.set_spec(spec)
+        except Exception:
+            pass
+
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._update_save_button_state()
+        self.restore_zone_spec_from_controller()
         refresh_offset_checks(
             self, self._nacd_tab.offset_checks, self._nacd_tab.offset_layout,
             default_checked=False,

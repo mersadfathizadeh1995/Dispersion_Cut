@@ -406,6 +406,9 @@ class ReportStudioWindow(
         shadow_curves = result.get("shadow_curves", [])
         layout_mode = result.get("layout") or "single"
         nf_list = result.get("nf_analyses") or []
+        zone_spec = result.get("nacd_zone_spec")
+        if zone_spec:
+            sheet.nacd_zone_spec = zone_spec
 
         if not curves and not shadow_curves and aggregated is None:
             return

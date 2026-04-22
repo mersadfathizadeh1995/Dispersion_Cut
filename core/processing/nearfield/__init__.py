@@ -51,6 +51,19 @@ from dc_cut.core.processing.nearfield.range_derivation import (
     derive_limits,
 )
 
+# ── nacd_zones.py ──────────────────────────────────────────────────
+from dc_cut.core.processing.nearfield.nacd_zones import (
+    ZoneThreshold,
+    ZoneFill,
+    ZoneGroup,
+    NACDZoneSpec,
+    ZoneBand,
+    classify_points_into_zones,
+    spec_to_derived_limit_set,
+    spec_to_zone_bands,
+    validate_spec as validate_zone_spec,
+)
+
 # ── reference.py ───────────────────────────────────────────────────
 from dc_cut.core.processing.nearfield.reference import (
     select_reference_by_largest_xbar,
@@ -154,6 +167,16 @@ __all__ = [
     "DerivedLine",
     "DerivedLimitSet",
     "derive_limits",
+    # nacd_zones
+    "ZoneThreshold",
+    "ZoneFill",
+    "ZoneGroup",
+    "NACDZoneSpec",
+    "ZoneBand",
+    "classify_points_into_zones",
+    "spec_to_derived_limit_set",
+    "spec_to_zone_bands",
+    "validate_zone_spec",
     # reference
     "select_reference_by_largest_xbar",
     "compute_composite_reference",

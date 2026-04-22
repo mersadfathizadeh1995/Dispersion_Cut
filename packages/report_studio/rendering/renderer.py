@@ -206,7 +206,9 @@ def _render_subplot(
         nf = state.nf_analyses.get(nf_uid)
         if nf is not None:
             nf_drawer.draw(
-                ax, nf, curves, x_domain, style, legend_seen=nf_legend_seen,
+                ax, nf, curves, x_domain, style,
+                legend_seen=nf_legend_seen,
+                nacd_zone_spec=getattr(state, "nacd_zone_spec", None),
             )
 
     # 4. Configure axes

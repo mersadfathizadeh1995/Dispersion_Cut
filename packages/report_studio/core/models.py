@@ -638,6 +638,12 @@ class SheetState:
     # Near-field analyses (NACD-Only / future reference mode)
     nf_analyses: Dict[str, NFAnalysis] = field(default_factory=dict)
 
+    # Optional NACD multi-zone specification (serialised form of
+    # :class:`NACDZoneSpec`).  When present, the renderer projects each
+    # group's levels into translucent bands and "Zone N" labels on top
+    # of the usual NF limit lines.  ``None`` / empty == classic view.
+    nacd_zone_spec: Optional[Dict[str, Any]] = None
+
     # Combined spectrum colorbar (figure-level; fuses every per-subplot
     # bar when all spectra share cmap/vmin/vmax).
     combined_spectrum_bar: CombinedSpectrumBarConfig = field(

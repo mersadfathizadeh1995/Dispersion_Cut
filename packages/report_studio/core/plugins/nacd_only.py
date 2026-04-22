@@ -115,11 +115,21 @@ class NacdOnlyPlugin:
             if severity_palette:
                 nf_one.severity_palette = {**nf_one.severity_palette, **severity_palette}
 
+        # Pass through the optional NACD zone spec for the caller to
+        # attach to the sheet.  Sourced from merge_into_state (so
+        # sidecar wins) or from the embedded nf_settings.
+        zone_spec = state.get("nacd_zone_spec")
+        if not zone_spec:
+            nf_set = state.get("nf_settings") or {}
+            if isinstance(nf_set, dict):
+                zone_spec = nf_set.get("nacd_zone_spec")
+
         return {
             "curves": curves,
             "spectra": spectra,
             "nf_analyses": nf_list,
             "layout": layout,
+            "nacd_zone_spec": zone_spec,
         }
 
     @staticmethod
