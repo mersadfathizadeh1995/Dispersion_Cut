@@ -16,15 +16,28 @@ from dc_cut.core.processing.averages import compute_avg_by_frequency, compute_av
 from dc_cut.core.processing.limits import compute_padded_limits as _compute_padded_limits
 from dc_cut.core.processing.guides import compute_k_guides
 from dc_cut.core.processing.wavelength_lines import compute_wavelength_line
+from dc_cut.gui.widgets.nf_limit_lines import _preserve_limits
 from dc_cut.services.prefs import get_pref
 
 
-def _compute_limits_with_prefs(v, f, w, pad_frac=0.08):
+def _compute_limits_with_prefs(v, f, w, pad_frac=None):
+    if pad_frac is None:
+        try:
+            pad_frac = float(get_pref('axis_pad_frac', 0.08) or 0.08)
+        except (TypeError, ValueError):
+            pad_frac = 0.08
+    try:
+        clamp_mult = float(
+            get_pref('axis_v_outlier_clamp_mult', 2.5) or 0.0
+        )
+    except (TypeError, ValueError):
+        clamp_mult = 0.0
     return _compute_padded_limits(
         v, f, w,
         pad_frac=pad_frac,
         robust_lower_pct=get_pref('robust_lower_pct', 0.5),
         robust_upper_pct=get_pref('robust_upper_pct', 99.5),
+        clamp_v_max_mult=clamp_mult if clamp_mult > 0 else None,
     )
 from dc_cut.services import log
 
@@ -489,27 +502,43 @@ class VisualizationHandler:
         self._ctrl._k_guides_legend = None
 
     def draw_k_guides(self) -> None:
-        """Draw k-limit guide curves on both plots."""
+        """Draw k-limit guide curves on both plots.
+
+        Wrapped in :func:`_preserve_limits` so that the guide curves --
+        which can extend to very high velocities for small ``kmin`` --
+        never stretch the axis limits.  The frequency/wavelength curves
+        also pass ``scalex=False, scaley=False`` to matplotlib so they
+        do not participate in autoscale.
+        """
         if not bool(getattr(self._ctrl, 'show_k_guides', False)):
             self.clear_k_guides()
             return
 
         self.clear_k_guides()
 
-        # Check for multi k-limits
-        multi_klimits = getattr(self._ctrl, '_multi_klimits', [])
-        if multi_klimits:
-            self._draw_multi_k_guides(multi_klimits)
-            return
+        ax_freq = getattr(self._ctrl, 'ax_freq', None)
+        ax_wave = getattr(self._ctrl, 'ax_wave', None)
+        exclude = bool(get_pref('axis_exclude_kguides', True))
+        if exclude:
+            ctx = _preserve_limits(ax_freq, ax_wave)
+        else:
+            from contextlib import nullcontext
+            ctx = nullcontext()
+        with ctx:
+            # Check for multi k-limits
+            multi_klimits = getattr(self._ctrl, '_multi_klimits', [])
+            if multi_klimits:
+                self._draw_multi_k_guides(multi_klimits)
+                return
 
-        # Single k-limits
-        kmin = getattr(self._ctrl, 'kmin', None)
-        kmax = getattr(self._ctrl, 'kmax', None)
+            # Single k-limits
+            kmin = getattr(self._ctrl, 'kmin', None)
+            kmax = getattr(self._ctrl, 'kmax', None)
 
-        if kmin is None or kmax is None or kmin <= 0 or kmax <= 0:
-            return
+            if kmin is None or kmax is None or kmin <= 0 or kmax <= 0:
+                return
 
-        self._draw_single_k_guides(float(kmin), float(kmax))
+            self._draw_single_k_guides(float(kmin), float(kmax))
 
     def _draw_single_k_guides(self, kmin: float, kmax: float) -> None:
         """Draw k-guides for single array."""
@@ -533,32 +562,42 @@ class VisualizationHandler:
             )
 
         # Draw on frequency axis (scale-agnostic: axis scale set via set_xscale)
+        # ``scalex=False, scaley=False`` keeps the huge velocity values
+        # reached for small kmin out of matplotlib's autoscale.
         ln_ap = self._ctrl.ax_freq.plot(
-            f_curve, v_ap, '-', color=col_ap, lw=1.2, label='_kguide'
+            f_curve, v_ap, '-', color=col_ap, lw=1.2, label='_kguide',
+            scalex=False, scaley=False,
         )[0]
         ln_ap2 = self._ctrl.ax_freq.plot(
-            f_curve, v_ap2, '--', color=col_ap2, lw=1.2, label='_kguide'
+            f_curve, v_ap2, '--', color=col_ap2, lw=1.2, label='_kguide',
+            scalex=False, scaley=False,
         )[0]
         ln_al = self._ctrl.ax_freq.plot(
-            f_curve, v_al, '-', color=col_al, lw=1.2, label='_kguide'
+            f_curve, v_al, '-', color=col_al, lw=1.2, label='_kguide',
+            scalex=False, scaley=False,
         )[0]
         ln_al2 = self._ctrl.ax_freq.plot(
-            f_curve, v_al2, '--', color=col_al2, lw=1.2, label='_kguide'
+            f_curve, v_al2, '--', color=col_al2, lw=1.2, label='_kguide',
+            scalex=False, scaley=False,
         )[0]
 
         # Draw on wavelength axis
         y0, y1 = self._ctrl.ax_wave.get_ylim()
         ln_w_ap = self._ctrl.ax_wave.plot(
-            [w_ap, w_ap], [y0, y1], '-', color=col_ap, lw=1.2, label='_kguide'
+            [w_ap, w_ap], [y0, y1], '-', color=col_ap, lw=1.2, label='_kguide',
+            scalex=False, scaley=False,
         )[0]
         ln_w_ap2 = self._ctrl.ax_wave.plot(
-            [w_ap2, w_ap2], [y0, y1], '--', color=col_ap2, lw=1.2, label='_kguide'
+            [w_ap2, w_ap2], [y0, y1], '--', color=col_ap2, lw=1.2, label='_kguide',
+            scalex=False, scaley=False,
         )[0]
         ln_w_al = self._ctrl.ax_wave.plot(
-            [w_al, w_al], [y0, y1], '-', color=col_al, lw=1.2, label='_kguide'
+            [w_al, w_al], [y0, y1], '-', color=col_al, lw=1.2, label='_kguide',
+            scalex=False, scaley=False,
         )[0]
         ln_w_al2 = self._ctrl.ax_wave.plot(
-            [w_al2, w_al2], [y0, y1], '--', color=col_al2, lw=1.2, label='_kguide'
+            [w_al2, w_al2], [y0, y1], '--', color=col_al2, lw=1.2, label='_kguide',
+            scalex=False, scaley=False,
         )[0]
 
         self._ctrl._k_guides_artists.extend(
@@ -612,32 +651,40 @@ class VisualizationHandler:
             w_al = 2 * np.pi / float(kmax)
             w_al2 = 2 * np.pi / (float(kmax) / 2.0)
 
-            # Frequency axis (scale-agnostic)
+            # Frequency axis (scale-agnostic); keep k-guides out of autoscale.
             ln_ap = self._ctrl.ax_freq.plot(
-                f_curve, v_ap, '-', color=base_color, lw=1.5, label='_kguide'
+                f_curve, v_ap, '-', color=base_color, lw=1.5, label='_kguide',
+                scalex=False, scaley=False,
             )[0]
             ln_ap2 = self._ctrl.ax_freq.plot(
-                f_curve, v_ap2, '--', color=base_color, lw=1.2, label='_kguide'
+                f_curve, v_ap2, '--', color=base_color, lw=1.2, label='_kguide',
+                scalex=False, scaley=False,
             )[0]
             ln_al = self._ctrl.ax_freq.plot(
-                f_curve, v_al, '-', color=base_color, lw=1.5, alpha=0.6, label='_kguide'
+                f_curve, v_al, '-', color=base_color, lw=1.5, alpha=0.6,
+                label='_kguide', scalex=False, scaley=False,
             )[0]
             ln_al2 = self._ctrl.ax_freq.plot(
-                f_curve, v_al2, '--', color=base_color, lw=1.2, alpha=0.6, label='_kguide'
+                f_curve, v_al2, '--', color=base_color, lw=1.2, alpha=0.6,
+                label='_kguide', scalex=False, scaley=False,
             )[0]
 
             # Wavelength axis (scale-agnostic)
             ln_w_ap = self._ctrl.ax_wave.plot(
-                [w_ap, w_ap], [y0, y1], '-', color=base_color, lw=1.5, label='_kguide'
+                [w_ap, w_ap], [y0, y1], '-', color=base_color, lw=1.5,
+                label='_kguide', scalex=False, scaley=False,
             )[0]
             ln_w_ap2 = self._ctrl.ax_wave.plot(
-                [w_ap2, w_ap2], [y0, y1], '--', color=base_color, lw=1.2, label='_kguide'
+                [w_ap2, w_ap2], [y0, y1], '--', color=base_color, lw=1.2,
+                label='_kguide', scalex=False, scaley=False,
             )[0]
             ln_w_al = self._ctrl.ax_wave.plot(
-                [w_al, w_al], [y0, y1], '-', color=base_color, lw=1.5, alpha=0.6, label='_kguide'
+                [w_al, w_al], [y0, y1], '-', color=base_color, lw=1.5, alpha=0.6,
+                label='_kguide', scalex=False, scaley=False,
             )[0]
             ln_w_al2 = self._ctrl.ax_wave.plot(
-                [w_al2, w_al2], [y0, y1], '--', color=base_color, lw=1.2, alpha=0.6, label='_kguide'
+                [w_al2, w_al2], [y0, y1], '--', color=base_color, lw=1.2, alpha=0.6,
+                label='_kguide', scalex=False, scaley=False,
             )[0]
 
             self._ctrl._k_guides_artists.extend(

@@ -37,10 +37,15 @@ class AddDataDialog(QtWidgets.QDialog):
         self._offset_labels: List[str] = []
         self._selected_type_id = "source_offset"
         self._plugin_value_getters: Dict[str, Callable[[], Any]] = {}
+        # Cached bundle summary (or None when user hasn't picked a
+        # figure file yet). Populated by ``_on_bundle_picked`` and
+        # read back in ``_on_accept`` + ``plugin_kwargs``.
+        self._bundle_summary: Optional[Dict[str, Any]] = None
 
         self._build_ui()
         self._restore_default_paths()
         self._rebuild_plugin_fields()
+        self._update_bundle_row_visibility()
 
     # ── UI ──────────────────────────────────────────────────────────────
 
@@ -64,48 +69,119 @@ class AddDataDialog(QtWidgets.QDialog):
         self._populate_type_combo()
         type_layout.addWidget(self._type_combo)
         self._type_combo.currentIndexChanged.connect(
-            lambda _i: self._rebuild_plugin_fields()
+            lambda _i: (self._rebuild_plugin_fields(),
+                        self._update_bundle_row_visibility())
         )
         self._body_layout.addWidget(type_group)
 
-        # File selection
-        file_group = QtWidgets.QGroupBox("Data Files")
-        file_layout = QtWidgets.QFormLayout(file_group)
+        # ── Figure file (single self-describing .pkl bundle) ───────
+        # Replaces the old 4-file mental model: the bundle's ``_kind``
+        # tag tells the dialog which figure type + which offsets the
+        # user exported from DC Cut, and the preview card renders the
+        # metadata so the user knows what they're loading before OK.
+        # The linked-data rows (PKL + NPZ) auto-fill from the bundle's
+        # ``source`` block and stay collapsed unless the user needs to
+        # override them.
+        self._file_group = QtWidgets.QGroupBox("Data Files")
+        fg_layout = QtWidgets.QVBoxLayout(self._file_group)
+        fg_layout.setContentsMargins(8, 6, 8, 6)
+        fg_layout.setSpacing(6)
 
+        # Primary "Figure file" row.
+        self._bundle_row_widget = QtWidgets.QWidget()
+        bundle_form = QtWidgets.QFormLayout(self._bundle_row_widget)
+        bundle_form.setContentsMargins(0, 0, 0, 0)
+        bundle_picker = QtWidgets.QHBoxLayout()
+        self._bundle_edit = QtWidgets.QLineEdit()
+        self._bundle_edit.setPlaceholderText(
+            "Select figure bundle (.pkl) exported from DC Cut…"
+        )
+        self._bundle_edit.setToolTip(
+            "Self-describing figure file written by "
+            "DC Cut → NF Eval → \"Save Figure ▾\".\n"
+            "One .pkl per figure type; the dialog reads its "
+            "metadata + auto-fills the linked State/Spectrum files."
+        )
+        # When the path is edited by hand, re-parse on editingFinished
+        # rather than every keystroke.
+        self._bundle_edit.editingFinished.connect(
+            lambda: self._on_bundle_picked(self._bundle_edit.text().strip())
+        )
+        bundle_btn = QtWidgets.QPushButton("Browse…")
+        bundle_btn.clicked.connect(self._browse_bundle)
+        bundle_picker.addWidget(self._bundle_edit, stretch=1)
+        bundle_picker.addWidget(bundle_btn)
+        bundle_form.addRow("Figure file (.pkl):", bundle_picker)
+        fg_layout.addWidget(self._bundle_row_widget)
+
+        # Preview card — a compact summary that appears only after a
+        # valid bundle is picked. Keeps the header label + offsets
+        # QTableWidget so the user can eyeball what got exported.
+        self._bundle_preview = QtWidgets.QFrame()
+        self._bundle_preview.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        self._bundle_preview.setVisible(False)
+        pv_layout = QtWidgets.QVBoxLayout(self._bundle_preview)
+        pv_layout.setContentsMargins(8, 6, 8, 6)
+        pv_layout.setSpacing(4)
+        self._bundle_header = QtWidgets.QLabel("")
+        self._bundle_header.setWordWrap(True)
+        self._bundle_header.setStyleSheet("font-weight: 600;")
+        pv_layout.addWidget(self._bundle_header)
+        self._bundle_offsets_table = QtWidgets.QTableWidget(0, 4)
+        self._bundle_offsets_table.setHorizontalHeaderLabels(
+            ["Offset", "x̄ (m)", "λ_max (m)", "n_contam"]
+        )
+        self._bundle_offsets_table.verticalHeader().setVisible(False)
+        self._bundle_offsets_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.NoSelection
+        )
+        self._bundle_offsets_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        hh = self._bundle_offsets_table.horizontalHeader()
+        try:
+            hh.setSectionResizeMode(
+                QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+            )
+        except AttributeError:
+            hh.setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
+        self._bundle_offsets_table.setMaximumHeight(180)
+        pv_layout.addWidget(self._bundle_offsets_table)
+        fg_layout.addWidget(self._bundle_preview)
+
+        # Linked data (advanced) — PKL + NPZ, auto-filled + collapsed
+        # when a bundle is picked, expanded + editable for the
+        # source-offset / average-curve figures that don't ship with
+        # a bundle.
+        self._linked_section = CollapsibleSection(
+            "Linked data (advanced)", expanded=True,
+        )
+        linked_form = QtWidgets.QFormLayout()
+        linked_form.setContentsMargins(0, 0, 0, 0)
         pkl_row = QtWidgets.QHBoxLayout()
         self._pkl_edit = QtWidgets.QLineEdit()
-        self._pkl_edit.setPlaceholderText("Select .pkl state file...")
-        pkl_btn = QtWidgets.QPushButton("Browse...")
+        self._pkl_edit.setPlaceholderText("Select .pkl state file…")
+        pkl_btn = QtWidgets.QPushButton("Browse…")
         pkl_btn.clicked.connect(self._browse_pkl)
         pkl_row.addWidget(self._pkl_edit, stretch=1)
         pkl_row.addWidget(pkl_btn)
-        file_layout.addRow("State file (.pkl):", pkl_row)
+        linked_form.addRow("State file (.pkl):", pkl_row)
 
         npz_row = QtWidgets.QHBoxLayout()
         self._npz_edit = QtWidgets.QLineEdit()
-        self._npz_edit.setPlaceholderText("Optional: .npz spectrum file...")
-        npz_btn = QtWidgets.QPushButton("Browse...")
+        self._npz_edit.setPlaceholderText("Optional: .npz spectrum file…")
+        npz_btn = QtWidgets.QPushButton("Browse…")
         npz_btn.clicked.connect(self._browse_npz)
         npz_row.addWidget(self._npz_edit, stretch=1)
         npz_row.addWidget(npz_btn)
-        file_layout.addRow("Spectrum (.npz):", npz_row)
+        linked_form.addRow("Spectrum (.npz):", npz_row)
 
-        nf_row = QtWidgets.QHBoxLayout()
-        self._nf_edit = QtWidgets.QLineEdit()
-        self._nf_edit.setPlaceholderText(
-            "Optional: NF evaluation sidecar exported from DC Cut..."
-        )
-        self._nf_edit.setToolTip(
-            "Third file in the DC Cut 3-file bundle: overrides the NF "
-            "analysis embedded in the PKL when set."
-        )
-        nf_btn = QtWidgets.QPushButton("Browse...")
-        nf_btn.clicked.connect(self._browse_nf_sidecar)
-        nf_row.addWidget(self._nf_edit, stretch=1)
-        nf_row.addWidget(nf_btn)
-        file_layout.addRow("NF eval (.json):", nf_row)
+        linked_wrap = QtWidgets.QWidget()
+        linked_wrap.setLayout(linked_form)
+        self._linked_section.form.addRow(linked_wrap)
+        fg_layout.addWidget(self._linked_section)
 
-        self._body_layout.addWidget(file_group)
+        self._body_layout.addWidget(self._file_group)
 
         # Offset checklist (collapsible)
         self._offset_section = CollapsibleSection("Select Offsets", expanded=True)
@@ -165,6 +241,7 @@ class AddDataDialog(QtWidgets.QDialog):
         from ...core.plugins import source_offset as _  # noqa: F401
         from ...core.plugins import average_curve as _ac  # noqa: F401
         from ...core.plugins import nacd_only as _nf  # noqa: F401
+        from ...core.plugins import nacd_zones as _nz  # noqa: F401
         from ...core.figure_types import registry
 
         for plugin in registry.all_types():
@@ -292,20 +369,165 @@ class AddDataDialog(QtWidgets.QDialog):
         if path:
             self._npz_edit.setText(path)
 
-    def _browse_nf_sidecar(self):
-        """Pick the NF evaluation sidecar JSON (3rd file in the bundle)."""
+    def _browse_bundle(self):
+        """Pick a figure-bundle .pkl exported from DC Cut."""
         import os
         start = (
-            os.path.dirname(self._nf_edit.text())
+            os.path.dirname(self._bundle_edit.text())
             or os.path.dirname(self._pkl_edit.text())
             or ""
         )
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Select NF Evaluation Sidecar", start,
-            "JSON Files (*.json);;All Files (*)",
+            self, "Select Figure File", start,
+            "Pickle Files (*.pkl);;All Files (*)",
         )
         if path:
-            self._nf_edit.setText(path)
+            self._bundle_edit.setText(path)
+            self._on_bundle_picked(path)
+
+    # ── Bundle preview + auto-fill ─────────────────────────────────────
+
+    def _on_bundle_picked(self, path: str) -> None:
+        """Validate + preview a bundle, auto-fill PKL/NPZ.
+
+        Called from the "Browse…" button, ``editingFinished`` on the
+        line edit, and directly from tests that poke ``_bundle_edit``
+        programmatically. Always safe to call with an empty path —
+        that just clears the preview.
+        """
+        self._bundle_summary = None
+        self._bundle_preview.setVisible(False)
+        self._bundle_offsets_table.setRowCount(0)
+
+        if not path:
+            return
+
+        try:
+            from ...io.figure_bundle import bundle_summary, detect_bundle_kind
+        except Exception:
+            return
+
+        summary = bundle_summary(path)
+        if summary is None:
+            self._bundle_header.setText(
+                "<i>Not a recognised figure bundle.</i>"
+            )
+            self._bundle_preview.setVisible(True)
+            return
+
+        # Auto-switch the type combo when the bundle's kind doesn't
+        # match the currently-selected figure type. The detected
+        # ``type_id`` always wins — the bundle is the ground truth.
+        detected_tid = summary.get("type_id") or detect_bundle_kind(path)
+        if detected_tid and detected_tid != self.selected_type_id:
+            idx = self._type_combo.findData(detected_tid)
+            if idx >= 0:
+                self._type_combo.blockSignals(True)
+                self._type_combo.setCurrentIndex(idx)
+                self._type_combo.blockSignals(False)
+                # Manually re-run the slot's side effects since we
+                # suppressed the signal above.
+                self._rebuild_plugin_fields()
+                self._update_bundle_row_visibility()
+
+        self._bundle_summary = summary
+        self._render_preview(summary)
+
+        # Auto-fill linked paths from the bundle's source block.
+        src = summary.get("source") or {}
+        state_pkl = src.get("state_pkl") or ""
+        spectrum_npz = src.get("spectrum_npz") or ""
+        if state_pkl:
+            self._pkl_edit.setText(state_pkl)
+            self._load_offset_list(state_pkl)
+        if spectrum_npz:
+            self._npz_edit.setText(spectrum_npz)
+
+        # Collapse linked-data section when fully auto-filled — the
+        # user can always expand if they need to override.
+        if state_pkl:
+            try:
+                self._linked_section.set_expanded(False)
+            except Exception:
+                pass
+
+        # Populate the offset checklist from the bundle's offsets.
+        self._populate_offsets_from_bundle(summary)
+
+    def _render_preview(self, summary: Dict[str, Any]) -> None:
+        """Fill the preview card widgets from ``summary``."""
+        figure_type = summary.get("figure_type", "(unknown)")
+        n_off = int(summary.get("n_offsets", 0))
+        saved_at = summary.get("saved_at", "")
+        pieces = [f"<b>{figure_type}</b>", f"{n_off} offset(s)"]
+        if saved_at:
+            pieces.append(f"saved {saved_at}")
+        self._bundle_header.setText(" • ".join(pieces))
+
+        offsets = summary.get("offsets") or []
+        self._bundle_offsets_table.setRowCount(len(offsets))
+        for row, off in enumerate(offsets):
+            def _fmt(key, default="—", fmt="{:.2f}"):
+                v = off.get(key)
+                if v is None:
+                    return default
+                try:
+                    return fmt.format(float(v))
+                except (TypeError, ValueError):
+                    return str(v)
+
+            cells = [
+                str(off.get("label", f"#{row+1}")),
+                _fmt("x_bar"),
+                _fmt("lambda_max"),
+                str(int(off.get("n_contaminated", 0))),
+            ]
+            for col, text in enumerate(cells):
+                self._bundle_offsets_table.setItem(
+                    row, col, QtWidgets.QTableWidgetItem(text)
+                )
+        self._bundle_preview.setVisible(True)
+
+    def _populate_offsets_from_bundle(self, summary: Dict[str, Any]) -> None:
+        """Use the bundle's offset list as the checklist source."""
+        offsets = summary.get("offsets") or []
+        if not offsets:
+            return
+        labels = [str(o.get("label", "")) for o in offsets if o.get("label") is not None]
+        if not labels:
+            return
+        self._offset_list.clear()
+        self._offset_labels = labels
+        for label in labels:
+            item = QtWidgets.QListWidgetItem(label)
+            item.setFlags(
+                item.flags() | QtCore.Qt.ItemFlag.ItemIsUserCheckable
+            )
+            item.setCheckState(Checked)
+            self._offset_list.addItem(item)
+        self._lbl_status.setText(
+            f"{len(labels)} offset(s) from bundle — all selected."
+        )
+
+    def _update_bundle_row_visibility(self) -> None:
+        """Hide figure-file row for types that don't ship a bundle."""
+        tid = self.selected_type_id
+        # Only NF-derived figures currently have bundle writers
+        # registered; the others use the legacy PKL+NPZ path only.
+        try:
+            from ...io.figure_bundle import FIGURE_BUNDLE_REGISTRY
+            has_bundle = tid in FIGURE_BUNDLE_REGISTRY
+        except Exception:
+            has_bundle = False
+        self._bundle_row_widget.setVisible(has_bundle)
+        if not has_bundle:
+            self._bundle_preview.setVisible(False)
+            # Expand linked data for non-bundle figures so the user
+            # sees what they need to fill in.
+            try:
+                self._linked_section.set_expanded(True)
+            except Exception:
+                pass
 
     def _restore_default_paths(self):
         """Pre-fill PKL/NPZ from QSettings defaults."""
@@ -400,8 +622,36 @@ class AddDataDialog(QtWidgets.QDialog):
         return self._npz_edit.text().strip()
 
     @property
+    def figure_bundle_path(self) -> str:
+        """Path to the self-describing figure bundle, or ``""``."""
+        return self._bundle_edit.text().strip()
+
+    @property
     def nf_sidecar_path(self) -> str:
-        return self._nf_edit.text().strip()
+        """Legacy alias — the dialog no longer exposes a separate sidecar.
+
+        Kept so callers that haven't been migrated to
+        :attr:`figure_bundle_path` still get a defined attribute.
+        Always ``""`` in the new UI; project-load paths still read
+        the legacy ``SheetState.nf_sidecar_path`` when set.
+        """
+        return ""
+
+    @property
+    def nacd_bundle_path(self) -> str:
+        """Legacy alias — see :attr:`nf_sidecar_path`.
+
+        For NACD-Zone figures, callers should now use
+        :attr:`figure_bundle_path`; this shim stays so older
+        main-window code keeps compiling during the migration.
+        """
+        # When the detected bundle IS a NACD-zones bundle we return
+        # it here too, so legacy plugin signatures keep working until
+        # F4 lands the dispatcher update.
+        summary = self._bundle_summary or {}
+        if summary.get("type_id") == "nacd_zones":
+            return self.figure_bundle_path
+        return ""
 
     @property
     def selected_offsets(self) -> List[str]:

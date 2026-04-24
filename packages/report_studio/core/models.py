@@ -68,6 +68,11 @@ class NFLambdaLine:
     # Single multiplier that scales font + padding of the whole label box.
     label_scale: float = 1.0
     transform_used: str = ""
+    # Optional secondary label (e.g. "f = 8.7 Hz" beside a NACD=1 curve).
+    # When enabled, a second text is drawn offset from the primary label.
+    show_secondary_label: bool = False
+    secondary_label_text: str = ""  # blank → auto ("f = <val> Hz" if available)
+    secondary_label_offset: float = 0.05  # axes-frac offset from primary
 
     def __post_init__(self) -> None:
         if not self.uid:
@@ -292,6 +297,12 @@ class NFLine:
     offset_label: str = ""
     display_label: str = ""
     lambda_max_curve: bool = False
+    # Mirrored value label ("f = X Hz" next to a NACD=k custom_label).
+    show_value_label: bool = True
+    # Placement of the mirror: "right"/"left" = opposite side of the primary
+    # label, "above"/"below" = stack vertically from the primary position.
+    value_label_side: str = "right"
+    value_label_offset: float = 0.0  # axes-frac nudge from primary label t
 
     def __post_init__(self) -> None:
         if not self.uid:
@@ -331,6 +342,94 @@ class NFOffsetResult:
 
 
 @dataclass
+class NFZoneBand:
+    """First-class, user-configurable override for one zone band.
+
+    Mirrors :class:`dc_cut.core.processing.nearfield.nacd_zones.ZoneFill`
+    but scoped to a single NACD analysis so multiple NFAnalyses can
+    style their zones independently.  Identified by
+    ``(group_index, zone_index, axis)`` — the tuple is stable across
+    renders because the bundle's zone ordering is preserved end-to-end.
+    """
+
+    uid: str = ""
+    group_index: int = 0
+    zone_index: int = 0
+    axis: str = "freq"  # "freq" | "lambda"
+    visible: bool = True
+    band_color: str = ""
+    band_alpha: float = 0.15
+    point_color: str = ""
+    # Label (the "Zone I" bbox drawn inside the band).
+    label: str = ""
+    label_visible: bool = True
+    label_fontsize: int = 9
+    label_position: str = "top"   # "top" | "bottom" | "left" | "right"
+    label_row_offset: float = 0.0  # extra axes-fraction nudge
+    label_color: str = ""           # empty → inherit band_color
+    # Fine-tune label alignment inside the band (request 1).
+    label_ha: str = "center"  # "left" | "center" | "right"
+    label_va: str = "center"  # "top" | "center" | "bottom" (visual hint)
+    # Draw a horizontal <-> arrow just beneath the top/bottom zone label
+    # to emphasise the band extent (see screenshot 1). Independent of the
+    # vertical :class:`NFZoneArrow` above.
+    arrow_below_label: bool = False
+    arrow_below_gap: float = 0.03  # axes-frac distance from the label
+    arrow_below_color: str = ""     # empty → inherit label/band color
+    arrow_below_linewidth: float = 1.4
+
+    def __post_init__(self) -> None:
+        if not self.uid:
+            self.uid = _short_uid()
+
+
+@dataclass
+class NFZoneArrow:
+    """Per-zone double-headed boundary arrow + label override."""
+
+    uid: str = ""
+    group_index: int = 0
+    zone_index: int = 0
+    axis: str = "freq"  # "freq" | "lambda"
+    enabled: bool = False
+    visible: bool = True
+    color: str = "#C00000"
+    linewidth: float = 1.8
+    y_frac: float = 0.50
+    style: str = "<->"
+    text: str = ""
+    text_y_offset: float = -0.06
+    text_fontsize: int = 11
+
+    def __post_init__(self) -> None:
+        if not self.uid:
+            self.uid = _short_uid()
+
+
+@dataclass
+class NFZoneSpan:
+    """Per-group outer-band extension override (request 6).
+
+    Lets the user push the outermost zone shading all the way to the
+    axis edges even when the dispersion curve ends earlier, and
+    optionally override the implicit NACD threshold that defines the
+    outermost band extent.  One instance per group per axis.
+    """
+
+    uid: str = ""
+    group_index: int = 0
+    axis: str = "freq"  # "freq" | "lambda"
+    extend_left_to_axis: bool = False
+    extend_right_to_axis: bool = False
+    outer_left_nacd: Optional[float] = None
+    outer_right_nacd: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        if not self.uid:
+            self.uid = _short_uid()
+
+
+@dataclass
 class NFAnalysis:
     uid: str = ""
     name: str = "NACD-Only"
@@ -362,6 +461,16 @@ class NFAnalysis:
     contaminated_edge_visible: bool = True
     contaminated_edge_color: str = "#000000"
     contaminated_edge_width: float = 0.5
+    # First-class zone layer overrides (Phase C).  Populated by the
+    # NACD-Zones plugin from the bundle's ``zone_spec``; each entry
+    # reflects a single zone/arrow and can be toggled/restyled
+    # independently of the bundle defaults.  When either list is
+    # empty the renderer falls back to the spec.
+    zone_bands: List["NFZoneBand"] = field(default_factory=list)
+    zone_arrows: List["NFZoneArrow"] = field(default_factory=list)
+    # Per-group outer-band extension overrides (request 6).  Populated
+    # from the spec at hydration time; empty list ⇒ legacy behavior.
+    zone_spans: List["NFZoneSpan"] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.uid:
@@ -623,11 +732,33 @@ class SheetState:
     # Data source paths (for sheet-level persistence)
     pkl_path: str = ""
     npz_path: str = ""
+    # Unified figure-bundle path — a self-describing .pkl exported
+    # from DC Cut's "Save Figure ▾" menu. Its ``_kind`` tag tells the
+    # Add Data dialog which figure type it belongs to; the file's
+    # ``source`` block auto-fills :attr:`pkl_path` / :attr:`npz_path`.
+    # Supersedes :attr:`nf_sidecar_path` + :attr:`nacd_bundle_path`;
+    # those two remain for backward compatibility with .rsproj
+    # projects written before the unification.
+    figure_bundle_path: str = ""
     # Optional third "NF evaluation" sidecar file (JSON) exported from
     # DC Cut. When set, :class:`NacdOnlyPlugin` merges the sidecar
     # ``nf_results`` / ``nf_settings`` over whatever is embedded in the
     # PKL, giving users explicit control over the NF figure state.
+    #
+    # .. deprecated:: figure-bundle refactor
+    #     New projects populate :attr:`figure_bundle_path` instead.
+    #     The field is still read on load (project_v4 migrates the
+    #     path straight into :attr:`figure_bundle_path` when
+    #     :attr:`figure_bundle_path` is empty).
     nf_sidecar_path: str = ""
+    # Optional NACD-zone bundle (.pkl) exported from DC Cut. Required
+    # by :class:`NacdZonesPlugin` (figure type "NACD Zones (multi-zone)")
+    # which loads one DerivedLimitSet per offset and lets users pick
+    # which active offset drives the on-canvas λ-hyperbolas + zone bands.
+    #
+    # .. deprecated:: figure-bundle refactor
+    #     New projects populate :attr:`figure_bundle_path` instead.
+    nacd_bundle_path: str = ""
 
     # Legend
     legend: LegendConfig = field(default_factory=LegendConfig)

@@ -35,6 +35,9 @@ from ..core.models import (
     NFLine,
     NFOffsetResult,
     NFLambdaLine,
+    NFZoneArrow,
+    NFZoneBand,
+    NFZoneSpan,
     OffsetCurve,
     SheetState,
     SpectrumData,
@@ -42,6 +45,61 @@ from ..core.models import (
     LegendConfig,
     TypographyConfig,
 )
+
+
+# Alias so the zone-layer serialisers can call ``_asdict`` without
+# shadowing the already-imported :func:`dataclasses.asdict`.
+_asdict = asdict
+
+
+def _zone_band_from_dict(d: Dict[str, Any]) -> NFZoneBand:
+    """Rebuild a :class:`NFZoneBand` from its serialised dict.
+
+    Missing keys fall back to the dataclass defaults so legacy sheets
+    (pre-Phase 2 of the NACD persistence fix) load cleanly.
+    """
+    if not isinstance(d, dict):
+        return NFZoneBand()
+    kwargs: Dict[str, Any] = {}
+    for f in (
+        "uid", "group_index", "zone_index", "axis", "visible",
+        "band_color", "band_alpha", "point_color", "label",
+        "label_visible", "label_fontsize", "label_position",
+        "label_row_offset", "label_color", "label_ha", "label_va",
+        "arrow_below_label", "arrow_below_gap", "arrow_below_color",
+        "arrow_below_linewidth",
+    ):
+        if f in d:
+            kwargs[f] = d[f]
+    return NFZoneBand(**kwargs)
+
+
+def _zone_arrow_from_dict(d: Dict[str, Any]) -> NFZoneArrow:
+    if not isinstance(d, dict):
+        return NFZoneArrow()
+    kwargs: Dict[str, Any] = {}
+    for f in (
+        "uid", "group_index", "zone_index", "axis", "enabled",
+        "visible", "color", "linewidth", "y_frac", "style", "text",
+        "text_y_offset", "text_fontsize",
+    ):
+        if f in d:
+            kwargs[f] = d[f]
+    return NFZoneArrow(**kwargs)
+
+
+def _zone_span_from_dict(d: Dict[str, Any]) -> NFZoneSpan:
+    if not isinstance(d, dict):
+        return NFZoneSpan()
+    kwargs: Dict[str, Any] = {}
+    for f in (
+        "uid", "group_index", "axis",
+        "extend_left_to_axis", "extend_right_to_axis",
+        "outer_left_nacd", "outer_right_nacd",
+    ):
+        if f in d:
+            kwargs[f] = d[f]
+    return NFZoneSpan(**kwargs)
 
 PROJECT_VERSION = 4
 
@@ -260,6 +318,18 @@ def _nf_analysis_to_dict(nf: NFAnalysis) -> Dict[str, Any]:
         "contaminated_edge_width": float(
             getattr(nf, "contaminated_edge_width", 0.5)
         ),
+        # Per-analysis zone layer overrides (request 2: sheet reload must
+        # restore all zone bands, arrows and span tweaks).  Primitive
+        # dataclass fields only, so dataclasses.asdict is safe.
+        "zone_bands": [
+            _asdict(b) for b in getattr(nf, "zone_bands", []) or []
+        ],
+        "zone_arrows": [
+            _asdict(a) for a in getattr(nf, "zone_arrows", []) or []
+        ],
+        "zone_spans": [
+            _asdict(s) for s in getattr(nf, "zone_spans", []) or []
+        ],
     }
 
 
@@ -298,6 +368,17 @@ def _dict_to_nf_analysis(d: Dict) -> NFAnalysis:
     )
     nf.per_offset = [_dict_to_nf_offset(x) for x in d.get("per_offset") or []]
     nf.lines = [_dict_to_nf_line(x) for x in d.get("lines") or []]
+    # Restore zone layer overrides.  Missing / legacy sheets simply load
+    # with empty lists, which keeps the pre-Phase-C fallback behaviour.
+    nf.zone_bands = [
+        _zone_band_from_dict(x) for x in d.get("zone_bands") or []
+    ]
+    nf.zone_arrows = [
+        _zone_arrow_from_dict(x) for x in d.get("zone_arrows") or []
+    ]
+    nf.zone_spans = [
+        _zone_span_from_dict(x) for x in d.get("zone_spans") or []
+    ]
     return nf
 
 
@@ -622,7 +703,13 @@ def _sheet_to_dict(sheet: SheetState) -> Dict[str, Any]:
         "canvas_dpi": sheet.canvas_dpi,
         "pkl_path": sheet.pkl_path,
         "npz_path": sheet.npz_path,
+        # Unified figure-bundle path (new canonical field). The two
+        # legacy entries below are kept in the written project so older
+        # Report Studio builds still open it, but from now on they
+        # mirror ``figure_bundle_path`` when it is set.
+        "figure_bundle_path": getattr(sheet, "figure_bundle_path", "") or "",
         "nf_sidecar_path": getattr(sheet, "nf_sidecar_path", "") or "",
+        "nacd_bundle_path": getattr(sheet, "nacd_bundle_path", "") or "",
         "legend": {
             "visible": sheet.legend.visible,
             "position": sheet.legend.position,
@@ -708,7 +795,19 @@ def _dict_to_sheet_skeleton(d: Dict) -> SheetState:
     sheet.canvas_dpi = d.get("canvas_dpi", 600)
     sheet.pkl_path = d.get("pkl_path", "")
     sheet.npz_path = d.get("npz_path", "")
+    # Migrate legacy fields when the new unified key is absent:
+    # pick whichever of the two legacy paths is non-empty (NACD-zone
+    # bundles also lived in ``nacd_bundle_path``, NF sidecars in
+    # ``nf_sidecar_path``). The resulting project then writes the new
+    # key on next save, so migration is a one-shot.
     sheet.nf_sidecar_path = d.get("nf_sidecar_path", "")
+    sheet.nacd_bundle_path = d.get("nacd_bundle_path", "")
+    sheet.figure_bundle_path = (
+        d.get("figure_bundle_path", "")
+        or sheet.nacd_bundle_path
+        or sheet.nf_sidecar_path
+        or ""
+    )
 
     leg_d = d.get("legend", {})
     sheet.legend = LegendConfig(
@@ -1121,7 +1220,9 @@ def save_sheet_manifest(
         "data_sources": {
             "pkl_path": sheet.pkl_path,
             "npz_path": sheet.npz_path,
+            "figure_bundle_path": getattr(sheet, "figure_bundle_path", "") or "",
             "nf_sidecar_path": getattr(sheet, "nf_sidecar_path", "") or "",
+            "nacd_bundle_path": getattr(sheet, "nacd_bundle_path", "") or "",
             "fingerprint": fp,
         },
         "settings": _sheet_to_dict(sheet),

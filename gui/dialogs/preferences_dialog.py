@@ -337,6 +337,50 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.robust_upper_spin.setValue(self.prefs.get("robust_upper_pct", 99.5))
         limits_layout.addRow("Upper percentile:", self.robust_upper_spin)
 
+        # Data-only autoscale policy -- keep k-guides / NF lines out of
+        # matplotlib's autoscale so the passive-mode y axis is driven
+        # purely by the visible dispersion data.
+        self.axis_exclude_kguides_check = QtWidgets.QCheckBox(
+            "Ignore k-limit curves when auto-scaling"
+        )
+        self.axis_exclude_kguides_check.setChecked(
+            bool(self.prefs.get("axis_exclude_kguides", True))
+        )
+        limits_layout.addRow(self.axis_exclude_kguides_check)
+
+        self.axis_exclude_nf_check = QtWidgets.QCheckBox(
+            "Ignore NACD / near-field guide lines when auto-scaling"
+        )
+        self.axis_exclude_nf_check.setChecked(
+            bool(self.prefs.get("axis_exclude_nf_lines", True))
+        )
+        limits_layout.addRow(self.axis_exclude_nf_check)
+
+        self.axis_pad_frac_spin = QtWidgets.QDoubleSpinBox()
+        self.axis_pad_frac_spin.setRange(0.0, 1.0)
+        self.axis_pad_frac_spin.setDecimals(2)
+        self.axis_pad_frac_spin.setSingleStep(0.01)
+        self.axis_pad_frac_spin.setValue(
+            float(self.prefs.get("axis_pad_frac", 0.08))
+        )
+        limits_layout.addRow("Padding fraction:", self.axis_pad_frac_spin)
+
+        self.axis_v_clamp_spin = QtWidgets.QDoubleSpinBox()
+        self.axis_v_clamp_spin.setRange(0.0, 100.0)
+        self.axis_v_clamp_spin.setDecimals(2)
+        self.axis_v_clamp_spin.setSingleStep(0.25)
+        self.axis_v_clamp_spin.setValue(
+            float(self.prefs.get("axis_v_outlier_clamp_mult", 2.5))
+        )
+        self.axis_v_clamp_spin.setToolTip(
+            "Clamp the top of the velocity axis to "
+            "(multiplier \u00D7 99.5-percentile of V). 0 disables."
+        )
+        limits_layout.addRow(
+            "V outlier clamp (\u00D7 p99.5, 0 = off):",
+            self.axis_v_clamp_spin,
+        )
+
         layout.addWidget(limits_group)
 
         # Frequency tick style
@@ -393,6 +437,16 @@ class PreferencesDialog(QtWidgets.QDialog):
         # Advanced
         prefs["robust_lower_pct"] = self.robust_lower_spin.value()
         prefs["robust_upper_pct"] = self.robust_upper_spin.value()
+        prefs["axis_exclude_kguides"] = (
+            self.axis_exclude_kguides_check.isChecked()
+        )
+        prefs["axis_exclude_nf_lines"] = (
+            self.axis_exclude_nf_check.isChecked()
+        )
+        prefs["axis_pad_frac"] = float(self.axis_pad_frac_spin.value())
+        prefs["axis_v_outlier_clamp_mult"] = float(
+            self.axis_v_clamp_spin.value()
+        )
         prefs["freq_tick_style"] = "decades" if self.tick_decades.isChecked() else "custom"
 
         # Performance

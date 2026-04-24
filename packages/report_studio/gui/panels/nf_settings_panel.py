@@ -40,7 +40,11 @@ class NFSettingsPanel(QtWidgets.QWidget):
         outer.addWidget(self._batch_banner)
 
         form_holder = QtWidgets.QWidget()
-        outer.addWidget(form_holder, 1)
+        # Do NOT give form_holder stretch=1 — that made the QFormLayout
+        # swallow all extra vertical space and pushed the Ranges table
+        # well below its section label.  A trailing stretch on the
+        # outer layout keeps the form compact at the top instead.
+        outer.addWidget(form_holder)
         layout = QtWidgets.QFormLayout(form_holder)
 
         self._le_legend_label = QtWidgets.QLineEdit()
@@ -114,6 +118,12 @@ class NFSettingsPanel(QtWidgets.QWidget):
         btn.setToolTip("Re-open Add Data with the same PKL to refresh NF from file.")
         btn.clicked.connect(self._on_recompute)
         layout.addRow(btn)
+
+        # Absorb any leftover vertical space so the form above stays
+        # packed at the top of the dock.  Without this, switching
+        # ``form_holder`` to stretch=0 would leave the panel sitting
+        # in the middle of an empty QScrollArea.
+        outer.addStretch(1)
 
     def current_nf_uid(self) -> str:
         return self._nf_uid

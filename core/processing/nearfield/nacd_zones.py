@@ -90,6 +90,29 @@ class ZoneThreshold:
 
 
 @dataclass
+class ZoneArrow:
+    """Optional double-headed arrow spanning a zone's band.
+
+    Rendered inside the zone's extent along the x-axis, at a fixed
+    fraction of the axes height (``y_frac``). The arrow is intended
+    to visually emphasise each zone's width (see the Zone I / Zone II
+    reference screenshot).
+
+    ``enabled`` defaults to ``False`` so v1 pickles render unchanged;
+    multi-zone specs created after v2 flip it on by default.
+    """
+
+    enabled: bool = False
+    color: str = "#C00000"
+    linewidth: float = 1.8
+    y_frac: float = 0.50  # axes-fraction y-coordinate
+    style: str = "<->"    # matplotlib arrowstyle spec
+    text: str = ""        # label drawn near the arrow (empty = use zone_label)
+    text_y_offset: float = -0.06  # axes-fraction offset from arrow y_frac
+    text_fontsize: int = 11
+
+
+@dataclass
 class ZoneFill:
     """Visual properties of one zone (band + scatter points)."""
 
@@ -97,6 +120,7 @@ class ZoneFill:
     band_alpha: float = 0.15
     point_color: str = ""
     zone_label: str = ""
+    arrow: ZoneArrow = field(default_factory=ZoneArrow)
 
 
 @dataclass
@@ -261,12 +285,57 @@ def _threshold_from_dict(d: dict) -> ZoneThreshold:
     )
 
 
+def _arrow_to_dict(a: ZoneArrow) -> dict:
+    return {
+        "enabled": bool(a.enabled),
+        "color": str(a.color or "#C00000"),
+        "linewidth": float(a.linewidth),
+        "y_frac": float(a.y_frac),
+        "style": str(a.style or "<->"),
+        "text": str(a.text or ""),
+        "text_y_offset": float(a.text_y_offset),
+        "text_fontsize": int(a.text_fontsize),
+    }
+
+
+def _arrow_from_dict(d: Optional[dict]) -> ZoneArrow:
+    if not isinstance(d, dict):
+        return ZoneArrow()
+    try:
+        lw = float(d.get("linewidth", 1.8))
+    except (TypeError, ValueError):
+        lw = 1.8
+    try:
+        yf = float(d.get("y_frac", 0.50))
+    except (TypeError, ValueError):
+        yf = 0.50
+    try:
+        dy = float(d.get("text_y_offset", -0.06))
+    except (TypeError, ValueError):
+        dy = -0.06
+    try:
+        fs = int(d.get("text_fontsize", 11))
+    except (TypeError, ValueError):
+        fs = 11
+    return ZoneArrow(
+        enabled=bool(d.get("enabled", False)),
+        color=str(d.get("color", "#C00000") or "#C00000"),
+        linewidth=lw,
+        y_frac=max(0.02, min(0.98, yf)),
+        style=str(d.get("style", "<->") or "<->"),
+        text=str(d.get("text", "") or ""),
+        text_y_offset=dy,
+        text_fontsize=fs,
+    )
+
+
 def _zone_to_dict(z: ZoneFill) -> dict:
     return {
         "band_color": str(z.band_color or ""),
         "band_alpha": float(z.band_alpha),
         "point_color": str(z.point_color or ""),
         "zone_label": str(z.zone_label or ""),
+        "arrow": _arrow_to_dict(z.arrow),
     }
 
 
@@ -280,6 +349,7 @@ def _zone_from_dict(d: dict) -> ZoneFill:
         band_alpha=max(0.0, min(1.0, alpha)),
         point_color=str(d.get("point_color", "") or ""),
         zone_label=str(d.get("zone_label", "") or ""),
+        arrow=_arrow_from_dict(d.get("arrow")),
     )
 
 
@@ -749,6 +819,7 @@ __all__ = [
     "LabelPosition",
     "ZoneThreshold",
     "ZoneFill",
+    "ZoneArrow",
     "ZoneGroup",
     "NACDZoneSpec",
     "ZoneBand",

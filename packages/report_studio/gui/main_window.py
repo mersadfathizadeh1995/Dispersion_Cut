@@ -160,6 +160,12 @@ class ReportStudioWindow(
         self.data_tree.nf_per_offset_selected.connect(
             self._on_nf_per_offset_selected
         )
+        self.data_tree.nf_zone_visibility_changed.connect(
+            self._on_nf_zone_visibility_changed
+        )
+        self.data_tree.nf_zone_selected.connect(
+            self._on_nf_zone_selected
+        )
         self.data_tree.legend_layer_selected.connect(
             self._on_legend_layer_selected
         )
@@ -206,6 +212,9 @@ class ReportStudioWindow(
         )
         self.right_panel.nf_per_offset_changed.connect(
             self._on_nf_per_offset_changed
+        )
+        self.right_panel.nf_zone_style_changed.connect(
+            self._on_nf_zone_style_changed
         )
         self.right_panel.aggregated_style_changed.connect(
             self._on_aggregated_style_changed
@@ -387,18 +396,35 @@ class ReportStudioWindow(
         if not plugin:
             return
 
+        # Unified figure-bundle path (new self-describing .pkl). When
+        # set, plugins prefer it over the legacy sidecar + zone-bundle
+        # aliases. The legacy getters still fire for backward compat
+        # with older projects that wrote the two separate fields.
+        figure_bundle_path = getattr(dlg, "figure_bundle_path", "") or ""
         sidecar_path = getattr(dlg, "nf_sidecar_path", "") or ""
+        bundle_path = getattr(dlg, "nacd_bundle_path", "") or ""
+        # The dialog's nacd_bundle_path shim returns figure_bundle_path
+        # when the bundle kind is nacd_zones, so the legacy arg still
+        # reaches the plugin unchanged during the migration window.
         result = plugin.load_data(
             pkl_path=dlg.pkl_path,
             npz_path=dlg.npz_path,
+            figure_bundle_path=figure_bundle_path,
             nf_sidecar_path=sidecar_path,
+            nacd_bundle_path=bundle_path,
+            bundle_path=bundle_path or figure_bundle_path,
             selected_offsets=dlg.selected_offsets,
             **dlg.plugin_kwargs,
         )
-        # Remember the sidecar path on the sheet so project save/load
-        # preserves the 3-file bundle (PKL + NPZ + NF sidecar).
+        # Persist the new unified path on the sheet so project
+        # save/load round-trips the figure file. The legacy fields
+        # stay in sync until F5 formally deprecates them.
+        if figure_bundle_path:
+            sheet.figure_bundle_path = figure_bundle_path
         if sidecar_path:
             sheet.nf_sidecar_path = sidecar_path
+        if bundle_path:
+            sheet.nacd_bundle_path = bundle_path
 
         curves = result.get("curves", [])
         spectra = result.get("spectra", [])

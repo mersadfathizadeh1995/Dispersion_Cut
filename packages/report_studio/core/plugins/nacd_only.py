@@ -49,6 +49,7 @@ class NacdOnlyPlugin:
         show_lambda_max: bool = True,
         show_user_range: bool = True,
         severity_overlay_mode: str = "scatter_on_top",
+        figure_bundle_path: str = "",
         nf_sidecar_path: str = "",
         **kwargs: Any,
     ) -> Dict[str, Any]:
@@ -60,7 +61,45 @@ class NacdOnlyPlugin:
         )
         from ...io.spectrum_reader import read_spectrum_npz
 
+        # ── Bundle-first path ──────────────────────────────────────
+        # When the caller supplied a self-describing NACD-Only bundle
+        # we skip the PKL/state/recompute pipeline entirely and
+        # reconstruct NFAnalysis straight from the bundle's per-offset
+        # records. The PKL + NPZ are still honoured for curves +
+        # spectrogram overlay because the figure also renders those
+        # layers — but the NACD severity + limit lines come from the
+        # bundle unchanged so the figure matches the exact DC Cut
+        # session that produced it.
+        bundle = None
+        if figure_bundle_path:
+            try:
+                from ...io.figure_bundle import read_any_bundle
+                bundle = read_any_bundle(figure_bundle_path)
+            except Exception:
+                bundle = None
+            if bundle is not None and bundle.get("_kind") != "dc_cut.nacd_only_figure":
+                # Wrong bundle type — defer to legacy path.
+                bundle = None
+
         if not pkl_path or not Path(pkl_path).exists():
+            # No legacy state PKL — if a bundle IS available we can
+            # still reconstruct the figure entirely from it.
+            if bundle is not None:
+                nf_list = self._nf_list_from_nacd_only_bundle(
+                    bundle,
+                    layout=layout,
+                    selected_offsets=selected_offsets,
+                    severity_palette=severity_palette,
+                    show_lambda_max=show_lambda_max,
+                    show_user_range=show_user_range,
+                    severity_overlay_mode=severity_overlay_mode,
+                )
+                return {
+                    "curves": [],
+                    "spectra": [],
+                    "nf_analyses": nf_list,
+                    "layout": layout,
+                }
             return {"curves": [], "spectra": [], "nf_analyses": [], "layout": layout}
 
         with open(pkl_path, "rb") as fh:
@@ -87,14 +126,27 @@ class NacdOnlyPlugin:
                 spectra = []
 
         nf_list: List[NFAnalysis] = []
-        nf = read_nf_analysis(state)
-        if nf is not None:
-            if selected_offsets is not None:
-                sel = set(selected_offsets)
-                nf.per_offset = [r for r in nf.per_offset if r.label in sel]
-            nf_list = split_nf_per_offset(nf, curves=curves)
+        if bundle is not None:
+            # Bundle supplies every per-offset NACD record already —
+            # no recompute, no sidecar merge, no PKL-embedded NF read.
+            nf_list = self._nf_list_from_nacd_only_bundle(
+                bundle,
+                layout=layout,
+                selected_offsets=selected_offsets,
+                severity_palette=severity_palette,
+                show_lambda_max=show_lambda_max,
+                show_user_range=show_user_range,
+                severity_overlay_mode=severity_overlay_mode,
+            )
+        else:
+            nf = read_nf_analysis(state)
+            if nf is not None:
+                if selected_offsets is not None:
+                    sel = set(selected_offsets)
+                    nf.per_offset = [r for r in nf.per_offset if r.label in sel]
+                nf_list = split_nf_per_offset(nf, curves=curves)
 
-        if not nf_list and recompute_if_missing:
+        if not nf_list and recompute_if_missing and bundle is None:
             nf_list = self._recompute_nf_list(
                 curves,
                 state=state,
@@ -364,6 +416,121 @@ class NacdOnlyPlugin:
                 )
             )
         return analyses
+
+    # ------------------------------------------------------------------
+    #  Bundle → NFAnalysis reconstruction (no recompute path)
+    # ------------------------------------------------------------------
+    def _nf_list_from_nacd_only_bundle(
+        self,
+        bundle: Dict[str, Any],
+        *,
+        layout: str,
+        selected_offsets: Optional[List[str]],
+        severity_palette: Optional[dict],
+        show_lambda_max: bool,
+        show_user_range: bool,
+        severity_overlay_mode: str,
+    ) -> List[NFAnalysis]:
+        """Build one :class:`NFAnalysis` per offset from a NACD-Only bundle.
+
+        The bundle's offset records already carry every array the
+        figure needs (frequency, velocity, NACD, contamination mask,
+        derived limit lines). We simply materialise them as model
+        objects so downstream rendering is identical to a PKL load.
+        """
+        sel = set(selected_offsets) if selected_offsets is not None else None
+        settings = dict(bundle.get("settings") or {})
+        result: List[NFAnalysis] = []
+
+        for off in list(bundle.get("offsets") or []):
+            lbl = str(off.get("label", ""))
+            if sel is not None and lbl not in sel:
+                continue
+            so = off.get("source_offset")
+            try:
+                so_f = float(so) if so is not None else None
+            except (TypeError, ValueError):
+                so_f = None
+
+            f_arr = np.asarray(off.get("frequency", []) or [], dtype=float)
+            v_arr = np.asarray(off.get("velocity", []) or [], dtype=float)
+            nacd_arr = np.asarray(off.get("nacd", []) or [], dtype=float)
+            mask = np.asarray(
+                off.get("mask_contaminated", []) or [], dtype=bool
+            )
+            if mask.shape != f_arr.shape:
+                mask = np.zeros_like(f_arr, dtype=bool)
+
+            lam_max = float(off.get("lambda_max", 0.0) or 0.0)
+            x_bar = float(off.get("x_bar", 0.0) or 0.0)
+
+            per = NFOffsetResult(
+                label=lbl,
+                offset_index=0,
+                source_offset=so_f,
+                x_bar=x_bar,
+                lambda_max=lam_max,
+                f=f_arr,
+                v=v_arr,
+                nacd=nacd_arr,
+                mask_contaminated=mask,
+                in_range=np.ones_like(f_arr, dtype=bool),
+                n_total=int(f_arr.size),
+                n_clean=int(f_arr.size - int(mask.sum())),
+                n_contaminated=int(mask.sum()),
+            )
+
+            lines: List[NFLine] = []
+            for ln in list(off.get("derived_lines") or []):
+                kind = str(ln.get("kind", ""))
+                if kind not in ("lambda", "freq"):
+                    continue
+                try:
+                    val = float(ln.get("value", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if val <= 0:
+                    continue
+                role = str(ln.get("role", ""))
+                lines.append(NFLine(
+                    band_index=int(ln.get("band_index", 0) or 0),
+                    kind=kind,
+                    role=role,
+                    value=val,
+                    source=str(ln.get("source", "derived")),
+                    valid=bool(ln.get("valid", True)),
+                    derived_from=ln.get("derived_from"),
+                    color=str(ln.get("color", "") or "#000000"),
+                    visible=bool(ln.get("visible", True)),
+                    custom_label=str(ln.get("custom_label", "") or ""),
+                    source_offset=so_f,
+                    offset_label=lbl,
+                    display_label=(
+                        f"λ / {role} = {val:g} m" if kind == "lambda"
+                        else f"f / {role} = {val:g} Hz"
+                    ),
+                ))
+
+            analysis = NFAnalysis(
+                uid="",
+                mode="nacd",
+                name="NACD-Only",
+                layout=layout,
+                per_offset=[per],
+                lines=lines,
+                show_lambda_max=show_lambda_max,
+                show_user_range=show_user_range,
+                severity_overlay_mode=severity_overlay_mode,
+                settings=dict(settings),
+                source_offset=so_f,
+                offset_label=lbl,
+            )
+            if severity_palette:
+                analysis.severity_palette = {
+                    **analysis.severity_palette, **severity_palette
+                }
+            result.append(analysis)
+        return result
 
     def settings_fields(self) -> List[Dict[str, Any]]:
         return [

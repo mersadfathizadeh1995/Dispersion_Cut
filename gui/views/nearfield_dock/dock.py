@@ -61,32 +61,53 @@ class NearFieldEvalDock(QtWidgets.QDockWidget):
         root.setSpacing(2)
 
         save_row = QtWidgets.QHBoxLayout()
+
+        # ── Session state group (left) ─────────────────────────────
         self._btn_save_nf = QtWidgets.QPushButton("Save NF to PKL")
         self._btn_save_nf.setToolTip(
-            "Write current session state (including NACD results and λ lines) to the .pkl file."
+            "Write current session state (NACD results + λ lines) to the .pkl."
         )
         self._btn_save_nf.clicked.connect(self._save_nf_to_current_pkl)
-        save_menu_btn = QtWidgets.QToolButton()
-        save_menu_btn.setText("▾")
-        save_menu_btn.setToolTip("More save options")
-        _menu = QtWidgets.QMenu(save_menu_btn)
-        _act_save_as = _menu.addAction("Save As…")
+        state_menu_btn = QtWidgets.QToolButton()
+        state_menu_btn.setText("▾")
+        state_menu_btn.setToolTip("Session-state options")
+        _state_menu = QtWidgets.QMenu(state_menu_btn)
+        _act_save_as = _state_menu.addAction("Save As…")
         _act_save_as.triggered.connect(self._save_nf_as_pkl)
-        _act_export_sidecar = _menu.addAction("Export NF for Report Studio…")
-        _act_export_sidecar.setToolTip(
-            "Write an NF evaluation sidecar JSON (third file in the\n"
-            "Report Studio 3-file bundle: PKL + NPZ + sidecar)."
-        )
-        _act_export_sidecar.triggered.connect(self._export_nf_sidecar)
-        save_menu_btn.setMenu(_menu)
+        state_menu_btn.setMenu(_state_menu)
         try:
-            save_menu_btn.setPopupMode(
+            state_menu_btn.setPopupMode(
                 QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
             )
         except AttributeError:
-            save_menu_btn.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+            state_menu_btn.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+
+        # ── Figure exports group (right) ───────────────────────────
+        # "Save Figure ▾" is populated from FIGURE_BUNDLE_REGISTRY so
+        # new figure types automatically show up without editing the
+        # dock — each produces a single, self-describing .pkl that
+        # Report Studio can open through its "Figure file" row.
+        fig_menu_btn = QtWidgets.QToolButton()
+        fig_menu_btn.setText("Save Figure ▾")
+        fig_menu_btn.setToolTip(
+            "Export a standalone figure bundle (.pkl) for Report Studio.\n"
+            "One file per figure type — pick the matching one when\n"
+            "adding data in Report Studio."
+        )
+        self._fig_menu = QtWidgets.QMenu(fig_menu_btn)
+        self._rebuild_figure_save_menu()
+        fig_menu_btn.setMenu(self._fig_menu)
+        try:
+            fig_menu_btn.setPopupMode(
+                QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
+            )
+        except AttributeError:
+            fig_menu_btn.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+
         save_row.addWidget(self._btn_save_nf)
-        save_row.addWidget(save_menu_btn)
+        save_row.addWidget(state_menu_btn)
+        save_row.addSpacing(12)
+        save_row.addWidget(fig_menu_btn)
         save_row.addStretch()
         root.addLayout(save_row)
 
@@ -201,6 +222,25 @@ class NearFieldEvalDock(QtWidgets.QDockWidget):
             "per_offset": [self._nf_offset_to_dict(r) for r in results],
             "derived_lines": self._derived_limit_to_dict(derived_set),
         }
+        # Multi-zone mode caches a DerivedLimitSet per evaluated
+        # offset on the NACD tab. Mirror that into the saved
+        # payload so the standalone NACD-zone bundle export and
+        # Report Studio plugin can reconstruct every offset's lines.
+        try:
+            per_off = getattr(tab, "_per_offset_derived", None) or {}
+            if per_off:
+                payload["per_offset_derived"] = [
+                    {
+                        "label": lbl,
+                        "x_bar": float(entry["x_bar"]),
+                        "derived_lines": self._derived_limit_to_dict(
+                            entry["derived"]
+                        ),
+                    }
+                    for lbl, entry in per_off.items()
+                ]
+        except Exception:
+            pass
         self.c._nf_results = payload
         self.c._nf_settings = settings
         self.c._nf_dirty = True
@@ -285,9 +325,119 @@ class NearFieldEvalDock(QtWidgets.QDockWidget):
         except Exception:
             return {}
 
+    # ----------------------------------------------------------------
+    #  Figure-bundle export (registry-driven)
+    # ----------------------------------------------------------------
+    def _rebuild_figure_save_menu(self) -> None:
+        """Populate the "Save Figure ▾" menu from the bundle registry.
+
+        Called once from ``__init__``; safe to call again after the
+        registry is mutated (e.g. a plugin registers a new figure).
+        """
+        from dc_cut.packages.report_studio.io.figure_bundle import all_specs
+
+        self._fig_menu.clear()
+        specs = all_specs()
+        if not specs:
+            act = self._fig_menu.addAction("(no figure types registered)")
+            act.setEnabled(False)
+            return
+        for spec in specs:
+            act = self._fig_menu.addAction(f"{spec.display_name}…")
+            act.setToolTip(
+                f"Export a '{spec.display_name}' bundle — a single "
+                f".pkl that Report Studio opens as one figure."
+            )
+            # Default-arg closure captures the current spec.
+            act.triggered.connect(
+                lambda _checked=False, tid=spec.type_id:
+                    self._export_figure_bundle(tid)
+            )
+
+    def _export_figure_bundle(self, type_id: str) -> None:
+        """Prompt for a path and write a figure bundle of ``type_id``."""
+        from dc_cut.packages.report_studio.io.figure_bundle import get_spec
+
+        spec = get_spec(type_id)
+        if spec is None or spec.builder_fn is None:
+            QtWidgets.QMessageBox.warning(
+                self._save_nf_parent_widget(),
+                "Save Figure",
+                f"Unknown figure type: {type_id}",
+            )
+            return
+
+        nf_results = getattr(self.c, "_nf_results", None)
+        nf_settings = getattr(self.c, "_nf_settings", None) or {}
+        if not nf_results:
+            QtWidgets.QMessageBox.information(
+                self._save_nf_parent_widget(),
+                spec.display_name,
+                "Run an NF evaluation first; there are no results to export.",
+            )
+            return
+
+        # Per-type preconditions.
+        if type_id == "nacd_zones" and not nf_settings.get("nacd_zone_spec"):
+            QtWidgets.QMessageBox.information(
+                self._save_nf_parent_widget(),
+                spec.display_name,
+                "The last run used the classic single-threshold view.\n"
+                "Switch to \"Multi-zone (one group)\" or "
+                "\"Multi-zone groups\" and Run before exporting.",
+            )
+            return
+
+        src_pkl = getattr(self.c, "_loaded_state_path", "") or ""
+        spectrum_npz = getattr(self.c, "_loaded_spectrum_path", "") or ""
+
+        from dc_cut.packages.report_studio.io.figure_bundle import default_bundle_path
+        default_path = default_bundle_path(src_pkl, spec.default_suffix)
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self._save_nf_parent_widget(),
+            spec.display_name,
+            default_path,
+            "Pickle (*.pkl);;All Files (*.*)",
+        )
+        if not path:
+            return
+
+        # Builder signature: type-specific kwargs. We pass every kwarg
+        # any builder might need; builders accept **the ones they use**
+        # and ignore extras via explicit keyword filtering above.
+        builder_kwargs: dict = dict(
+            nf_results=nf_results,
+            nf_settings=nf_settings,
+            state_pkl=src_pkl,
+            spectrum_npz=spectrum_npz,
+            limit_lines_ui=self._limit_lines_ui_snapshot() or None,
+        )
+        if type_id == "nacd_zones":
+            builder_kwargs["zone_spec"] = nf_settings.get("nacd_zone_spec")
+
+        try:
+            bundle = spec.builder_fn(**builder_kwargs)
+            spec.writer_fn(path, bundle)
+            n_off = len(bundle.get("offsets", []))
+            QtWidgets.QMessageBox.information(
+                self._save_nf_parent_widget(),
+                spec.display_name,
+                f"Wrote {spec.display_name.lower()} ({n_off} offset(s)) →\n{path}",
+            )
+        except Exception as e:  # pragma: no cover — defensive UI path
+            QtWidgets.QMessageBox.critical(
+                self._save_nf_parent_widget(),
+                spec.display_name,
+                f"Failed to export:\n{e}",
+            )
+
+    # ----------------------------------------------------------------
+    #  Legacy sidecar export (still reachable via public API, hidden
+    #  from the main menu; kept so tests + older scripts keep working)
+    # ----------------------------------------------------------------
     def _export_nf_sidecar(self) -> None:
-        """Write a Report Studio NF evaluation sidecar JSON."""
-        from packages.report_studio.io.nf_sidecar import (
+        """Write a Report Studio NF evaluation sidecar JSON (legacy)."""
+        from dc_cut.packages.report_studio.io.nf_sidecar import (
             build_sidecar,
             default_sidecar_path_for,
             write_sidecar,
@@ -333,6 +483,10 @@ class NearFieldEvalDock(QtWidgets.QDockWidget):
                 "Export NF for Report Studio",
                 f"Failed to export:\n{e}",
             )
+
+    def _export_nacd_zone_bundle(self) -> None:
+        """Legacy entry point — now delegates to the registry dispatcher."""
+        self._export_figure_bundle("nacd_zones")
 
     # ================================================================
     #  Dock-level operations (used by tabs + external callers)

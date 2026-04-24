@@ -41,6 +41,7 @@ from dc_cut.gui.widgets.nf_limit_lines import (
 )
 from dc_cut.gui.widgets.nf_zone_bands import (
     clear_nf_zone_artists,
+    draw_zone_arrows,
     draw_zone_bands,
     draw_zone_labels,
 )
@@ -70,6 +71,13 @@ class NacdTab(QtWidgets.QWidget):
         self._last_x_bar: float = 0.0
         self._last_f_rep: Optional[np.ndarray] = None
         self._last_v_rep: Optional[np.ndarray] = None
+        # Per-offset cache populated by run() in multi-zone mode:
+        # ``{label: {"x_bar": float, "f": np.ndarray, "v": np.ndarray,
+        # "derived": DerivedLimitSet}}``. ``_active_label`` tracks
+        # which entry currently drives the canvas; swapped by
+        # :meth:`_set_active_offset`.
+        self._per_offset_derived: dict = {}
+        self._active_label: str = ""
         self._limits_wired: bool = False
         self._build()
 
@@ -536,29 +544,34 @@ class NacdTab(QtWidgets.QWidget):
                     derived, hide_freq_by_default=True,
                 )
         else:
-            # Multi-zone / multi-group: build the DerivedLimitSet from
-            # the spec using a representative x_bar and V(f) curve
-            # (use the first evaluated offset as representative).
-            first = results[0]
-            x_bar_rep = float(first["x_bar"])
-            f_rep = np.asarray(first["f"], float)
-            v_rep = np.asarray(first["v"], float)
-            derived = spec_to_derived_limit_set(
-                spec, x_bar_rep, f_rep, v_rep,
-            )
-            dock._limits.rebuild_tree_with_set(
-                derived, hide_freq_by_default=False,
-            )
+            # Multi-zone / multi-group: build a DerivedLimitSet **per
+            # selected offset**. Cache them all so the canvas can be
+            # swapped via _set_active_offset() when the Results-tab
+            # inspector dropdown changes; only the active offset is
+            # painted at any time.
+            self._per_offset_derived = {}
+            for r in results:
+                lbl = r["label"]
+                x_bar_i = float(r["x_bar"])
+                f_i = np.asarray(r["f"], float)
+                v_i = np.asarray(r["v"], float)
+                derived_i = spec_to_derived_limit_set(
+                    spec, x_bar_i, f_i, v_i,
+                )
+                self._per_offset_derived[lbl] = {
+                    "x_bar": x_bar_i,
+                    "f": f_i,
+                    "v": v_i,
+                    "derived": derived_i,
+                }
 
-            # Cache enough to re-render zone bands / labels on
-            # subsequent Limit Lines tree edits without re-running.
+            # Pick the first offset as the initially-active one. The
+            # Results-tab inspector dropdown will swap through
+            # _set_active_offset().
             self._last_spec = spec
-            self._last_x_bar = x_bar_rep
-            self._last_f_rep = f_rep
-            self._last_v_rep = v_rep
             self._ensure_limits_wired()
-
-            self._redraw_zone_overlays()
+            first_label = results[0]["label"]
+            self._set_active_offset(first_label)
 
         dock._last_batch = results
         dock._overlay_offsets = selected
@@ -654,6 +667,32 @@ class NacdTab(QtWidgets.QWidget):
             colors[(gi, zi)] = str(col)
         return visible, colors
 
+    def _set_active_offset(self, label: str) -> None:
+        """Swap the canvas + Limit Lines tree to the given offset.
+
+        The multi-zone branch of :meth:`run` populates
+        :attr:`_per_offset_derived` with one DerivedLimitSet per
+        evaluated offset. This method picks one of those entries,
+        rebuilds the Limit Lines tree from it, and re-renders zone
+        bands using that offset's representative ``x_bar`` / V(f).
+        Quietly no-ops when the label is unknown so the inspector
+        dropdown can call this for every selection without guarding.
+        """
+        entry = self._per_offset_derived.get(label)
+        if entry is None:
+            return
+        self._active_label = label
+        self._last_x_bar = float(entry["x_bar"])
+        self._last_f_rep = entry["f"]
+        self._last_v_rep = entry["v"]
+        try:
+            self.dock._limits.rebuild_tree_with_set(
+                entry["derived"], hide_freq_by_default=False,
+            )
+        except Exception:
+            pass
+        self._redraw_zone_overlays()
+
     def _redraw_zone_overlays(self) -> None:
         """Paint zone bands + labels from the cached spec + tree state.
 
@@ -695,6 +734,12 @@ class NacdTab(QtWidgets.QWidget):
             draw_zone_labels(
                 dock.c.ax_freq, dock.c.ax_wave, bands,
                 visible_keys=visible, color_overrides=colors,
+            )
+        )
+        dock._nf_zone_artists.extend(
+            draw_zone_arrows(
+                dock.c.ax_freq, dock.c.ax_wave, spec, bands,
+                visible_keys=visible,
             )
         )
         try:

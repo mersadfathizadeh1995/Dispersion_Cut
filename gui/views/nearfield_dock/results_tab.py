@@ -141,8 +141,14 @@ class ResultsTab(QtWidgets.QWidget):
         # the trailing stretch absorbs the leftover space.
         layout.addWidget(inspect_sec, stretch=10)
 
-        # ── Export ──
-        export_sec = CollapsibleSection("Export", initially_expanded=False)
+        # ── Numeric exports ──
+        # Collapsed by default; visually distinct from the dock-level
+        # "Save Figure ▾" menu that handles Report-Studio figure bundles.
+        # These buttons emit raw tabular / array data (CSV/JSON/NPZ) for
+        # downstream analysis, **not** a loadable figure file.
+        export_sec = CollapsibleSection(
+            "Numeric exports (CSV / JSON / NPZ)", initially_expanded=False,
+        )
         export_row = QtWidgets.QHBoxLayout()
         csv_btn = QtWidgets.QPushButton("Export CSV")
         csv_btn.clicked.connect(lambda: self.on_export("csv"))
@@ -224,6 +230,19 @@ class ResultsTab(QtWidgets.QWidget):
             else dock._reference_tab.nacd_thr.value()
         )
         label = self.inspect_combo.currentText()
+
+        # Multi-zone NACD: swap the Limit Lines tree + zone overlays
+        # to this offset's per-offset DerivedLimitSet so the canvas
+        # always reflects the offset the user is inspecting.
+        try:
+            tab = dock._nacd_tab
+            if (
+                dock._last_mode == "nacd"
+                and getattr(tab, "_per_offset_derived", None)
+            ):
+                tab._set_active_offset(label)
+        except Exception:
+            pass
 
         dock.eval.start_with(label, thr)
         self.populate_points_table()

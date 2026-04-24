@@ -49,6 +49,8 @@ _TYPE_AGG_SHADOW = "agg_shadow"
 _TYPE_NF_ANALYSIS = "nf_analysis"
 _TYPE_NF_GUIDE = "nf_guide_line"
 _TYPE_NF_PER_OFFSET = "nf_per_offset"
+_TYPE_NF_ZONE_BAND = "nf_zone_band"
+_TYPE_NF_ZONE_ARROW = "nf_zone_arrow"
 _TYPE_LAMBDA_LINE = "lambda_line"
 _TYPE_LEGEND = "legend"
 
@@ -61,6 +63,11 @@ _NF_OFFSET_INDEX_ROLE = UserRole + 7
 _NF_KIND_ROLE = UserRole + 8
 _NF_ROLE_ROLE = UserRole + 9
 _NF_LAMBDA_MAX_CURVE_ROLE = UserRole + 10
+# Per-zone band / arrow identification (Phase C).  ZONE_UID stores
+# the NFZoneBand/NFZoneArrow uid; ZONE_KIND stores "band" or
+# "arrow" to disambiguate when a single handler receives either.
+_NF_ZONE_UID_ROLE = UserRole + 11
+_NF_ZONE_KIND_ROLE = UserRole + 12
 
 
 class _DragTreeWidget(QtWidgets.QTreeWidget):
@@ -191,6 +198,12 @@ class DataTreePanel(QtWidgets.QWidget):
     nf_layer_visibility_changed = Signal(str, bool)
     nf_per_offset_visibility_changed = Signal(str, int, bool)
     nf_per_offset_selected = Signal(str, int)
+    # Per-zone band / arrow layer signals (Phase C).  Emit
+    # (nf_uid, kind, zone_uid, visible) where ``kind`` ∈ {"band",
+    # "arrow"}.  The selection variant omits ``visible`` so the
+    # right-hand panel can show a style editor.
+    nf_zone_visibility_changed = Signal(str, str, str, bool)
+    nf_zone_selected = Signal(str, str, str)
     legend_layer_selected = Signal(str)            # subplot_key
     legend_visibility_changed = Signal(str, bool)  # (subplot_key, visible)
     legends_selected = Signal(list)                # list[str] subplot_keys
@@ -557,6 +570,81 @@ class DataTreePanel(QtWidgets.QWidget):
                 )
                 stats.setForeground(0, QtGui.QColor("#555555"))
                 nf_item.addChild(stats)
+
+            # ── Zones (Phase C) ───────────────────────────────────
+            # One collapsible "Zones" group per NFAnalysis holding
+            # per-zone band + arrow rows.  Each row is checkable so
+            # users can toggle individual layers without re-opening
+            # DC Cut, and carries a colour swatch icon for quick
+            # visual orientation.  Bands and arrows are grouped by
+            # axis so freq / λ subplots read consistently.
+            zone_bands = list(getattr(nf, "zone_bands", None) or [])
+            zone_arrows = list(getattr(nf, "zone_arrows", None) or [])
+            if zone_bands or zone_arrows:
+                zones_root = QtWidgets.QTreeWidgetItem(["Zones"])
+                zones_root.setData(0, _ITEM_TYPE_ROLE, _TYPE_INFO)
+                zones_root.setData(0, _UID_ROLE, nf.uid)
+                zones_root.setFlags(ItemIsEnabled | ItemIsSelectable)
+
+                # Stable ordering: axis → group → zone
+                def _zsort(o):
+                    return (
+                        str(getattr(o, "axis", "")),
+                        int(getattr(o, "group_index", 0)),
+                        int(getattr(o, "zone_index", 0)),
+                    )
+
+                for zb in sorted(zone_bands, key=_zsort):
+                    label = (zb.label or f"Zone {zb.zone_index + 1}").strip()
+                    text = f"{label}  [{zb.axis} band]"
+                    zi = QtWidgets.QTreeWidgetItem([text])
+                    zi.setData(0, _ITEM_TYPE_ROLE, _TYPE_NF_ZONE_BAND)
+                    zi.setData(0, _UID_ROLE, nf.uid)
+                    zi.setData(0, _NF_ZONE_UID_ROLE, zb.uid)
+                    zi.setData(0, _NF_ZONE_KIND_ROLE, "band")
+                    zi.setFlags(
+                        ItemIsEnabled | ItemIsSelectable
+                        | ItemIsUserCheckable
+                    )
+                    zi.setCheckState(
+                        0, Checked if bool(zb.visible) else Unchecked
+                    )
+                    if zb.band_color:
+                        px = QtGui.QPixmap(12, 12)
+                        px.fill(QtGui.QColor(zb.band_color))
+                        zi.setIcon(0, QtGui.QIcon(px))
+                    zones_root.addChild(zi)
+
+                for za in sorted(zone_arrows, key=_zsort):
+                    # Hide arrows that are not configured to render at
+                    # all (enabled=False and no user override yet) —
+                    # they would just clutter the tree.  Users can
+                    # still re-enable from the style panel.
+                    if not bool(za.enabled):
+                        continue
+                    text = f"Zone {za.zone_index + 1} ↔  [{za.axis} arrow]"
+                    zi = QtWidgets.QTreeWidgetItem([text])
+                    zi.setData(0, _ITEM_TYPE_ROLE, _TYPE_NF_ZONE_ARROW)
+                    zi.setData(0, _UID_ROLE, nf.uid)
+                    zi.setData(0, _NF_ZONE_UID_ROLE, za.uid)
+                    zi.setData(0, _NF_ZONE_KIND_ROLE, "arrow")
+                    zi.setFlags(
+                        ItemIsEnabled | ItemIsSelectable
+                        | ItemIsUserCheckable
+                    )
+                    zi.setCheckState(
+                        0, Checked if bool(za.visible) else Unchecked
+                    )
+                    if za.color:
+                        px = QtGui.QPixmap(12, 12)
+                        px.fill(QtGui.QColor(za.color))
+                        zi.setIcon(0, QtGui.QIcon(px))
+                    zones_root.addChild(zi)
+
+                if zones_root.childCount() > 0:
+                    nf_item.addChild(zones_root)
+                    zones_root.setExpanded(False)
+
             sp_item.addChild(nf_item)
             nf_item.setExpanded(True)
 
@@ -761,6 +849,15 @@ class DataTreePanel(QtWidgets.QWidget):
             offset_idx = item.data(0, _NF_OFFSET_INDEX_ROLE)
             if offset_idx is not None:
                 self.nf_per_offset_selected.emit(uid, int(offset_idx))
+        elif item_type in (_TYPE_NF_ZONE_BAND, _TYPE_NF_ZONE_ARROW) and uid:
+            zone_uid = item.data(0, _NF_ZONE_UID_ROLE)
+            kind = item.data(0, _NF_ZONE_KIND_ROLE) or (
+                "band" if item_type == _TYPE_NF_ZONE_BAND else "arrow"
+            )
+            if zone_uid:
+                self.nf_zone_selected.emit(
+                    str(uid), str(kind), str(zone_uid)
+                )
         elif item_type == _TYPE_LAMBDA_LINE and uid:
             lam_uid = item.data(0, _LAMBDA_UID_ROLE)
             if lam_uid:
@@ -909,6 +1006,17 @@ class DataTreePanel(QtWidgets.QWidget):
             if offset_idx is not None:
                 self.nf_per_offset_visibility_changed.emit(
                     uid, int(offset_idx), checked
+                )
+
+        elif item_type in (_TYPE_NF_ZONE_BAND, _TYPE_NF_ZONE_ARROW) and uid:
+            zone_uid = item.data(0, _NF_ZONE_UID_ROLE)
+            kind = item.data(0, _NF_ZONE_KIND_ROLE) or (
+                "band" if item_type == _TYPE_NF_ZONE_BAND else "arrow"
+            )
+            checked = item.checkState(0) == Checked
+            if zone_uid:
+                self.nf_zone_visibility_changed.emit(
+                    str(uid), str(kind), str(zone_uid), bool(checked)
                 )
 
     def _on_add_clicked(self):

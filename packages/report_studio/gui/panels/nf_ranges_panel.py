@@ -46,13 +46,22 @@ class NFRangesPanel(QtWidgets.QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(4)
 
-        outer.addWidget(
-            QtWidgets.QLabel("Ranges (empty = full curve) — Apply to re-derive lines:")
+        # Compact hint (previous verbose label left a huge blank area
+        # inside the collapsible section — fold it into tooltips instead).
+        self.setToolTip(
+            "Ranges (empty = full curve). Apply to re-derive lines."
         )
 
         self._table = QtWidgets.QTableWidget(0, 3)
         self._table.setHorizontalHeaderLabels(["Kind", "Min", "Max"])
-        self._table.setMaximumHeight(160)
+        # Size the table to its contents instead of capping at a fixed
+        # height; an empty table then collapses to just the header row
+        # and there is no wasted vertical gap inside the section.
+        self._table.setSizePolicy(
+            QtWidgets.QSizePolicy.Preferred,
+            QtWidgets.QSizePolicy.Preferred,
+        )
+        self._table.setMinimumHeight(60)
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(0, _Interactive)
         hdr.setSectionResizeMode(1, _Stretch)

@@ -224,6 +224,114 @@ def draw_zone_labels(
 # ───────────────────────────────────────────────────────────────────
 
 
+def draw_zone_arrows(
+    ax_freq: Axes,
+    ax_wave: Axes,
+    spec,
+    bands: Sequence,
+    *,
+    visible_keys: Optional[Dict[ZoneKey, bool]] = None,
+) -> List:
+    """Draw per-zone double-headed boundary arrows (e.g. Zone I / II).
+
+    Each band looks up its ``ZoneFill.arrow`` on the source spec; when
+    ``arrow.enabled`` is True, a :class:`FancyArrowPatch` is drawn on
+    the corresponding axes (``axis="freq"`` → ``ax_freq``, else
+    ``ax_wave``) spanning ``[lo, hi]`` in data-x at ``arrow.y_frac``
+    in axes-y (blended transform).  Optional centred text label is
+    rendered at ``y_frac + text_y_offset``.
+    """
+    artists: List = []
+    if spec is None or not bands:
+        return artists
+    try:
+        from matplotlib.patches import FancyArrowPatch
+        from matplotlib.transforms import blended_transform_factory
+    except Exception:
+        return artists
+    groups = list(getattr(spec, "groups", None) or [])
+    if not groups:
+        return artists
+    vis = visible_keys or {}
+    drawn: set = set()
+    for b in bands:
+        gi = int(getattr(b, "group_index", 0))
+        zi = int(getattr(b, "zone_index", 0))
+        if not vis.get((gi, zi), True):
+            continue
+        axis = getattr(b, "axis", "lambda")
+        dedup = (gi, zi, axis)
+        if dedup in drawn:
+            continue
+        drawn.add(dedup)
+        if gi < 0 or gi >= len(groups):
+            continue
+        g = groups[gi]
+        g_norm = g.normalised() if hasattr(g, "normalised") else g
+        zones = list(getattr(g_norm, "zones", None) or [])
+        if zi < 0 or zi >= len(zones):
+            continue
+        z = zones[zi]
+        arrow = getattr(z, "arrow", None)
+        if arrow is None or not bool(getattr(arrow, "enabled", False)):
+            continue
+        lo = float(getattr(b, "lo", 0.0))
+        hi = float(getattr(b, "hi", 0.0))
+        if not np.isfinite(hi) or hi <= lo:
+            continue
+        ax = ax_freq if axis == "freq" else ax_wave
+        try:
+            trans = blended_transform_factory(ax.transData, ax.transAxes)
+        except Exception:
+            continue
+        y_frac = float(getattr(arrow, "y_frac", 0.5))
+        color = str(getattr(arrow, "color", "") or "#C00000")
+        lw = float(getattr(arrow, "linewidth", 1.8) or 1.8)
+        style = str(getattr(arrow, "style", "<->") or "<->")
+        try:
+            patch = FancyArrowPatch(
+                (lo, y_frac), (hi, y_frac),
+                transform=trans,
+                arrowstyle=style,
+                color=color,
+                linewidth=lw,
+                mutation_scale=14,
+                shrinkA=0, shrinkB=0,
+                zorder=10,
+                clip_on=True,
+                label="_nf_zone_arrow",
+            )
+            ax.add_patch(patch)
+            artists.append(patch)
+        except Exception:
+            continue
+        text = str(getattr(arrow, "text", "") or "")
+        if text:
+            ty = y_frac + float(getattr(arrow, "text_y_offset", -0.06) or 0.0)
+            fs = float(getattr(arrow, "text_fontsize", 11) or 11)
+            x_mid = 0.5 * (lo + hi)
+            try:
+                txt = ax.text(
+                    x_mid, ty, text,
+                    transform=trans,
+                    ha="center", va="center",
+                    fontsize=fs,
+                    color=color,
+                    zorder=11,
+                    clip_on=True,
+                    label="_nf_zone_arrow_text",
+                )
+                artists.append(txt)
+            except Exception:
+                pass
+    return artists
+
+
+# ───────────────────────────────────────────────────────────────────
+#  Cleanup
+# ───────────────────────────────────────────────────────────────────
+
+
 def clear_nf_zone_artists(artists: List) -> None:
     """Remove each artist in ``artists`` and clear the list in place."""
     for a in list(artists):
@@ -237,6 +345,7 @@ def clear_nf_zone_artists(artists: List) -> None:
 __all__ = [
     "draw_zone_bands",
     "draw_zone_labels",
+    "draw_zone_arrows",
     "clear_nf_zone_artists",
     "ZONE_LABEL_FONTSIZE",
     "ZONE_LABEL_FONTWEIGHT",

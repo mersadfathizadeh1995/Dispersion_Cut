@@ -40,6 +40,24 @@ def _label_text_for(
     return f"\u03bb = {fmt_lambda(lam, decimals)} m"
 
 
+def _secondary_label_text_for(
+    line: "NFLambdaLine",
+    lam: float,
+    decimals: int = 1,
+) -> str:
+    """Secondary label for a λ guide line (request 5).
+
+    When the primary label is a user override (e.g. ``"NACD = 1"``),
+    we default the secondary to ``"λ = <value> m"`` so users can read
+    both the criterion and the geometry.  Users may override with
+    :pyattr:`NFLambdaLine.secondary_label_text`.
+    """
+    override = (getattr(line, "secondary_label_text", "") or "").strip()
+    if override:
+        return override
+    return f"\u03bb = {fmt_lambda(lam, decimals)} m"
+
+
 def _t_from_position(line: "NFLambdaLine") -> float:
     """Normalised position along the visible line (0..1)."""
     try:
@@ -197,6 +215,33 @@ def _draw_lambda_on_frequency_axis(
         pass
     _ensure_lambda_label_callback(ax)
 
+    # Secondary label (request 5) — draw alongside the primary with a
+    # configurable offset in log-space so users can show both the NACD
+    # criterion and the λ geometry simultaneously.
+    if bool(getattr(line, "show_secondary_label", False)):
+        try:
+            off = float(getattr(line, "secondary_label_offset", 0.05) or 0.05)
+        except (TypeError, ValueError):
+            off = 0.05
+        sec_text = _secondary_label_text_for(line, lam, lambda_decimals)
+        v_pos_sec = float(v_pos) * (1.0 - off) if off >= 0 else float(v_pos) * (1.0 + abs(off))
+        ax.text(
+            f_pos,
+            v_pos_sec,
+            f" {sec_text} ",
+            fontsize=fs,
+            color=color,
+            alpha=0.95,
+            rotation=rotation,
+            rotation_mode="anchor",
+            ha="left",
+            va="top",
+            zorder=zorder + 1,
+            fontweight="bold",
+            bbox=bbox,
+            label="_nolegend_",
+        )
+
 
 def _draw_lambda_on_wavelength_axis(
     ax: "Axes",
@@ -245,6 +290,31 @@ def _draw_lambda_on_wavelength_axis(
         transform=trans,
         bbox=bbox,
     )
+    # Secondary label on wavelength axis — offset the text along the
+    # t-axis so it sits next to the primary (request 5).
+    if bool(getattr(line, "show_secondary_label", False)):
+        try:
+            off = float(getattr(line, "secondary_label_offset", 0.05) or 0.05)
+        except (TypeError, ValueError):
+            off = 0.05
+        t_sec = float(np.clip(t - off, 0.02, 0.98))
+        sec_text = _secondary_label_text_for(line, lam, lambda_decimals)
+        ax.text(
+            lam,
+            t_sec,
+            f" {sec_text} ",
+            fontsize=fs,
+            color=color,
+            alpha=0.95,
+            rotation=rotation,
+            ha="left",
+            va="center",
+            zorder=zorder + 1,
+            fontweight="bold",
+            transform=trans,
+            bbox=bbox,
+            label="_nolegend_",
+        )
 
 
 def draw(

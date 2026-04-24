@@ -1,4 +1,12 @@
-"""NF evaluation sidecar JSON (optional 3rd file in Report Studio loads).
+"""NF evaluation sidecar JSON — **legacy, read-only.**
+
+.. deprecated:: figure-bundle refactor
+    New code writes a standalone NACD-Only **pickle bundle** via
+    :mod:`nacd_only_pkl` and loads through
+    :func:`figure_bundle.read_any_bundle`. The sidecar reader below is
+    kept so older Report Studio projects (and any third-party tooling
+    that wrote a sidecar JSON) still open without error. Do **not**
+    wire new export paths through this module.
 
 Report Studio normally loads a dispersion PKL plus an optional spectrum
 NPZ. DC Cut also embeds ``nf_results`` / ``nf_settings`` inside the PKL

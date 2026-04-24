@@ -335,6 +335,16 @@ class FileActionsMixin:
         pkl_path = data_sources.get("pkl_path", "")
         npz_path = data_sources.get("npz_path", "")
         nf_sidecar_path = data_sources.get("nf_sidecar_path", "")
+        nacd_bundle_path = data_sources.get("nacd_bundle_path", "")
+        # Unified figure-bundle path: prefer the new key, else migrate
+        # from whichever legacy path is present (NACD-zone bundle
+        # wins over the NF sidecar, matching the new dispatcher order).
+        figure_bundle_path = (
+            data_sources.get("figure_bundle_path", "")
+            or nacd_bundle_path
+            or nf_sidecar_path
+            or ""
+        )
         saved_fp = data_sources.get("fingerprint", "")
 
         has_curves_in_manifest = bool(curve_settings)
@@ -411,7 +421,13 @@ class FileActionsMixin:
         # Store paths on sheet (and globally for future saves)
         sheet.pkl_path = pkl_path or ""
         sheet.npz_path = npz_path or ""
+        sheet.figure_bundle_path = figure_bundle_path or getattr(
+            sheet, "figure_bundle_path", ""
+        )
         sheet.nf_sidecar_path = nf_sidecar_path or sheet.nf_sidecar_path
+        sheet.nacd_bundle_path = nacd_bundle_path or getattr(
+            sheet, "nacd_bundle_path", ""
+        )
         if pkl_path:
             self._pkl_path = pkl_path
             self._npz_path = npz_path or ""

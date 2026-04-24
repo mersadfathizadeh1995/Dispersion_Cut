@@ -20,6 +20,7 @@ from .lambda_settings import LambdaSettingsPanel
 from .nf_settings_panel import NFSettingsPanel
 from .nf_line_settings import NFLineSettingsPanel
 from .nf_per_offset_panel import NFPerOffsetPanel
+from .nf_zone_panel import NFZoneSettingsPanel
 from .legend_layer_panel import LegendLayerPanel
 from .global_panel import GlobalSettingsPanel
 from .export_panel import ExportPanel
@@ -58,6 +59,8 @@ class RightPanel(QtWidgets.QWidget):
     nf_line_style_changed = Signal(str, str, str, object)
     nf_ranges_apply_requested = Signal(str)
     nf_per_offset_changed = Signal(str, int, str, object)
+    # zone editor: nf_uid, kind ("band"|"arrow"), zone_uid, attr, value
+    nf_zone_style_changed = Signal(str, str, str, str, object)
     grid_changed = Signal(int, int)
     layout_changed = Signal(str, object)
     legend_changed = Signal(str, object)
@@ -78,6 +81,7 @@ class RightPanel(QtWidgets.QWidget):
     _IDX_NFLINE = 7
     _IDX_NF_PER_OFFSET = 8
     _IDX_LEGEND = 9
+    _IDX_NF_ZONE = 10
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -149,6 +153,11 @@ class RightPanel(QtWidgets.QWidget):
         scroll_lg = _make_scroll(self.legend_panel)
         self._context_stack.addWidget(scroll_lg)
 
+        # Index 10: NF zone settings (band or arrow)
+        self.nf_zone_panel = NFZoneSettingsPanel()
+        scroll_nfz = _make_scroll(self.nf_zone_panel)
+        self._context_stack.addWidget(scroll_nfz)
+
         ctx_layout.addWidget(self._context_stack)
         self._tabs.addTab(ctx_container, "Context")
 
@@ -185,6 +194,9 @@ class RightPanel(QtWidgets.QWidget):
         )
         self.legend_panel.legend_changed.connect(
             self.subplot_legend_changed.emit
+        )
+        self.nf_zone_panel.zone_changed.connect(
+            self.nf_zone_style_changed.emit
         )
 
         self.global_panel.grid_changed.connect(self.grid_changed.emit)
@@ -288,6 +300,19 @@ class RightPanel(QtWidgets.QWidget):
     def show_nf_analysis(self, nf: "NFAnalysis"):
         self.nf_panel.show_nf(nf)
         self._context_stack.setCurrentIndex(self._IDX_NF)
+        self._tabs.setCurrentIndex(0)
+
+    def show_nf_zone(
+        self,
+        nf: "NFAnalysis",
+        kind: str,
+        zone_uid: str,
+        *,
+        zone_spec=None,
+    ):
+        """Activate the NF zone (band/arrow) settings panel."""
+        self.nf_zone_panel.show_zone(nf, kind, zone_uid, zone_spec=zone_spec)
+        self._context_stack.setCurrentIndex(self._IDX_NF_ZONE)
         self._tabs.setCurrentIndex(0)
 
     def show_nf_analyses_batch(self, nfs):

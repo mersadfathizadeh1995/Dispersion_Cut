@@ -13,6 +13,11 @@ _DEFAULTS: Dict[str, Any] = {
     "show_grid": True,
     "robust_lower_pct": 0.5,
     "robust_upper_pct": 99.5,
+    # Axis auto-scale policy (passive / multi-k-limit blow-up guards)
+    "axis_exclude_kguides": True,
+    "axis_exclude_nf_lines": True,
+    "axis_v_outlier_clamp_mult": 2.5,
+    "axis_pad_frac": 0.08,
     # Array configuration
     "default_n_phones": 24,
     "default_receiver_dx": 2.0,

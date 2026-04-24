@@ -444,6 +444,66 @@ class DataHandlersMixin:
             nf.per_offset[int(offset_index)].scatter_visible = bool(visible)
             self._render_current()
 
+    def _on_nf_zone_visibility_changed(
+        self, nf_uid: str, kind: str, zone_uid: str, visible: bool
+    ):
+        """Toggle a single NFZoneBand / NFZoneArrow visible flag."""
+        sheet = self._current_sheet()
+        if not sheet or nf_uid not in sheet.nf_analyses:
+            return
+        nf = sheet.nf_analyses[nf_uid]
+        target = None
+        if str(kind) == "band":
+            for zb in getattr(nf, "zone_bands", None) or []:
+                if zb.uid == zone_uid:
+                    target = zb
+                    break
+        elif str(kind) == "arrow":
+            for za in getattr(nf, "zone_arrows", None) or []:
+                if za.uid == zone_uid:
+                    target = za
+                    break
+        if target is None:
+            return
+        target.visible = bool(visible)
+        self._render_current()
+
+    def _on_nf_zone_selected(
+        self, nf_uid: str, kind: str, zone_uid: str
+    ):
+        """Surface the zone in the right-side settings panel if any."""
+        sheet = self._current_sheet()
+        if not sheet or nf_uid not in sheet.nf_analyses:
+            return
+        nf = sheet.nf_analyses[nf_uid]
+        if not hasattr(self, "right_panel"):
+            return
+        # Right panel may not implement zone editing yet — prefer a
+        # dedicated hook, fall back to the generic NFAnalysis editor.
+        show_zone = getattr(self.right_panel, "show_nf_zone", None)
+        if callable(show_zone):
+            try:
+                show_zone(
+                    nf, str(kind), str(zone_uid),
+                    zone_spec=getattr(sheet, "nacd_zone_spec", None),
+                )
+                return
+            except TypeError:
+                # Older right_panel.show_nf_zone signature (no kwargs).
+                try:
+                    show_zone(nf, str(kind), str(zone_uid))
+                    return
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        show_nf = getattr(self.right_panel, "show_nf_analysis", None)
+        if callable(show_nf):
+            try:
+                show_nf(nf)
+            except Exception:
+                pass
+
     def _on_nf_per_offset_selected(self, nf_uid: str, offset_index: int):
         sheet = self._current_sheet()
         if not sheet or nf_uid not in sheet.nf_analyses:
@@ -451,6 +511,63 @@ class DataHandlersMixin:
         nf = sheet.nf_analyses[nf_uid]
         if hasattr(self, "right_panel"):
             self.right_panel.show_nf_per_offset(nf, int(offset_index))
+
+    def _on_nf_zone_style_changed(
+        self, nf_uid: str, kind: str, zone_uid: str, attr: str, value
+    ):
+        """Mutate a single NFZoneBand / NFZoneArrow attribute by uid.
+
+        For bands, NACD-domain attributes (``point_color``,
+        ``band_color``, ``band_alpha``, ``label``) are mirrored to
+        the twin-axis band (same ``group_index`` + ``zone_index``)
+        because those properties are x-axis-agnostic — editing the
+        λ-band must also retint the f-band and vice versa.  Without
+        this mirror the renderer's merge step would see two bands
+        carrying stale-vs-fresh colours and silently pick the wrong
+        one depending on iteration order.
+        """
+        sheet = self._current_sheet()
+        if not sheet or nf_uid not in sheet.nf_analyses:
+            return
+        nf = sheet.nf_analyses[nf_uid]
+        target = None
+        if str(kind) == "band":
+            for zb in getattr(nf, "zone_bands", None) or []:
+                if zb.uid == zone_uid:
+                    target = zb
+                    break
+        else:
+            for za in getattr(nf, "zone_arrows", None) or []:
+                if za.uid == zone_uid:
+                    target = za
+                    break
+        if target is None or not hasattr(target, attr):
+            return
+        setattr(target, attr, value)
+
+        # Twin-axis mirror for NACD-domain band attributes.
+        _NACD_DOMAIN_ATTRS = {
+            "point_color", "band_color", "band_alpha", "label",
+        }
+        if str(kind) == "band" and attr in _NACD_DOMAIN_ATTRS:
+            gi = int(getattr(target, "group_index", 0))
+            zi = int(getattr(target, "zone_index", 0))
+            own_axis = str(getattr(target, "axis", ""))
+            for zb in getattr(nf, "zone_bands", None) or []:
+                if (
+                    int(getattr(zb, "group_index", -1)) == gi
+                    and int(getattr(zb, "zone_index", -1)) == zi
+                    and str(getattr(zb, "axis", "")) != own_axis
+                    and hasattr(zb, attr)
+                ):
+                    setattr(zb, attr, value)
+
+        if hasattr(self, "data_tree"):
+            try:
+                self.data_tree.populate(sheet)
+            except Exception:
+                pass
+        self._render_current()
 
     def _on_nf_line_style_changed(
         self, nf_uid: str, line_uid: str, attr: str, value
