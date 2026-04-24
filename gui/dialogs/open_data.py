@@ -1360,7 +1360,7 @@ class OpenDataDialog(QtWidgets.QDialog):
         btn_map.clicked.connect(lambda checked, r=row: self._map_active_file(r))
         self.active_table.setCellWidget(row, 2, btn_map)
         
-        # NPZ spectrum path
+        # NPZ spectrum path (+ map button for non-standard files)
         spectrum_layout = QtWidgets.QWidget()
         spectrum_h = QtWidgets.QHBoxLayout(spectrum_layout)
         spectrum_h.setContentsMargins(0, 0, 0, 0)
@@ -1369,8 +1369,17 @@ class OpenDataDialog(QtWidgets.QDialog):
         btn_spectrum = QtWidgets.QPushButton("...")
         btn_spectrum.setMaximumWidth(30)
         btn_spectrum.clicked.connect(lambda checked, e=spectrum_edit: self._browse_spectrum(e))
+        btn_spectrum_map = QtWidgets.QPushButton("Map")
+        btn_spectrum_map.setMaximumWidth(40)
+        btn_spectrum_map.setToolTip(
+            "Map the NPZ arrays to frequencies / velocities / power manually."
+        )
+        btn_spectrum_map.clicked.connect(
+            lambda checked, e=spectrum_edit: self._map_spectrum_npz(e)
+        )
         spectrum_h.addWidget(spectrum_edit, 1)
         spectrum_h.addWidget(btn_spectrum)
+        spectrum_h.addWidget(btn_spectrum_map)
         self.active_table.setCellWidget(row, 3, spectrum_layout)
         
         # Remove button
@@ -1414,6 +1423,49 @@ class OpenDataDialog(QtWidgets.QDialog):
         )
         if path:
             path_edit.setText(path)
+
+    def _map_spectrum_npz(self, path_edit):
+        """Open the NPZ key mapper for the path stored in ``path_edit``.
+
+        Falls back to prompting for a file when the edit is empty. The
+        resulting :class:`NpzKeySpec` is persisted by the dialog itself,
+        so the next load will pick it up automatically via the tolerant
+        core readers.
+        """
+        import os
+
+        path = path_edit.text().strip()
+        if not path:
+            path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self, "Select Spectrum File", "",
+                "NPZ Files (*.npz);;All Files (*.*)"
+            )
+            if not path:
+                return
+            path_edit.setText(path)
+
+        if not os.path.exists(path):
+            QtWidgets.QMessageBox.warning(self, "Map NPZ", f"File not found: {path}")
+            return
+
+        try:
+            from dc_cut.gui.dialogs.map_npz import MapNpzDialog
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "Map NPZ", f"Mapper unavailable: {exc}")
+            return
+
+        dlg = MapNpzDialog(path, parent=self)
+        try:
+            accepted = dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted
+        except AttributeError:
+            accepted = dlg.exec_() == QtWidgets.QDialog.Accepted
+        if accepted:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Map NPZ",
+                "Mapping saved. DC-cut will use it automatically when this "
+                "file (or one with the same layout) is loaded.",
+            )
     
     def _map_active_file(self, row: int):
         """Open column mapper for a specific file."""
@@ -1568,7 +1620,7 @@ class OpenDataDialog(QtWidgets.QDialog):
         path_h.addWidget(btn_browse)
         self.state_table.setCellWidget(row, 1, path_widget)
 
-        # NPZ spectrum path with browse
+        # NPZ spectrum path with browse (+ map button)
         spec_widget = QtWidgets.QWidget()
         spec_h = QtWidgets.QHBoxLayout(spec_widget)
         spec_h.setContentsMargins(0, 0, 0, 0)
@@ -1579,8 +1631,17 @@ class OpenDataDialog(QtWidgets.QDialog):
         btn_spec.clicked.connect(
             lambda checked, e=spec_edit: self._browse_spectrum(e)
         )
+        btn_spec_map = QtWidgets.QPushButton("Map")
+        btn_spec_map.setMaximumWidth(40)
+        btn_spec_map.setToolTip(
+            "Map the NPZ arrays to frequencies / velocities / power manually."
+        )
+        btn_spec_map.clicked.connect(
+            lambda checked, e=spec_edit: self._map_spectrum_npz(e)
+        )
         spec_h.addWidget(spec_edit, 1)
         spec_h.addWidget(btn_spec)
+        spec_h.addWidget(btn_spec_map)
         self.state_table.setCellWidget(row, 2, spec_widget)
 
         # Remove button

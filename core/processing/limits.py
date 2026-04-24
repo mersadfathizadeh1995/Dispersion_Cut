@@ -12,6 +12,7 @@ def compute_padded_limits(
     pad_frac: float = 0.08,
     robust_lower_pct: Optional[float] = None,
     robust_upper_pct: Optional[float] = None,
+    clamp_v_max_mult: Optional[float] = None,
 ) -> Dict[str, float]:
     """Compute auto axis limits with percentage padding.
 
@@ -21,6 +22,10 @@ def compute_padded_limits(
     - NaN and inf are ignored
     - Frequency and wavelength mins are clamped to small positive values
     - Adds a percentage-based padding, with sensible minimum absolute pads
+    - When ``clamp_v_max_mult`` is a positive float, the padded ``ymax``
+      is clamped to ``clamp_v_max_mult * p99.5(v)`` so a single stray
+      high-velocity sample (or guide-curve residue) cannot balloon the
+      y-axis. Pass ``None`` or ``0`` to disable (default).
     """
     v = np.asarray(v, float)
     f = np.asarray(f, float)
@@ -93,6 +98,23 @@ def compute_padded_limits(
         ymax = ymax + compensate
     else:
         ymin = ymin_raw
+
+    # Optional outlier ceiling: keep the top axis sensible when a handful
+    # of extreme velocity samples would otherwise stretch the view.
+    try:
+        mult = float(clamp_v_max_mult) if clamp_v_max_mult else 0.0
+    except (TypeError, ValueError):
+        mult = 0.0
+    if mult > 0.0:
+        v_pos = v[np.isfinite(v)]
+        if v_pos.size:
+            try:
+                p = float(np.nanpercentile(v_pos, p_hi))
+                ceiling = mult * p
+                if np.isfinite(ceiling) and ceiling > ymin:
+                    ymax = min(ymax, ceiling)
+            except Exception:
+                pass
 
     # Log-scaled X axes (frequency and wavelength): use multiplicative padding
     # to avoid huge empty space toward 0 on a log scale.

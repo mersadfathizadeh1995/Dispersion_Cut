@@ -235,12 +235,26 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):
                     shortcut=None,
                     callback=lambda: self.file_io.load_spectrum_dialog(),
                 )
+            if self.actions.try_get('file.open_spectrum_npz') is None:
+                self.actions.add(
+                    id="file.open_spectrum_npz",
+                    text="Open Spectrum NPZ…",
+                    shortcut=None,
+                    callback=lambda: self.file_io.open_spectrum_npz_dialog(),
+                )
             if self.actions.try_get('file.save_state') is None:
                 self.actions.add(
                     id="file.save_state",
                     text="Save State…",
                     shortcut="Ctrl+S",
                     callback=lambda: self.file_io.save_session(),
+                )
+            if self.actions.try_get('file.save_state_as') is None:
+                self.actions.add(
+                    id="file.save_state_as",
+                    text="Save State As…",
+                    shortcut="Ctrl+Shift+S",
+                    callback=lambda: self.file_io.save_session_as(),
                 )
             if self.actions.try_get('file.save_dc') is None:
                 self.actions.add(
@@ -340,12 +354,14 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):
                 on_select=lambda x1, y1, x2, y2, side: self.tools.on_line_delete_freq(
                     x1, y1, x2, y2, side
                 ),
+                controller=self,
             )
             self._line_selector_wave = LineSelector(
                 self.ax_wave,
                 on_select=lambda x1, y1, x2, y2, side: self.tools.on_line_delete_wave(
                     x1, y1, x2, y2, side
                 ),
+                controller=self,
             )
         except Exception:
             pass
@@ -361,12 +377,14 @@ class InteractiveRemovalWithLayers(BaseInteractiveRemoval):
                 on_confirm=lambda corners, patch: self._on_inclined_rect_confirm_freq(
                     corners, patch
                 ),
+                controller=self,
             )
             self._inclined_rect_tool_wave = InclinedRectTool(
                 self.ax_wave,
                 on_confirm=lambda corners, patch: self._on_inclined_rect_confirm_wave(
                     corners, patch
                 ),
+                controller=self,
             )
         except Exception:
             pass

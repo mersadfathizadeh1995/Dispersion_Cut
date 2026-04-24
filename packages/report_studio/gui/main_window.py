@@ -103,6 +103,7 @@ class ReportStudioWindow(
         self.sheet_tabs.add_sheet_requested.connect(
             lambda: self._add_new_sheet(f"Sheet {len(self._sheets) + 1}")
         )
+        self.sheet_tabs.sheet_renamed.connect(self._on_sheet_renamed)
 
         # Data tree
         self.data_tree.curve_selected.connect(self._on_curve_selected)
@@ -121,6 +122,9 @@ class ReportStudioWindow(
         self.data_tree.remove_curve_requested.connect(self._on_curve_removed)
         self.data_tree.remove_curves_requested.connect(self._on_curves_removed)
         self.data_tree.add_data_requested.connect(self._on_add_data_to_subplot)
+        self.data_tree.clear_subplot_requested.connect(
+            self._on_clear_subplot
+        )
         self.data_tree.subplot_renamed.connect(self._on_subplot_renamed)
         self.data_tree.aggregated_selected.connect(self._on_aggregated_selected)
         self.data_tree.aggregated_visibility_changed.connect(
@@ -131,6 +135,51 @@ class ReportStudioWindow(
         )
         self.data_tree.aggregated_moved.connect(
             self._on_aggregated_moved
+        )
+        self.data_tree.lambda_visibility_changed.connect(
+            self._on_lambda_visibility_changed
+        )
+        self.data_tree.lambda_line_selected.connect(
+            self._on_lambda_line_selected
+        )
+        self.data_tree.nf_analysis_selected.connect(
+            self._on_nf_analysis_selected
+        )
+        self.data_tree.nf_guide_visibility_changed.connect(
+            self._on_nf_guide_visibility_changed
+        )
+        self.data_tree.nf_guide_line_selected.connect(
+            self._on_nf_guide_line_selected
+        )
+        self.data_tree.nf_layer_visibility_changed.connect(
+            self._on_nf_layer_visibility_changed
+        )
+        self.data_tree.nf_per_offset_visibility_changed.connect(
+            self._on_nf_per_offset_visibility_changed
+        )
+        self.data_tree.nf_per_offset_selected.connect(
+            self._on_nf_per_offset_selected
+        )
+        self.data_tree.nf_zone_visibility_changed.connect(
+            self._on_nf_zone_visibility_changed
+        )
+        self.data_tree.nf_zone_selected.connect(
+            self._on_nf_zone_selected
+        )
+        self.data_tree.legend_layer_selected.connect(
+            self._on_legend_layer_selected
+        )
+        self.data_tree.legend_visibility_changed.connect(
+            self._on_legend_visibility_changed
+        )
+        self.data_tree.legends_selected.connect(
+            self._on_legends_selected
+        )
+        self.data_tree.nf_guides_selected.connect(
+            self._on_nf_guides_selected
+        )
+        self.data_tree.nacd_analyses_selected.connect(
+            self._on_nacd_analyses_selected
         )
 
         # Right panel — Context tab (subplot / curve / spectrum settings)
@@ -143,8 +192,35 @@ class ReportStudioWindow(
         self.right_panel.spectrum_style_changed.connect(
             self._on_style_changed
         )
+        self.right_panel.spectrum_panel.combined_bar_setting_changed.connect(
+            self._on_combined_spectrum_bar_changed
+        )
+        self.right_panel.lambda_style_changed.connect(
+            self._on_lambda_style_changed
+        )
+        self.right_panel.nf_setting_changed.connect(
+            self._on_nf_setting_changed
+        )
+        self.right_panel.nf_recompute_requested.connect(
+            self._on_nf_recompute_requested
+        )
+        self.right_panel.nf_line_style_changed.connect(
+            self._on_nf_line_style_changed
+        )
+        self.right_panel.nf_ranges_apply_requested.connect(
+            self._on_nf_ranges_apply_requested
+        )
+        self.right_panel.nf_per_offset_changed.connect(
+            self._on_nf_per_offset_changed
+        )
+        self.right_panel.nf_zone_style_changed.connect(
+            self._on_nf_zone_style_changed
+        )
         self.right_panel.aggregated_style_changed.connect(
             self._on_aggregated_style_changed
+        )
+        self.right_panel.subplot_legend_changed.connect(
+            self._on_subplot_legend_changed
         )
 
         # Right panel — Global tab
@@ -196,6 +272,22 @@ class ReportStudioWindow(
             self._selected_uid = None
             self.right_panel.show_empty()
         self.statusBar().showMessage(f"Sheet: {sheet.name}" if sheet else "")
+
+    def _on_sheet_renamed(self, index: int, new_name: str):
+        """Tab was renamed — propagate to the underlying SheetState.
+
+        Without this the tab label changes on screen but ``SheetState.name``
+        stays at the old value, so a subsequent project save writes the
+        sheet to the *old* filename and the new name is lost on reload.
+        """
+        if not (0 <= index < len(self._sheets)):
+            return
+        name = (new_name or "").strip()
+        if not name:
+            return
+        self._sheets[index].name = name
+        if index == self._current_sheet_index():
+            self.statusBar().showMessage(f"Sheet: {name}")
 
     # ── Data population ────────────────────────────────────────────────
 
@@ -304,23 +396,73 @@ class ReportStudioWindow(
         if not plugin:
             return
 
+        # Unified figure-bundle path (new self-describing .pkl). When
+        # set, plugins prefer it over the legacy sidecar + zone-bundle
+        # aliases. The legacy getters still fire for backward compat
+        # with older projects that wrote the two separate fields.
+        figure_bundle_path = getattr(dlg, "figure_bundle_path", "") or ""
+        sidecar_path = getattr(dlg, "nf_sidecar_path", "") or ""
+        bundle_path = getattr(dlg, "nacd_bundle_path", "") or ""
+        # The dialog's nacd_bundle_path shim returns figure_bundle_path
+        # when the bundle kind is nacd_zones, so the legacy arg still
+        # reaches the plugin unchanged during the migration window.
         result = plugin.load_data(
             pkl_path=dlg.pkl_path,
             npz_path=dlg.npz_path,
+            figure_bundle_path=figure_bundle_path,
+            nf_sidecar_path=sidecar_path,
+            nacd_bundle_path=bundle_path,
+            bundle_path=bundle_path or figure_bundle_path,
             selected_offsets=dlg.selected_offsets,
+            **dlg.plugin_kwargs,
         )
+        # Persist the new unified path on the sheet so project
+        # save/load round-trips the figure file. The legacy fields
+        # stay in sync until F5 formally deprecates them.
+        if figure_bundle_path:
+            sheet.figure_bundle_path = figure_bundle_path
+        if sidecar_path:
+            sheet.nf_sidecar_path = sidecar_path
+        if bundle_path:
+            sheet.nacd_bundle_path = bundle_path
 
         curves = result.get("curves", [])
         spectra = result.get("spectra", [])
         aggregated = result.get("aggregated", None)
         shadow_curves = result.get("shadow_curves", [])
+        layout_mode = result.get("layout") or "single"
+        nf_list = result.get("nf_analyses") or []
+        zone_spec = result.get("nacd_zone_spec")
+        if zone_spec:
+            sheet.nacd_zone_spec = zone_spec
 
         if not curves and not shadow_curves and aggregated is None:
             return
 
-        # Add regular curves to the target subplot
-        for curve in curves:
-            sheet.add_curve(curve, subplot_key)
+        # Add regular curves. When the user picks the grid layout, every
+        # curve gets its own subplot cell and the cell is relabelled to
+        # the source-offset name so the data tree reads e.g. ``Love/fdbf
+        # +66`` instead of ``Row 1, Col 1``. Works for Source Offset and
+        # NACD-Only alike — the only difference is whether ``nf_list``
+        # also needs distributing further down.
+        if layout_mode == "grid" and curves:
+            import math
+
+            n = len(curves)
+            cols = max(1, math.ceil(math.sqrt(n)))
+            rows = max(1, math.ceil(n / cols))
+            if (sheet.grid_rows, sheet.grid_cols) != (rows, cols):
+                sheet.set_grid(rows, cols)
+            keys = sheet.subplot_keys_ordered()
+            for i, curve in enumerate(curves):
+                tk = keys[i] if i < len(keys) else keys[-1]
+                sheet.add_curve(curve, tk)
+                sp = sheet.subplots.get(tk)
+                if sp is not None:
+                    sp.name = curve.display_name or curve.name or tk
+        else:
+            for curve in curves:
+                sheet.add_curve(curve, subplot_key)
 
         # Handle aggregated average figure
         if aggregated is not None:
@@ -337,6 +479,19 @@ class ReportStudioWindow(
                 sp.aggregated_uid = aggregated.uid
                 if aggregated.x_domain:
                     sp.x_domain = aggregated.x_domain
+
+        if nf_list:
+            if layout_mode == "grid":
+                keys = sheet.subplot_keys_ordered()
+                for i, _curve in enumerate(curves):
+                    if i >= len(nf_list):
+                        break
+                    nf = nf_list[i]
+                    tk = keys[i] if i < len(keys) else keys[-1]
+                    sheet.add_nf_analysis(nf, tk)
+            else:
+                for nf in nf_list:
+                    sheet.add_nf_analysis(nf, subplot_key)
 
         self._finalize_sheet(sheet, curves + shadow_curves, spectra)
 
@@ -362,22 +517,21 @@ class ReportStudioWindow(
         if hasattr(self, 'right_panel'):
             self.right_panel.set_export_sheet(sheet)
 
-        from ..rendering.renderer import render_sheet
         from ..rendering.style import StyleConfig
 
-        # Build style from sheet's legend + typography settings
-        style = StyleConfig(
-            title_size=sheet.typography.title_size,
-            axis_label_size=sheet.typography.axis_label_size,
-            tick_label_size=sheet.typography.tick_label_size,
-            font_family=sheet.typography.font_family,
-            legend_visible=sheet.legend.visible,
-            legend_position=sheet.legend.position,
-            legend_font_size=sheet.legend.font_size,
-            legend_frame_on=sheet.legend.frame_on,
-            legend_alpha=sheet.legend.alpha,
-        )
+        style = StyleConfig.from_sheet(sheet)
         canvas.render(sheet, style, selected_uid=self._selected_uid)
+
+        # Drain any diagnostic messages the renderer posted (e.g.
+        # "combined spectrum colorbar skipped: cmap mismatch") and
+        # surface them in the status bar so the user sees the hint.
+        try:
+            warnings = list(getattr(sheet, "_last_render_warnings", []) or [])
+            if warnings and hasattr(self, "statusBar"):
+                self.statusBar().showMessage(" · ".join(warnings), 8000)
+                sheet._last_render_warnings = []
+        except Exception:
+            pass
 
     # ── Initial load ───────────────────────────────────────────────────
 
@@ -527,7 +681,16 @@ class ReportStudioWindow(
                     if cname:
                         curve_settings[cname] = cdict
                 if curves:
-                    reload_and_apply(sheet, curve_settings, curves, spectra)
+                    raw_inc = data.get("included_curve_names")
+                    inc = (
+                        [str(n) for n in raw_inc]
+                        if raw_inc is not None
+                        else list(curve_settings.keys())
+                    )
+                    reload_and_apply(
+                        sheet, curve_settings, curves, spectra,
+                        included_names=inc,
+                    )
 
                 restored.append(sheet)
             except Exception:

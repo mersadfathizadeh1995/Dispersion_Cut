@@ -77,6 +77,13 @@ class BaseInteractiveRemoval:
         self._nf_reference_v: Optional[np.ndarray] = None
         self._nf_reference_source: str = ""
 
+        # NACD / NF evaluation snapshot for PKL persistence (Report Studio)
+        self._nf_results: dict = {}
+        self._nf_settings: dict = {}
+        self._nf_dirty: bool = False
+        # Last .pkl path used for full session load / explicit NF save (Save to PKL default)
+        self._loaded_state_path: str = ""
+
         # Axis scales (log/linear)
         self.freq_x_scale: str = "log"
         self.vel_y_scale: str = "linear"
@@ -171,6 +178,25 @@ class BaseInteractiveRemoval:
         self.ax_wave.set_ylabel("Phase velocity (m/s)")
 
         self._apply_axis_scales()
+
+        # Blit manager — speeds up interactive previews when a spectrum
+        # is loaded. The fast path is gated by the
+        # ``spectrum_perf_use_blitting`` preference and the throttle by
+        # ``spectrum_perf_draw_throttle_ms``; both are read lazily here
+        # so they can be flipped live from the Preferences dialog.
+        try:
+            from dc_cut.gui.controller.blit_manager import BlitManager
+            from dc_cut.services.prefs import get_pref
+
+            self.blit_manager = BlitManager(self.fig.canvas, [self.ax_freq, self.ax_wave])
+            self.blit_manager.set_enabled(
+                bool(get_pref('spectrum_perf_use_blitting', True))
+            )
+            self.blit_manager.set_throttle_ms(
+                int(get_pref('spectrum_perf_draw_throttle_ms', 0))
+            )
+        except Exception:
+            self.blit_manager = None
 
         try:
             self.fig.canvas.draw_idle()
@@ -425,6 +451,8 @@ class BaseInteractiveRemoval:
             'nf_reference_f': self._nf_reference_f.tolist() if self._nf_reference_f is not None else None,
             'nf_reference_v': self._nf_reference_v.tolist() if self._nf_reference_v is not None else None,
             'nf_reference_source': self._nf_reference_source,
+            'nf_results': dict(self._nf_results),
+            'nf_settings': dict(self._nf_settings),
         }
         return state
 
@@ -479,6 +507,9 @@ class BaseInteractiveRemoval:
             self._nf_reference_f = None
             self._nf_reference_v = None
         self._nf_reference_source = S.get('nf_reference_source', '')
+        self._nf_results = dict(S.get('nf_results', self._nf_results))
+        self._nf_settings = dict(S.get('nf_settings', self._nf_settings))
+        self._nf_dirty = False
         try:
             self._apply_axis_scales()
             self._apply_frequency_ticks()

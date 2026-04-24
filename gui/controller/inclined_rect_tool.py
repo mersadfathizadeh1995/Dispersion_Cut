@@ -123,11 +123,13 @@ class InclinedRectTool:
         on_confirm: Callable[[np.ndarray, Polygon], None],
         line_color: str = "#9b59b6",  # Purple to distinguish from line tool
         rect_color: str = "black",
+        controller=None,
     ):
         self.ax = ax
         self.on_confirm = on_confirm
         self.line_color = line_color
         self.rect_color = rect_color
+        self.controller = controller
         
         self._active = False
         self._p1: Optional[Tuple[float, float]] = None
@@ -138,11 +140,105 @@ class InclinedRectTool:
         self._preview_line: Optional[Line2D] = None
         self._preview_rect: Optional[Polygon] = None
         self._endpoint_markers: List[Line2D] = []
+        self._hidden_spectrum = None
         
         # Event connection IDs
         self._cid_press: Optional[int] = None
         self._cid_motion: Optional[int] = None
         self._cid_key: Optional[int] = None
+
+    # ------------------------------------------------------------------
+    # Performance helpers (mirrors LineSelector's fast-path wiring)
+    # ------------------------------------------------------------------
+    def _blit_manager(self):
+        bm = getattr(self.controller, "blit_manager", None)
+        if bm is None:
+            return None
+        try:
+            from dc_cut.services.prefs import get_pref
+
+            if not bool(get_pref("spectrum_perf_use_blitting", True)):
+                return None
+        except Exception:
+            pass
+        return bm if bm.is_enabled() else None
+
+    def _register_animated(self, artist) -> None:
+        bm = self._blit_manager()
+        if bm is not None and artist is not None:
+            bm.register_animated(artist)
+
+    def _unregister_animated(self, artist) -> None:
+        bm = getattr(self.controller, "blit_manager", None)
+        if bm is not None and artist is not None:
+            bm.unregister_animated(artist)
+
+    def _request_redraw(self) -> None:
+        bm = self._blit_manager()
+        if bm is not None and bm.blit_update():
+            return
+        manager = getattr(self.controller, "blit_manager", None)
+        if manager is not None:
+            manager.request_draw_idle()
+            return
+        try:
+            self.ax.figure.canvas.draw_idle()
+        except Exception:
+            pass
+
+    def _begin_gesture(self) -> None:
+        if self._blit_manager() is not None:
+            return
+        try:
+            from dc_cut.services.prefs import get_pref
+
+            if not bool(get_pref("spectrum_perf_hide_during_gesture", True)):
+                return
+        except Exception:
+            return
+        layer = self._find_active_spectrum_layer()
+        if layer is None or layer.spectrum_image is None:
+            return
+        try:
+            if layer.spectrum_image.get_visible():
+                layer.spectrum_image.set_visible(False)
+                self._hidden_spectrum = layer.spectrum_image
+                try:
+                    self.ax.figure.canvas.draw_idle()
+                except Exception:
+                    pass
+        except Exception:
+            self._hidden_spectrum = None
+
+    def _end_gesture(self) -> None:
+        if self._hidden_spectrum is None:
+            return
+        try:
+            self._hidden_spectrum.set_visible(True)
+        except Exception:
+            pass
+        self._hidden_spectrum = None
+        try:
+            self.ax.figure.canvas.draw_idle()
+        except Exception:
+            pass
+
+    def _find_active_spectrum_layer(self):
+        ctrl = self.controller
+        if ctrl is None:
+            return None
+        try:
+            model = getattr(ctrl, "_layers_model", None)
+            if model is None:
+                return None
+            for layer in getattr(model, "layers", []):
+                if getattr(layer, "spectrum_visible", False) and getattr(
+                    layer, "spectrum_image", None
+                ) is not None:
+                    return layer
+        except Exception:
+            return None
+        return None
     
     @property
     def active(self) -> bool:
@@ -187,6 +283,7 @@ class InclinedRectTool:
         self._p1 = None
         self._p2 = None
         self._cursor = None
+        self._end_gesture()
         try:
             self.ax.figure.canvas.draw_idle()
         except Exception:
@@ -205,6 +302,7 @@ class InclinedRectTool:
         if self._p1 is None:
             # First click - set first corner of the edge
             self._p1 = (x, y)
+            self._begin_gesture()
             self._draw_endpoint(x, y)
         elif self._p2 is None:
             # Second click - set second corner of the edge (completes P1-P2 edge)
@@ -276,6 +374,7 @@ class InclinedRectTool:
         self._p1 = None
         self._p2 = None
         self._cursor = None
+        self._end_gesture()
         
         # Call callback with corners and patch
         if self.on_confirm is not None:
@@ -297,10 +396,8 @@ class InclinedRectTool:
             zorder=100,
         )[0]
         self._endpoint_markers.append(marker)
-        try:
-            self.ax.figure.canvas.draw_idle()
-        except Exception:
-            pass
+        self._register_animated(marker)
+        self._request_redraw()
     
     def _draw_preview_line(self, x1: float, y1: float, x2: float, y2: float) -> None:
         """Draw or update preview line."""
@@ -314,10 +411,8 @@ class InclinedRectTool:
                 linewidth=2,
                 zorder=99,
             )[0]
-        try:
-            self.ax.figure.canvas.draw_idle()
-        except Exception:
-            pass
+            self._register_animated(self._preview_line)
+        self._request_redraw()
     
     def _draw_edge_line(self) -> None:
         """Draw solid line for the confirmed edge (P1-P2)."""
@@ -336,10 +431,8 @@ class InclinedRectTool:
                 linewidth=2,
                 zorder=99,
             )[0]
-        try:
-            self.ax.figure.canvas.draw_idle()
-        except Exception:
-            pass
+            self._register_animated(self._preview_line)
+        self._request_redraw()
     
     def _update_preview_rect(self) -> None:
         """Update or create preview rectangle based on edge and cursor."""
@@ -364,15 +457,14 @@ class InclinedRectTool:
                 zorder=98,
             )
             self.ax.add_patch(self._preview_rect)
+            self._register_animated(self._preview_rect)
         
-        try:
-            self.ax.figure.canvas.draw_idle()
-        except Exception:
-            pass
+        self._request_redraw()
     
     def _clear_preview(self) -> None:
         """Remove all preview artists."""
         if self._preview_line is not None:
+            self._unregister_animated(self._preview_line)
             try:
                 self._preview_line.remove()
             except Exception:
@@ -380,6 +472,7 @@ class InclinedRectTool:
             self._preview_line = None
         
         if self._preview_rect is not None:
+            self._unregister_animated(self._preview_rect)
             try:
                 self._preview_rect.remove()
             except Exception:
@@ -387,6 +480,7 @@ class InclinedRectTool:
             self._preview_rect = None
         
         for marker in self._endpoint_markers:
+            self._unregister_animated(marker)
             try:
                 marker.remove()
             except Exception:

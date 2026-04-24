@@ -125,6 +125,77 @@ class FileActionsMixin:
             canvas.export_image(dlg.path, dpi=dlg.dpi)
             self.statusBar().showMessage(f"Exported to {dlg.path}")
 
+    # ── Config Preset Save / Load ─────────────────────────────────────
+
+    def _on_save_config_as(self):
+        """Export current sheet's look-and-feel settings as a preset file."""
+        from ...qt_compat import QtWidgets
+        sheet = self._current_sheet()
+        if not sheet:
+            QtWidgets.QMessageBox.information(
+                self, "Save Config", "No active sheet to read settings from.",
+            )
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Config Preset", "",
+            "Config preset (*.json);;All files (*)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".json"):
+            path += ".json"
+        try:
+            from ...io.config_preset import save_config
+            save_config(path, sheet)
+            self.statusBar().showMessage(f"Config preset saved: {path}")
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self, "Save Error", f"Could not save preset:\n{e}",
+            )
+
+    def _on_load_config(self):
+        """Load a preset file and apply its settings to the current sheet."""
+        from ...qt_compat import QtWidgets
+        sheet = self._current_sheet()
+        if not sheet:
+            QtWidgets.QMessageBox.information(
+                self, "Load Config", "Open a sheet before applying a preset.",
+            )
+            return
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Load Config Preset", "",
+            "Config preset (*.json);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            from ...io.config_preset import apply_config
+            summary = apply_config(path, sheet)
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self, "Load Error", f"Could not apply preset:\n{e}",
+            )
+            return
+
+        # Refresh UI + canvas with new settings
+        if hasattr(self, "data_tree"):
+            self.data_tree.populate(sheet)
+        if hasattr(self, "right_panel"):
+            self.right_panel.populate_global(sheet)
+            pkeys, pnames = sheet.populated_subplot_info()
+            self.right_panel.update_subplot_list(pkeys, pnames)
+        self._mark_dirty()
+        self._render_current()
+        sec_str = ", ".join(summary.get("sections") or []) or "none"
+        applied = summary.get("subplots_applied") or []
+        skipped = summary.get("subplots_skipped") or []
+        msg = f"Preset applied — sections: {sec_str}"
+        if applied:
+            msg += f"; subplots: {', '.join(applied)}"
+        if skipped:
+            msg += f"; skipped: {', '.join(skipped)}"
+        self.statusBar().showMessage(msg)
+
     # ── Sheet Save / Load ─────────────────────────────────────────────
 
     def _ensure_project_path(self) -> str:
@@ -252,7 +323,9 @@ class FileActionsMixin:
         from ...io.spectrum_reader import read_spectrum_npz
 
         try:
-            sheet, curve_settings, data_sources = load_sheet_manifest(sheet_folder)
+            sheet, curve_settings, data_sources, included_names = (
+                load_sheet_manifest(sheet_folder)
+            )
         except Exception as e:
             QtWidgets.QMessageBox.warning(
                 self, "Load Error", f"Failed to read sheet:\n{e}",
@@ -261,6 +334,17 @@ class FileActionsMixin:
 
         pkl_path = data_sources.get("pkl_path", "")
         npz_path = data_sources.get("npz_path", "")
+        nf_sidecar_path = data_sources.get("nf_sidecar_path", "")
+        nacd_bundle_path = data_sources.get("nacd_bundle_path", "")
+        # Unified figure-bundle path: prefer the new key, else migrate
+        # from whichever legacy path is present (NACD-zone bundle
+        # wins over the NF sidecar, matching the new dispatcher order).
+        figure_bundle_path = (
+            data_sources.get("figure_bundle_path", "")
+            or nacd_bundle_path
+            or nf_sidecar_path
+            or ""
+        )
         saved_fp = data_sources.get("fingerprint", "")
 
         has_curves_in_manifest = bool(curve_settings)
@@ -322,11 +406,28 @@ class FileActionsMixin:
 
         # Apply data to sheet skeleton
         if curves:
-            reload_and_apply(sheet, curve_settings, curves, spectra)
+            # Fall back to the saved curve_settings keys for older sheets
+            # that did not record `included_curve_names` explicitly.
+            effective_included = (
+                included_names
+                if included_names is not None
+                else list(curve_settings.keys())
+            )
+            reload_and_apply(
+                sheet, curve_settings, curves, spectra,
+                included_names=effective_included,
+            )
 
         # Store paths on sheet (and globally for future saves)
         sheet.pkl_path = pkl_path or ""
         sheet.npz_path = npz_path or ""
+        sheet.figure_bundle_path = figure_bundle_path or getattr(
+            sheet, "figure_bundle_path", ""
+        )
+        sheet.nf_sidecar_path = nf_sidecar_path or sheet.nf_sidecar_path
+        sheet.nacd_bundle_path = nacd_bundle_path or getattr(
+            sheet, "nacd_bundle_path", ""
+        )
         if pkl_path:
             self._pkl_path = pkl_path
             self._npz_path = npz_path or ""
@@ -457,8 +558,22 @@ class FileActionsMixin:
                 w.deleteLater()
 
         from ..canvas.plot_canvas import PlotCanvas
-        for sheet, curve_settings in sheet_skeletons:
-            reload_and_apply(sheet, curve_settings, curves, spectra)
+        for entry in sheet_skeletons:
+            # Tolerate both the new 3-tuple and any leftover 2-tuple shape
+            if len(entry) == 3:
+                sheet, curve_settings, included_names = entry
+            else:
+                sheet, curve_settings = entry  # type: ignore[misc]
+                included_names = None
+            effective_included = (
+                included_names
+                if included_names is not None
+                else list(curve_settings.keys())
+            )
+            reload_and_apply(
+                sheet, curve_settings, curves, spectra,
+                included_names=effective_included,
+            )
             sheet.pkl_path = pkl_path
             sheet.npz_path = npz_path
             self._sheets.append(sheet)
@@ -537,17 +652,7 @@ class FileActionsMixin:
         from ...rendering.renderer import render_sheet
         from ...rendering.style import StyleConfig
 
-        style = StyleConfig(
-            title_size=sheet.typography.title_size,
-            axis_label_size=sheet.typography.axis_label_size,
-            tick_label_size=sheet.typography.tick_label_size,
-            font_family=sheet.typography.font_family,
-            legend_visible=sheet.legend.visible,
-            legend_position=sheet.legend.position,
-            legend_font_size=sheet.legend.font_size,
-            legend_frame_on=sheet.legend.frame_on,
-            legend_alpha=sheet.legend.alpha,
-        )
+        style = StyleConfig.from_sheet(sheet)
         import matplotlib.pyplot as mpl_plt
         fig = mpl_plt.figure()
         fig.set_size_inches(opts.get("width", 10), opts.get("height", 7))
@@ -568,17 +673,7 @@ class FileActionsMixin:
         from ...rendering.style import StyleConfig
         import matplotlib.pyplot as plt
 
-        style = StyleConfig(
-            title_size=sheet.typography.title_size,
-            axis_label_size=sheet.typography.axis_label_size,
-            tick_label_size=sheet.typography.tick_label_size,
-            font_family=sheet.typography.font_family,
-            legend_visible=sheet.legend.visible,
-            legend_position=sheet.legend.position,
-            legend_font_size=sheet.legend.font_size,
-            legend_frame_on=sheet.legend.frame_on,
-            legend_alpha=sheet.legend.alpha,
-        )
+        style = StyleConfig.from_sheet(sheet)
 
         dpi = opts.get("dpi", 300)
         fmt = opts.get("format", "png")

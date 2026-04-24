@@ -108,7 +108,9 @@ def draw(
             markeredgecolor=agg.avg_color,
             markerfacecolor=agg.avg_color,
             alpha=0.95,
-            label=agg.display_name,
+            label=(agg.legend_label.strip()
+                   if getattr(agg, "legend_label", "")
+                   else agg.display_name),
             zorder=8,
         )
 

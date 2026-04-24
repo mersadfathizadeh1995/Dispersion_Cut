@@ -34,6 +34,28 @@ class AddHandler:
         """
         self._ctrl = controller
 
+    def _request_redraw(self) -> None:
+        """Repaint the canvas. Uses the shared blit manager when present
+        so the draw is throttled / blitted when the prefs ask for it;
+        falls back to plain :meth:`draw_idle` otherwise.
+        """
+        bm = getattr(self._ctrl, "blit_manager", None)
+        if bm is not None:
+            try:
+                from dc_cut.services.prefs import get_pref
+
+                if bool(get_pref("spectrum_perf_use_blitting", True)) and bm.is_enabled():
+                    if bm.blit_update():
+                        return
+            except Exception:
+                pass
+            bm.request_draw_idle()
+            return
+        try:
+            self._ctrl.fig.canvas.draw_idle()
+        except Exception:
+            pass
+
     def _is_qt_backend(self) -> bool:
         """Check if running on Qt backend."""
         return matplotlib.get_backend().lower().startswith('qt')
@@ -109,7 +131,7 @@ class AddHandler:
             # Update limits
             try:
                 self._ctrl._apply_axis_limits()
-                self._ctrl.fig.canvas.draw_idle()
+                self._request_redraw()
             except Exception:
                 pass
 
@@ -198,7 +220,7 @@ class AddHandler:
             # Update limits
             try:
                 self._ctrl._apply_axis_limits()
-                self._ctrl.fig.canvas.draw_idle()
+                self._request_redraw()
             except Exception:
                 pass
 
@@ -259,7 +281,7 @@ class AddHandler:
 
             # Update limits
             self._ctrl._apply_axis_limits()
-            self._ctrl.fig.canvas.draw_idle()
+            self._request_redraw()
             self._ctrl._apply_axis_limits()
 
             return True
@@ -279,7 +301,7 @@ class AddHandler:
             self._enable_save_button(False)
 
             try:
-                self._ctrl.fig.canvas.draw_idle()
+                self._request_redraw()
             except Exception:
                 pass
 
@@ -311,7 +333,7 @@ class AddHandler:
         btn = getattr(self._ctrl, 'btn_save_added', None)
         if btn is None or not hasattr(btn, 'ax'):
             try:
-                self._ctrl.fig.canvas.draw_idle()
+                self._request_redraw()
             except Exception:
                 pass
             return
@@ -327,7 +349,7 @@ class AddHandler:
             ax.set_alpha(0.4)
 
         try:
-            self._ctrl.fig.canvas.draw_idle()
+            self._request_redraw()
         except Exception:
             pass
 

@@ -35,6 +35,54 @@ except Exception:  # pragma: no cover -- module may not exist yet
 LimitsStyleFn = Callable[[Tuple[int, str, str]], Tuple[bool, str]]
 
 
+# ─── internal: preserve axes limits across overlay draws ────────────
+#
+# The λ-hyperbola curve ``V = λ * f`` is sampled across a frequency
+# range padded one decade past the current xlim (so it reaches the
+# visible frame even after later zooms).  On a fresh or nearly-empty
+# axes, matplotlib's autoscale can pick up those padded endpoints and
+# blow the y-axis up to values like 200 000 m/s.  Callers wrap the
+# overlay pass in :func:`_preserve_limits` to snapshot both axes'
+# limits and autoscale state on entry, then restore them on exit.
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def _preserve_limits(*axes):
+    """Freeze ``(xlim, ylim, autoscale_on_x, autoscale_on_y)`` for every
+    given axes while overlays are drawn, then restore on exit.
+
+    Any axes that is ``None`` is skipped so callers can pass a pair
+    like ``(ax_freq, ax_wave)`` without guarding for missing axes.
+    """
+    saved: list = []
+    for ax in axes:
+        if ax is None:
+            continue
+        try:
+            saved.append((
+                ax,
+                ax.get_xlim(),
+                ax.get_ylim(),
+                ax.get_autoscalex_on(),
+                ax.get_autoscaley_on(),
+            ))
+        except Exception:
+            continue
+    try:
+        yield
+    finally:
+        for ax, xlim, ylim, ax_on, ay_on in saved:
+            try:
+                ax.set_xlim(xlim)
+                ax.set_ylim(ylim)
+                ax.set_autoscalex_on(ax_on)
+                ax.set_autoscaley_on(ay_on)
+            except Exception:
+                pass
+
+
 # ─── internal: smart-label placement after zoom / pan ───────────────
 #
 # λ-curve labels on ax_freq must track ``V = λ * f``, so they cannot
@@ -131,40 +179,53 @@ def draw_nf_limits_from_set(
             pass
         return artists
 
-    for ln in limit_set.lines:
-        if not ln.valid or ln.value <= 0:
-            continue
-        key = (ln.band_index, ln.kind, ln.role)
-        if style_fn is not None:
-            try:
-                visible, color = style_fn(key)
-            except Exception:
+    # Guard against autoscale blow-up caused by the padded λ-hyperbola
+    # sample range (see :func:`_preserve_limits` docstring).
+    with _preserve_limits(ax_freq, ax_wave):
+        for ln in limit_set.lines:
+            # Zone entries are rendered separately by ``draw_zone_bands``
+            # / ``draw_zone_labels``.  The Limit Lines tree still owns
+            # their visibility / color state, but this line drawer skips
+            # them entirely.
+            if ln.kind == "zone":
+                continue
+            if not ln.valid or ln.value <= 0:
+                continue
+            key = (ln.band_index, ln.kind, ln.role)
+            if style_fn is not None:
+                try:
+                    visible, color = style_fn(key)
+                except Exception:
+                    visible, color = True, default_color
+            else:
                 visible, color = True, default_color
-        else:
-            visible, color = True, default_color
-        if not visible:
-            continue
-        if ln.kind == "lambda":
-            _draw_single_limit(
-                ax_freq, ax_wave, float(ln.value),
-                color=color, linestyle=linestyle, linewidth=linewidth,
-                alpha=alpha, show_labels=show_labels,
-                label_fontsize=label_fontsize, zorder=zorder,
-                artists_out=artists, nf_key=key,
-            )
-        else:  # "freq"
-            _draw_freq_marker(
-                ax_freq, float(ln.value),
-                tag=f"f_{ln.role}",
-                color=color,
-                linestyle=":" if ln.source == "user" else linestyle,
-                linewidth=max(1.0, linewidth - 0.3),
-                alpha=min(alpha, 0.75),
-                show_labels=show_labels,
-                label_fontsize=max(8, label_fontsize - 1),
-                zorder=zorder,
-                artists_out=artists, nf_key=key,
-            )
+            if not visible:
+                continue
+            if ln.kind == "lambda":
+                custom = (getattr(ln, "custom_label", "") or "").strip()
+                _draw_single_limit(
+                    ax_freq, ax_wave, float(ln.value),
+                    color=color, linestyle=linestyle, linewidth=linewidth,
+                    alpha=alpha, show_labels=show_labels,
+                    label_fontsize=label_fontsize, zorder=zorder,
+                    artists_out=artists, nf_key=key,
+                    custom_label=custom or None,
+                )
+            else:  # "freq"
+                custom = (getattr(ln, "custom_label", "") or "").strip()
+                _draw_freq_marker(
+                    ax_freq, float(ln.value),
+                    tag=f"f_{ln.role}",
+                    color=color,
+                    linestyle=":" if ln.source == "user" else linestyle,
+                    linewidth=max(1.0, linewidth - 0.3),
+                    alpha=min(alpha, 0.75),
+                    show_labels=show_labels,
+                    label_fontsize=max(8, label_fontsize - 1),
+                    zorder=zorder,
+                    artists_out=artists, nf_key=key,
+                    custom_label=custom or None,
+                )
 
     try:
         ax_freq.figure.canvas.draw_idle()
@@ -195,31 +256,32 @@ def draw_nf_limit_lines(
     Prefer :func:`draw_nf_limits_from_set` for new code.
     """
     artists: list = []
-    for lam in [lambda_max, lambda_min]:
-        if lam is None or lam <= 0:
-            continue
-        _draw_single_limit(
-            ax_freq, ax_wave, float(lam),
-            color=color, linestyle=linestyle, linewidth=linewidth,
-            alpha=alpha, show_labels=show_labels,
-            label_fontsize=label_fontsize, zorder=zorder,
-            artists_out=artists, nf_key=None,
-        )
-    if freq_bands:
-        for bi, (lo, hi) in enumerate(freq_bands):
-            for role, f_edge in (("min", lo), ("max", hi)):
-                if f_edge is None or f_edge <= 0:
-                    continue
-                _draw_freq_marker(
-                    ax_freq, float(f_edge), tag=f"f_{role}",
-                    color=color, linestyle=":",
-                    linewidth=max(1.0, linewidth - 0.3),
-                    alpha=min(alpha, 0.7),
-                    show_labels=show_labels,
-                    label_fontsize=max(8, label_fontsize - 1),
-                    zorder=zorder,
-                    artists_out=artists, nf_key=(bi, "freq", role),
-                )
+    with _preserve_limits(ax_freq, ax_wave):
+        for lam in [lambda_max, lambda_min]:
+            if lam is None or lam <= 0:
+                continue
+            _draw_single_limit(
+                ax_freq, ax_wave, float(lam),
+                color=color, linestyle=linestyle, linewidth=linewidth,
+                alpha=alpha, show_labels=show_labels,
+                label_fontsize=label_fontsize, zorder=zorder,
+                artists_out=artists, nf_key=None,
+            )
+        if freq_bands:
+            for bi, (lo, hi) in enumerate(freq_bands):
+                for role, f_edge in (("min", lo), ("max", hi)):
+                    if f_edge is None or f_edge <= 0:
+                        continue
+                    _draw_freq_marker(
+                        ax_freq, float(f_edge), tag=f"f_{role}",
+                        color=color, linestyle=":",
+                        linewidth=max(1.0, linewidth - 0.3),
+                        alpha=min(alpha, 0.7),
+                        show_labels=show_labels,
+                        label_fontsize=max(8, label_fontsize - 1),
+                        zorder=zorder,
+                        artists_out=artists, nf_key=(bi, "freq", role),
+                    )
     try:
         ax_freq.figure.canvas.draw_idle()
     except Exception:
@@ -251,6 +313,7 @@ def _draw_freq_marker(
     label_fontsize: int,
     artists_out: list,
     nf_key,
+    custom_label: Optional[str] = None,
 ) -> None:
     """Draw a single vertical f-line on ``ax_freq``.
 
@@ -270,9 +333,14 @@ def _draw_freq_marker(
     artists_out.append(ln)
     if show_labels:
         trans = blended_transform_factory(ax_freq.transData, ax_freq.transAxes)
+        label_text = (
+            f" {custom_label}"
+            if custom_label
+            else f" {tag}={f_edge:g} Hz"
+        )
         txt = ax_freq.text(
             f_edge, 0.04,
-            f" {tag}={f_edge:g} Hz",
+            label_text,
             fontsize=label_fontsize, color=color,
             alpha=min(1.0, alpha + 0.2),
             rotation=90, ha="left", va="bottom",
@@ -281,6 +349,23 @@ def _draw_freq_marker(
         )
         _tag(txt, nf_key)
         artists_out.append(txt)
+        # When a NACD-style custom label is present (e.g. "NACD = 1"),
+        # mirror the actual frequency value on the OPPOSITE side of
+        # the vertical line so the user can read both the criterion
+        # and the resulting f at a glance.  Per user request — see
+        # plan.md Phase A.
+        if custom_label:
+            txt_freq = ax_freq.text(
+                f_edge, 0.04,
+                f" f={f_edge:g} Hz ",
+                fontsize=label_fontsize, color=color,
+                alpha=min(1.0, alpha + 0.2),
+                rotation=90, ha="right", va="bottom",
+                zorder=zorder + 1,
+                transform=trans,
+            )
+            _tag(txt_freq, nf_key)
+            artists_out.append(txt_freq)
 
 
 def _draw_single_limit(
@@ -297,6 +382,7 @@ def _draw_single_limit(
     zorder: int,
     artists_out: list,
     nf_key,
+    custom_label: Optional[str] = None,
 ) -> None:
     """Draw one constant-wavelength hyperbola on ``ax_freq`` and the
     matching vertical on ``ax_wave``.
@@ -354,8 +440,13 @@ def _draw_single_limit(
             f_pos = float(np.sqrt(fmin * fmax))
         v_pos = float(lam * f_pos)
 
+        lam_label = (
+            f"  \u03bb={lam:.0f} m ({custom_label})"
+            if custom_label
+            else f"  \u03bb={lam:.0f} m"
+        )
         txt_f = ax_freq.text(
-            f_pos, v_pos, f"  \u03bb={lam:.0f} m",
+            f_pos, v_pos, lam_label,
             fontsize=label_fontsize, color=color, alpha=0.95,
             rotation=30, rotation_mode="anchor",
             ha="left", va="bottom", zorder=zorder + 1,
@@ -374,9 +465,14 @@ def _draw_single_limit(
         trans_w = blended_transform_factory(
             ax_wave.transData, ax_wave.transAxes
         )
+        wav_label = (
+            f"  \u03bb={lam:.0f} m ({custom_label})"
+            if custom_label
+            else f"  \u03bb={lam:.0f} m"
+        )
         txt_w = ax_wave.text(
             lam, 0.96,
-            f"  \u03bb={lam:.0f} m",
+            wav_label,
             fontsize=label_fontsize, color=color, alpha=0.95,
             rotation=90, ha="left", va="top", zorder=zorder + 1,
             fontweight="bold",

@@ -9,7 +9,11 @@ and any reach-in tests.
 """
 from __future__ import annotations
 
+import os
+import time
 from typing import List, Optional
+
+import numpy as np
 
 from .common import refresh_offset_checks
 from .constants import QtWidgets
@@ -20,6 +24,7 @@ from .prefs_io import load_dock_prefs, save_range_prefs
 from .reference_tab import ReferenceTab
 from .results_tab import ResultsTab
 
+from dc_cut.core.io.state import save_session
 from dc_cut.core.processing.nearfield.ranges import EvaluationRange
 
 from .constants import _MODE1_COLORS, _MODE2_COLORS
@@ -55,6 +60,57 @@ class NearFieldEvalDock(QtWidgets.QDockWidget):
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(2)
 
+        save_row = QtWidgets.QHBoxLayout()
+
+        # ── Session state group (left) ─────────────────────────────
+        self._btn_save_nf = QtWidgets.QPushButton("Save NF to PKL")
+        self._btn_save_nf.setToolTip(
+            "Write current session state (NACD results + λ lines) to the .pkl."
+        )
+        self._btn_save_nf.clicked.connect(self._save_nf_to_current_pkl)
+        state_menu_btn = QtWidgets.QToolButton()
+        state_menu_btn.setText("▾")
+        state_menu_btn.setToolTip("Session-state options")
+        _state_menu = QtWidgets.QMenu(state_menu_btn)
+        _act_save_as = _state_menu.addAction("Save As…")
+        _act_save_as.triggered.connect(self._save_nf_as_pkl)
+        state_menu_btn.setMenu(_state_menu)
+        try:
+            state_menu_btn.setPopupMode(
+                QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
+            )
+        except AttributeError:
+            state_menu_btn.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+
+        # ── Figure exports group (right) ───────────────────────────
+        # "Save Figure ▾" is populated from FIGURE_BUNDLE_REGISTRY so
+        # new figure types automatically show up without editing the
+        # dock — each produces a single, self-describing .pkl that
+        # Report Studio can open through its "Figure file" row.
+        fig_menu_btn = QtWidgets.QToolButton()
+        fig_menu_btn.setText("Save Figure ▾")
+        fig_menu_btn.setToolTip(
+            "Export a standalone figure bundle (.pkl) for Report Studio.\n"
+            "One file per figure type — pick the matching one when\n"
+            "adding data in Report Studio."
+        )
+        self._fig_menu = QtWidgets.QMenu(fig_menu_btn)
+        self._rebuild_figure_save_menu()
+        fig_menu_btn.setMenu(self._fig_menu)
+        try:
+            fig_menu_btn.setPopupMode(
+                QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
+            )
+        except AttributeError:
+            fig_menu_btn.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+
+        save_row.addWidget(self._btn_save_nf)
+        save_row.addWidget(state_menu_btn)
+        save_row.addSpacing(12)
+        save_row.addWidget(fig_menu_btn)
+        save_row.addStretch()
+        root.addLayout(save_row)
+
         self._tabs = QtWidgets.QTabWidget()
         root.addWidget(self._tabs)
 
@@ -65,6 +121,7 @@ class NearFieldEvalDock(QtWidgets.QDockWidget):
         self._last_mode: Optional[str] = None  # 'nacd' or 'reference'
         self._overlay_offsets: list = []
         self._nf_limit_artists: list = []
+        self._nf_zone_artists: list = []
 
         # User-configurable severity colors (tabs write into these).
         self._mode1_colors = dict(_MODE1_COLORS)
@@ -86,11 +143,357 @@ class NearFieldEvalDock(QtWidgets.QDockWidget):
 
         # Wire preferences now that every widget exists.
         load_dock_prefs(self)
+        self._update_save_button_state()
+
+    # ================================================================
+    #  NF results → controller (PKL persistence)
+    # ================================================================
+    @staticmethod
+    def _nf_offset_to_dict(entry: dict) -> dict:
+        """Serialize one NACD per-offset result for pickle/JSON-safe storage."""
+        out: dict = {}
+        for k, v in entry.items():
+            if k in ("f", "v", "w", "nacd"):
+                arr = np.asarray(v, float)
+                out[k] = arr.tolist()
+            elif k == "mask":
+                m = np.asarray(v, bool)
+                out[k] = m.tolist()
+            elif hasattr(v, "item"):
+                try:
+                    out[k] = v.item()
+                except Exception:
+                    out[k] = v
+            else:
+                out[k] = v
+        return out
+
+    @staticmethod
+    def _derived_limit_to_dict(derived) -> list:
+        if derived is None or not getattr(derived, "lines", None):
+            return []
+        lines = []
+        for ln in derived.lines:
+            lines.append({
+                "band_index": int(ln.band_index),
+                "kind": str(ln.kind),
+                "role": str(ln.role),
+                "value": float(ln.value),
+                "source": str(ln.source),
+                "valid": bool(ln.valid),
+                "derived_from": (
+                    None if ln.derived_from is None else float(ln.derived_from)
+                ),
+                "custom_label": str(getattr(ln, "custom_label", "") or ""),
+            })
+        return lines
+
+    def _publish_nf_results(
+        self,
+        *,
+        mode: str,
+        results: list,
+        eval_range: EvaluationRange,
+        derived_set,
+    ) -> None:
+        """Snapshot last NF run into controller for get_current_state() / PKL."""
+        tab = self._nacd_tab
+        settings = {
+            "n_recv": int(tab.n_recv.value()),
+            "dx": float(tab.dx.value()),
+            "first_pos": float(tab.first_pos.value()),
+            "threshold": float(tab.nacd_thr.value()),
+            "source_type": tab.source_type.currentData() or "sledgehammer",
+            "error_level": tab.error_level.currentData() or "10_15pct",
+            "transform": getattr(self.c, "view_mode", "freq_only"),
+            "eval_range": eval_range.to_dict(),
+            "mode1_colors": dict(self._mode1_colors),
+        }
+        # Zone spec (only serialised when non-default).
+        try:
+            spec = tab.current_spec()
+            if spec.style != "classic" or spec.groups:
+                settings["nacd_zone_spec"] = spec.to_dict()
+        except Exception:
+            pass
+        payload = {
+            "mode": mode,
+            "timestamp": time.time(),
+            "per_offset": [self._nf_offset_to_dict(r) for r in results],
+            "derived_lines": self._derived_limit_to_dict(derived_set),
+        }
+        # Multi-zone mode caches a DerivedLimitSet per evaluated
+        # offset on the NACD tab. Mirror that into the saved
+        # payload so the standalone NACD-zone bundle export and
+        # Report Studio plugin can reconstruct every offset's lines.
+        try:
+            per_off = getattr(tab, "_per_offset_derived", None) or {}
+            if per_off:
+                payload["per_offset_derived"] = [
+                    {
+                        "label": lbl,
+                        "x_bar": float(entry["x_bar"]),
+                        "derived_lines": self._derived_limit_to_dict(
+                            entry["derived"]
+                        ),
+                    }
+                    for lbl, entry in per_off.items()
+                ]
+        except Exception:
+            pass
+        self.c._nf_results = payload
+        self.c._nf_settings = settings
+        self.c._nf_dirty = True
+        self._update_save_button_state()
+
+    def _update_save_button_state(self) -> None:
+        dirty = bool(getattr(self.c, "_nf_dirty", False))
+        self._btn_save_nf.setEnabled(True)
+        if dirty:
+            self._btn_save_nf.setText("Save NF to PKL *")
+            self._btn_save_nf.setToolTip(
+                "NACD results or λ-line metadata not yet saved to PKL."
+            )
+        else:
+            self._btn_save_nf.setText("Save NF to PKL")
+            self._btn_save_nf.setToolTip(
+                "Write current session state (including NACD results and λ lines) "
+                "to the .pkl file."
+            )
+
+    def _save_nf_parent_widget(self):
+        try:
+            return self.c.fig.canvas.manager.window
+        except Exception:
+            return self.window()
+
+    def _save_nf_to_current_pkl(self) -> None:
+        path = getattr(self.c, "_loaded_state_path", "") or ""
+        path = str(path).strip()
+        if not path or not os.path.isfile(path):
+            self._save_nf_as_pkl()
+            return
+        try:
+            state_dict = self.c.get_current_state()
+            save_session(state_dict, path)
+            self.c._nf_dirty = False
+            self._update_save_button_state()
+            QtWidgets.QMessageBox.information(
+                self._save_nf_parent_widget(),
+                "Save NF",
+                f"Saved session (including NF) →\n{path}",
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self._save_nf_parent_widget(),
+                "Save NF",
+                f"Failed to save:\n{e}",
+            )
+
+    def _save_nf_as_pkl(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self._save_nf_parent_widget(),
+            "Save Session with NF Data",
+            "",
+            "Pickle (*.pkl);;All Files (*.*)",
+        )
+        if not path:
+            return
+        try:
+            state_dict = self.c.get_current_state()
+            save_session(state_dict, path)
+            self.c._loaded_state_path = os.path.abspath(path)
+            self.c._nf_dirty = False
+            self._update_save_button_state()
+            QtWidgets.QMessageBox.information(
+                self._save_nf_parent_widget(),
+                "Save NF",
+                f"Saved →\n{path}",
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self._save_nf_parent_widget(),
+                "Save NF",
+                f"Failed to save:\n{e}",
+            )
+
+    def _limit_lines_ui_snapshot(self) -> dict:
+        """Visibility + color map from the Limit Lines tab, JSON-safe."""
+        try:
+            state = self._limits.current_state()
+            return state.to_dict() if state is not None else {}
+        except Exception:
+            return {}
+
+    # ----------------------------------------------------------------
+    #  Figure-bundle export (registry-driven)
+    # ----------------------------------------------------------------
+    def _rebuild_figure_save_menu(self) -> None:
+        """Populate the "Save Figure ▾" menu from the bundle registry.
+
+        Called once from ``__init__``; safe to call again after the
+        registry is mutated (e.g. a plugin registers a new figure).
+        """
+        from dc_cut.packages.report_studio.io.figure_bundle import all_specs
+
+        self._fig_menu.clear()
+        specs = all_specs()
+        if not specs:
+            act = self._fig_menu.addAction("(no figure types registered)")
+            act.setEnabled(False)
+            return
+        for spec in specs:
+            act = self._fig_menu.addAction(f"{spec.display_name}…")
+            act.setToolTip(
+                f"Export a '{spec.display_name}' bundle — a single "
+                f".pkl that Report Studio opens as one figure."
+            )
+            # Default-arg closure captures the current spec.
+            act.triggered.connect(
+                lambda _checked=False, tid=spec.type_id:
+                    self._export_figure_bundle(tid)
+            )
+
+    def _export_figure_bundle(self, type_id: str) -> None:
+        """Prompt for a path and write a figure bundle of ``type_id``."""
+        from dc_cut.packages.report_studio.io.figure_bundle import get_spec
+
+        spec = get_spec(type_id)
+        if spec is None or spec.builder_fn is None:
+            QtWidgets.QMessageBox.warning(
+                self._save_nf_parent_widget(),
+                "Save Figure",
+                f"Unknown figure type: {type_id}",
+            )
+            return
+
+        nf_results = getattr(self.c, "_nf_results", None)
+        nf_settings = getattr(self.c, "_nf_settings", None) or {}
+        if not nf_results:
+            QtWidgets.QMessageBox.information(
+                self._save_nf_parent_widget(),
+                spec.display_name,
+                "Run an NF evaluation first; there are no results to export.",
+            )
+            return
+
+        # Per-type preconditions.
+        if type_id == "nacd_zones" and not nf_settings.get("nacd_zone_spec"):
+            QtWidgets.QMessageBox.information(
+                self._save_nf_parent_widget(),
+                spec.display_name,
+                "The last run used the classic single-threshold view.\n"
+                "Switch to \"Multi-zone (one group)\" or "
+                "\"Multi-zone groups\" and Run before exporting.",
+            )
+            return
+
+        src_pkl = getattr(self.c, "_loaded_state_path", "") or ""
+        spectrum_npz = getattr(self.c, "_loaded_spectrum_path", "") or ""
+
+        from dc_cut.packages.report_studio.io.figure_bundle import default_bundle_path
+        default_path = default_bundle_path(src_pkl, spec.default_suffix)
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self._save_nf_parent_widget(),
+            spec.display_name,
+            default_path,
+            "Pickle (*.pkl);;All Files (*.*)",
+        )
+        if not path:
+            return
+
+        # Builder signature: type-specific kwargs. We pass every kwarg
+        # any builder might need; builders accept **the ones they use**
+        # and ignore extras via explicit keyword filtering above.
+        builder_kwargs: dict = dict(
+            nf_results=nf_results,
+            nf_settings=nf_settings,
+            state_pkl=src_pkl,
+            spectrum_npz=spectrum_npz,
+            limit_lines_ui=self._limit_lines_ui_snapshot() or None,
+        )
+        if type_id == "nacd_zones":
+            builder_kwargs["zone_spec"] = nf_settings.get("nacd_zone_spec")
+
+        try:
+            bundle = spec.builder_fn(**builder_kwargs)
+            spec.writer_fn(path, bundle)
+            n_off = len(bundle.get("offsets", []))
+            QtWidgets.QMessageBox.information(
+                self._save_nf_parent_widget(),
+                spec.display_name,
+                f"Wrote {spec.display_name.lower()} ({n_off} offset(s)) →\n{path}",
+            )
+        except Exception as e:  # pragma: no cover — defensive UI path
+            QtWidgets.QMessageBox.critical(
+                self._save_nf_parent_widget(),
+                spec.display_name,
+                f"Failed to export:\n{e}",
+            )
+
+    # ----------------------------------------------------------------
+    #  Legacy sidecar export (still reachable via public API, hidden
+    #  from the main menu; kept so tests + older scripts keep working)
+    # ----------------------------------------------------------------
+    def _export_nf_sidecar(self) -> None:
+        """Write a Report Studio NF evaluation sidecar JSON (legacy)."""
+        from dc_cut.packages.report_studio.io.nf_sidecar import (
+            build_sidecar,
+            default_sidecar_path_for,
+            write_sidecar,
+        )
+
+        nf_results = getattr(self.c, "_nf_results", None)
+        nf_settings = getattr(self.c, "_nf_settings", None)
+        if not nf_results:
+            QtWidgets.QMessageBox.information(
+                self._save_nf_parent_widget(),
+                "Export NF for Report Studio",
+                "Run an NF evaluation first; there are no results to export.",
+            )
+            return
+
+        src_pkl = getattr(self.c, "_loaded_state_path", "") or ""
+        default_path = default_sidecar_path_for(src_pkl)
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self._save_nf_parent_widget(),
+            "Export NF for Report Studio",
+            default_path,
+            "JSON (*.json);;All Files (*.*)",
+        )
+        if not path:
+            return
+
+        try:
+            payload = build_sidecar(
+                nf_results=nf_results,
+                nf_settings=nf_settings,
+                limit_lines_ui=self._limit_lines_ui_snapshot() or None,
+                pkl_path=src_pkl,
+            )
+            write_sidecar(path, payload)
+            QtWidgets.QMessageBox.information(
+                self._save_nf_parent_widget(),
+                "Export NF for Report Studio",
+                f"Wrote NF sidecar →\n{path}",
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self._save_nf_parent_widget(),
+                "Export NF for Report Studio",
+                f"Failed to export:\n{e}",
+            )
+
+    def _export_nacd_zone_bundle(self) -> None:
+        """Legacy entry point — now delegates to the registry dispatcher."""
+        self._export_figure_bundle("nacd_zones")
 
     # ================================================================
     #  Dock-level operations (used by tabs + external callers)
     # ================================================================
     def _clear_nf_overlays(self) -> None:
+        from dc_cut.gui.widgets.nf_zone_bands import clear_nf_zone_artists
+        clear_nf_zone_artists(self._nf_zone_artists)
         clear_nf_overlays(self.c, self._nf_limit_artists)
 
     def _save_range_prefs(self, *args) -> None:
@@ -327,8 +730,31 @@ class NearFieldEvalDock(QtWidgets.QDockWidget):
     # ================================================================
     #  showEvent – refresh offset lists
     # ================================================================
+    def restore_zone_spec_from_controller(self) -> None:
+        """Re-populate the NACD tab's zone editors from ``_nf_settings``.
+
+        Called on show / after state-load so reopening a PKL with a
+        non-classic NACD spec restores the view style and the level
+        tables.  Missing or malformed entries silently fall back to
+        ``classic``.
+        """
+        try:
+            settings = getattr(self.c, "_nf_settings", None) or {}
+            raw = settings.get("nacd_zone_spec")
+            if not raw:
+                return
+            from dc_cut.core.processing.nearfield.nacd_zones import (
+                NACDZoneSpec,
+            )
+            spec = NACDZoneSpec.from_dict(raw)
+            self._nacd_tab.set_spec(spec)
+        except Exception:
+            pass
+
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self._update_save_button_state()
+        self.restore_zone_spec_from_controller()
         refresh_offset_checks(
             self, self._nacd_tab.offset_checks, self._nacd_tab.offset_layout,
             default_checked=False,

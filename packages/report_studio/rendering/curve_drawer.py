@@ -92,6 +92,8 @@ def draw(
         markeredgecolor=display_color,
         markerfacecolor=display_color,
         alpha=0.9,
-        label=curve.display_name,
+        label=(curve.legend_label.strip()
+               if getattr(curve, "legend_label", "")
+               else curve.display_name),
         zorder=10,
     )

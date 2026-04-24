@@ -34,6 +34,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         self._build_general_tab()
         self._build_appearance_tab()
         self._build_array_tab()
+        self._build_performance_tab()
         self._build_advanced_tab()
 
         # Buttons
@@ -179,6 +180,140 @@ class PreferencesDialog(QtWidgets.QDialog):
         layout.addStretch()
         self.tabs.addTab(tab, "Array Config")
 
+    def _build_performance_tab(self):
+        """Build the Performance tab exposing every spectrum-rendering
+        optimization as a user-toggleable pref. Fast defaults mirror the
+        values in :mod:`dc_cut.services.prefs`; users can turn any of
+        them off individually to restore the legacy behaviour.
+        """
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(tab)
+
+        # ---- Spectrum rendering ------------------------------------
+        render_group = QtWidgets.QGroupBox("Spectrum rendering")
+        render_layout = QtWidgets.QFormLayout(render_group)
+
+        self.perf_downsample_check = QtWidgets.QCheckBox(
+            "Downsample large spectra before rendering"
+        )
+        self.perf_downsample_check.setChecked(
+            bool(self.prefs.get("spectrum_perf_downsample", True))
+        )
+        render_layout.addRow(self.perf_downsample_check)
+
+        self.perf_max_px_spin = QtWidgets.QSpinBox()
+        self.perf_max_px_spin.setRange(64, 4096)
+        self.perf_max_px_spin.setSingleStep(50)
+        self.perf_max_px_spin.setValue(
+            int(self.prefs.get("spectrum_perf_max_px", 400))
+        )
+        render_layout.addRow("Max pixels per axis:", self.perf_max_px_spin)
+
+        self.perf_interp_combo = QtWidgets.QComboBox()
+        for key, label in (
+            ("auto", "Auto (nearest when input ≥ output)"),
+            ("bilinear", "Bilinear (smooth)"),
+            ("nearest", "Nearest (fastest)"),
+        ):
+            self.perf_interp_combo.addItem(label, userData=key)
+        current = str(self.prefs.get("spectrum_perf_interpolation", "auto")).lower()
+        idx = max(
+            0,
+            self.perf_interp_combo.findData(current)
+            if hasattr(self.perf_interp_combo, "findData")
+            else 0,
+        )
+        self.perf_interp_combo.setCurrentIndex(idx)
+        render_layout.addRow("Interpolation mode:", self.perf_interp_combo)
+
+        self.perf_rgba_check = QtWidgets.QCheckBox(
+            "Cache colormapped RGBA image (skip per-draw normalize)"
+        )
+        self.perf_rgba_check.setChecked(
+            bool(self.prefs.get("spectrum_perf_rgba_cache", True))
+        )
+        render_layout.addRow(self.perf_rgba_check)
+
+        self.perf_raster_check = QtWidgets.QCheckBox(
+            "Rasterize spectrum artist (faster composite)"
+        )
+        self.perf_raster_check.setChecked(
+            bool(self.prefs.get("spectrum_perf_rasterized", True))
+        )
+        render_layout.addRow(self.perf_raster_check)
+
+        self.perf_contour_levels_spin = QtWidgets.QSpinBox()
+        self.perf_contour_levels_spin.setRange(3, 64)
+        self.perf_contour_levels_spin.setValue(
+            int(self.prefs.get("spectrum_perf_contour_levels", 12))
+        )
+        render_layout.addRow(
+            "Contour levels (contourf mode):",
+            self.perf_contour_levels_spin,
+        )
+
+        layout.addWidget(render_group)
+
+        # ---- Interactive canvas ------------------------------------
+        interactive_group = QtWidgets.QGroupBox("Interactive canvas")
+        interactive_layout = QtWidgets.QFormLayout(interactive_group)
+
+        self.perf_blit_check = QtWidgets.QCheckBox(
+            "Use blitting for live previews (line / rect / add tools)"
+        )
+        self.perf_blit_check.setChecked(
+            bool(self.prefs.get("spectrum_perf_use_blitting", True))
+        )
+        interactive_layout.addRow(self.perf_blit_check)
+
+        self.perf_hide_gesture_check = QtWidgets.QCheckBox(
+            "Hide spectrum during drag (fallback when blitting is off)"
+        )
+        self.perf_hide_gesture_check.setChecked(
+            bool(self.prefs.get("spectrum_perf_hide_during_gesture", True))
+        )
+        interactive_layout.addRow(self.perf_hide_gesture_check)
+
+        self.perf_throttle_spin = QtWidgets.QSpinBox()
+        self.perf_throttle_spin.setRange(0, 200)
+        self.perf_throttle_spin.setSuffix(" ms")
+        self.perf_throttle_spin.setValue(
+            int(self.prefs.get("spectrum_perf_draw_throttle_ms", 0))
+        )
+        interactive_layout.addRow(
+            "Draw-idle throttle (0 = off):",
+            self.perf_throttle_spin,
+        )
+
+        layout.addWidget(interactive_group)
+
+        # ---- Advanced ----------------------------------------------
+        advanced_group = QtWidgets.QGroupBox("Advanced")
+        advanced_layout = QtWidgets.QVBoxLayout(advanced_group)
+        self.perf_incremental_check = QtWidgets.QCheckBox(
+            "Incremental update: reuse the spectrum artist on alpha / "
+            "visibility toggles"
+        )
+        self.perf_incremental_check.setChecked(
+            bool(self.prefs.get("spectrum_perf_incremental_update", True))
+        )
+        advanced_layout.addWidget(self.perf_incremental_check)
+        layout.addWidget(advanced_group)
+
+        note = QtWidgets.QLabel(
+            "Every option defaults to the fast path. Turn any of them off "
+            "individually to restore the legacy behaviour."
+        )
+        note.setWordWrap(True)
+        try:
+            note.setStyleSheet("color: gray; font-style: italic;")
+        except Exception:
+            pass
+        layout.addWidget(note)
+
+        layout.addStretch()
+        self.tabs.addTab(tab, "Performance")
+
     def _build_advanced_tab(self):
         """Build the Advanced preferences tab."""
         tab = QtWidgets.QWidget()
@@ -201,6 +336,50 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.robust_upper_spin.setSingleStep(0.5)
         self.robust_upper_spin.setValue(self.prefs.get("robust_upper_pct", 99.5))
         limits_layout.addRow("Upper percentile:", self.robust_upper_spin)
+
+        # Data-only autoscale policy -- keep k-guides / NF lines out of
+        # matplotlib's autoscale so the passive-mode y axis is driven
+        # purely by the visible dispersion data.
+        self.axis_exclude_kguides_check = QtWidgets.QCheckBox(
+            "Ignore k-limit curves when auto-scaling"
+        )
+        self.axis_exclude_kguides_check.setChecked(
+            bool(self.prefs.get("axis_exclude_kguides", True))
+        )
+        limits_layout.addRow(self.axis_exclude_kguides_check)
+
+        self.axis_exclude_nf_check = QtWidgets.QCheckBox(
+            "Ignore NACD / near-field guide lines when auto-scaling"
+        )
+        self.axis_exclude_nf_check.setChecked(
+            bool(self.prefs.get("axis_exclude_nf_lines", True))
+        )
+        limits_layout.addRow(self.axis_exclude_nf_check)
+
+        self.axis_pad_frac_spin = QtWidgets.QDoubleSpinBox()
+        self.axis_pad_frac_spin.setRange(0.0, 1.0)
+        self.axis_pad_frac_spin.setDecimals(2)
+        self.axis_pad_frac_spin.setSingleStep(0.01)
+        self.axis_pad_frac_spin.setValue(
+            float(self.prefs.get("axis_pad_frac", 0.08))
+        )
+        limits_layout.addRow("Padding fraction:", self.axis_pad_frac_spin)
+
+        self.axis_v_clamp_spin = QtWidgets.QDoubleSpinBox()
+        self.axis_v_clamp_spin.setRange(0.0, 100.0)
+        self.axis_v_clamp_spin.setDecimals(2)
+        self.axis_v_clamp_spin.setSingleStep(0.25)
+        self.axis_v_clamp_spin.setValue(
+            float(self.prefs.get("axis_v_outlier_clamp_mult", 2.5))
+        )
+        self.axis_v_clamp_spin.setToolTip(
+            "Clamp the top of the velocity axis to "
+            "(multiplier \u00D7 99.5-percentile of V). 0 disables."
+        )
+        limits_layout.addRow(
+            "V outlier clamp (\u00D7 p99.5, 0 = off):",
+            self.axis_v_clamp_spin,
+        )
 
         layout.addWidget(limits_group)
 
@@ -225,8 +404,16 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.tabs.addTab(tab, "Advanced")
 
     def _gather_preferences(self) -> dict:
-        """Gather all preference values from UI widgets."""
-        prefs = {}
+        """Gather all preference values from UI widgets.
+
+        Starts from a copy of the currently loaded prefs so keys that
+        do not have a UI representation in this dialog (spectrum
+        display prefs, migration flags, colormap, alpha, …) are
+        preserved on save. The gathered UI values are then overlaid on
+        top. Prior to this fix the method returned a fresh dict, which
+        silently wiped every key not explicitly listed here.
+        """
+        prefs = dict(self.prefs)
 
         # General
         prefs["auto_save_enabled"] = self.auto_save_check.isChecked()
@@ -250,18 +437,114 @@ class PreferencesDialog(QtWidgets.QDialog):
         # Advanced
         prefs["robust_lower_pct"] = self.robust_lower_spin.value()
         prefs["robust_upper_pct"] = self.robust_upper_spin.value()
+        prefs["axis_exclude_kguides"] = (
+            self.axis_exclude_kguides_check.isChecked()
+        )
+        prefs["axis_exclude_nf_lines"] = (
+            self.axis_exclude_nf_check.isChecked()
+        )
+        prefs["axis_pad_frac"] = float(self.axis_pad_frac_spin.value())
+        prefs["axis_v_outlier_clamp_mult"] = float(
+            self.axis_v_clamp_spin.value()
+        )
         prefs["freq_tick_style"] = "decades" if self.tick_decades.isChecked() else "custom"
 
-        # Copy over values we don't have UI for
-        prefs["freq_custom_ticks"] = self.prefs.get("freq_custom_ticks", [])
+        # Performance
+        prefs["spectrum_perf_downsample"] = self.perf_downsample_check.isChecked()
+        prefs["spectrum_perf_max_px"] = int(self.perf_max_px_spin.value())
+        prefs["spectrum_perf_rgba_cache"] = self.perf_rgba_check.isChecked()
+        prefs["spectrum_perf_rasterized"] = self.perf_raster_check.isChecked()
+        prefs["spectrum_perf_contour_levels"] = int(
+            self.perf_contour_levels_spin.value()
+        )
+        prefs["spectrum_perf_use_blitting"] = self.perf_blit_check.isChecked()
+        prefs["spectrum_perf_hide_during_gesture"] = (
+            self.perf_hide_gesture_check.isChecked()
+        )
+        prefs["spectrum_perf_draw_throttle_ms"] = int(self.perf_throttle_spin.value())
+        prefs["spectrum_perf_incremental_update"] = (
+            self.perf_incremental_check.isChecked()
+        )
+        interp_data = None
+        try:
+            interp_data = self.perf_interp_combo.currentData()
+        except Exception:
+            interp_data = None
+        if interp_data:
+            prefs["spectrum_perf_interpolation"] = str(interp_data)
+        else:
+            # Fallback: preserve existing pref if combo data is unavailable.
+            prefs["spectrum_perf_interpolation"] = str(
+                self.prefs.get("spectrum_perf_interpolation", "auto")
+            )
+
+        # freq_custom_ticks preserved implicitly by dict(self.prefs) above,
+        # but keep the explicit fallback as a belt-and-braces guard.
+        prefs.setdefault("freq_custom_ticks", self.prefs.get("freq_custom_ticks", []))
 
         return prefs
+
+    def _apply_live_perf_changes(self, new_prefs: dict) -> None:
+        """Push performance-relevant prefs to the live controller/blit
+        manager so the user doesn't need to restart the app after
+        toggling a perf option. Safe no-op when no controller is
+        reachable.
+        """
+        parent = self.parent()
+        controller = getattr(parent, "_controller", None) or getattr(
+            parent, "controller", None
+        )
+        if controller is None and hasattr(parent, "get_controller"):
+            try:
+                controller = parent.get_controller()
+            except Exception:
+                controller = None
+        if controller is None:
+            return
+
+        # Blit manager state.
+        bm = getattr(controller, "blit_manager", None)
+        if bm is not None:
+            try:
+                bm.set_enabled(bool(new_prefs.get("spectrum_perf_use_blitting", True)))
+            except Exception:
+                pass
+            try:
+                bm.set_throttle_ms(int(new_prefs.get("spectrum_perf_draw_throttle_ms", 0)))
+            except Exception:
+                pass
+
+        # Re-render the active spectrum so the new downsample / RGBA /
+        # interpolation / rasterize / contour-level prefs take effect
+        # immediately.
+        spectrum_handler = getattr(controller, "spectrum", None)
+        if spectrum_handler is not None:
+            try:
+                # Force a full rebuild rather than the incremental path.
+                layers = getattr(
+                    getattr(controller, "_layers_model", None), "layers", []
+                )
+                for layer in layers:
+                    if hasattr(layer, "_spectrum_render_key"):
+                        layer._spectrum_render_key = None
+                spectrum_handler.render_backgrounds()
+            except Exception:
+                pass
+
+        # Invalidate the blit cache so the next preview uses the new
+        # static background.
+        if bm is not None:
+            try:
+                bm.invalidate()
+            except Exception:
+                pass
 
     def _on_apply(self):
         """Apply preferences without closing dialog."""
         new_prefs = self._gather_preferences()
         save_prefs(new_prefs)
         self.prefs = new_prefs
+        self._apply_live_perf_changes(new_prefs)
 
         # Show confirmation
         QtWidgets.QMessageBox.information(
@@ -275,6 +558,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         new_prefs = self._gather_preferences()
         save_prefs(new_prefs)
         self.prefs = new_prefs
+        self._apply_live_perf_changes(new_prefs)
         self.accept()
 
     def _on_cancel(self):

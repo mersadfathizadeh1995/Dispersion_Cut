@@ -672,10 +672,27 @@ class MainWindow(QtWidgets.QMainWindow):
                 m_file.addAction(act_load_spec)
             except Exception: pass
             try:
+                a_open_npz = reg.get('file.open_spectrum_npz')
+                act_open_npz = QtGui.QAction(a_open_npz.text, self)
+                if a_open_npz.shortcut:
+                    act_open_npz.setShortcut(a_open_npz.shortcut)
+                act_open_npz.triggered.connect(a_open_npz.callback)
+                m_file.addAction(act_open_npz)
+            except Exception:
+                pass
+            try:
                 a_save = reg.get('file.save_state'); act_save = QtGui.QAction(a_save.text, self);
                 if a_save.shortcut: act_save.setShortcut(a_save.shortcut)
                 act_save.triggered.connect(a_save.callback)
                 m_file.addAction(act_save)
+            except Exception: pass
+            try:
+                a_save_as = reg.get('file.save_state_as')
+                act_save_as = QtGui.QAction(a_save_as.text, self)
+                if a_save_as.shortcut:
+                    act_save_as.setShortcut(a_save_as.shortcut)
+                act_save_as.triggered.connect(a_save_as.callback)
+                m_file.addAction(act_save_as)
             except Exception: pass
             try:
                 a_txt = reg.get('file.save_dc'); act_txt = QtGui.QAction(a_txt.text, self);
@@ -712,6 +729,7 @@ class MainWindow(QtWidgets.QMainWindow):
         <tr><td>Preferences</td><td>Ctrl+,</td></tr>
         <tr><td>Append Data</td><td>Ctrl+Shift+O</td></tr>
         <tr><td>Save State</td><td>Ctrl+S</td></tr>
+        <tr><td>Save State As</td><td>Ctrl+Shift+S</td></tr>
         <tr><td>Exit</td><td>Ctrl+Q</td></tr>
         <tr><td><b>Edit</b></td><td></td></tr>
         <tr><td>Undo</td><td>Ctrl+Z</td></tr>
@@ -1136,6 +1154,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
                 continue
 
+            try:
+                import os as _os
+                ctrl._loaded_state_path = _os.path.abspath(str(path))
+            except Exception:
+                pass
+
             v = S["velocity_arrays"]
             f = S["frequency_arrays"]
             w = S["wavelength_arrays"]
@@ -1400,6 +1424,11 @@ class MainWindow(QtWidgets.QMainWindow):
             spectrum_edit = QtWidgets.QLineEdit(dlg)
             spectrum_edit.setPlaceholderText("Select spectrum .npz file...")
             spectrum_btn = QtWidgets.QPushButton("Browse", dlg)
+            map_btn = QtWidgets.QPushButton("Map NPZ…", dlg)
+            map_btn.setToolTip(
+                "Open the NPZ mapper to pick which arrays correspond to "
+                "frequencies / velocities / power."
+            )
 
             def browse_spectrum():
                 path, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -1408,9 +1437,35 @@ class MainWindow(QtWidgets.QMainWindow):
                 if path:
                     spectrum_edit.setText(path)
 
+            def open_mapper():
+                from dc_cut.gui.dialogs.map_npz import MapNpzDialog
+                path = spectrum_edit.text().strip()
+                if not path:
+                    path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                        dlg, "Select Spectrum File", "", "Spectrum Files (*.npz);;All Files (*.*)"
+                    )
+                    if not path:
+                        return
+                    spectrum_edit.setText(path)
+                mapper = MapNpzDialog(path, parent=dlg)
+                try:
+                    accepted = mapper.exec() == QtWidgets.QDialog.DialogCode.Accepted
+                except AttributeError:
+                    accepted = mapper.exec_() == QtWidgets.QDialog.Accepted
+                if not accepted:
+                    return
+                spec = mapper.result_spec()
+                if spec is None:
+                    return
+                # Spec is now persisted by MapNpzDialog itself, so a
+                # subsequent load_spectrum_for_layer will reuse it via
+                # the tolerant core readers or the explicit retry path.
+
             spectrum_btn.clicked.connect(browse_spectrum)
+            map_btn.clicked.connect(open_mapper)
             spectrum_layout.addWidget(spectrum_edit, 1)
             spectrum_layout.addWidget(spectrum_btn)
+            spectrum_layout.addWidget(map_btn)
             layout.addWidget(spectrum_label)
             layout.addLayout(spectrum_layout)
 
@@ -1433,15 +1488,16 @@ class MainWindow(QtWidgets.QMainWindow):
                     QtWidgets.QMessageBox.warning(self, "No File", "Please select a spectrum file.")
                     return
 
-                # Load spectrum
+                # Load spectrum — fall back to the NPZ mapper on failure
                 if hasattr(self.controller, 'load_spectrum_for_layer'):
                     success = self.controller.load_spectrum_for_layer(layer_idx, spectrum_path)
+                    if not success:
+                        success = self._retry_with_mapper(layer_idx, spectrum_path)
                     if success:
                         QtWidgets.QMessageBox.information(
                             self, "Success",
                             f"Spectrum loaded for layer {layer_idx}: {layers[layer_idx].label}"
                         )
-                        # Refresh spectrum dock to show new controls
                         try:
                             spec = getattr(self.layers, '_spectrum_dock', self.spectrum)
                             if spec and hasattr(spec, 'rebuild'):
@@ -1461,6 +1517,63 @@ class MainWindow(QtWidgets.QMainWindow):
 
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to add spectrum:\n{e}")
+
+    def _retry_with_mapper(self, layer_idx: int, spectrum_path: str) -> bool:
+        """Fallback load path — ask the user to map NPZ keys by hand.
+
+        Called when :meth:`BaseInteractiveRemoval.load_spectrum_for_layer`
+        returns ``False``, which usually means the file uses a custom
+        schema the tolerant reader could not infer.
+        """
+        try:
+            from dc_cut.gui.dialogs.map_npz import MapNpzDialog, read_npz_with_spec
+        except Exception:
+            return False
+        try:
+            dlg = MapNpzDialog(spectrum_path, parent=self)
+            try:
+                accepted = dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted
+            except AttributeError:
+                accepted = dlg.exec_() == QtWidgets.QDialog.Accepted
+            if not accepted:
+                return False
+            spec = dlg.result_spec()
+            if spec is None:
+                return False
+
+            records = read_npz_with_spec(spectrum_path, spec)
+            if not records:
+                return False
+
+            model = getattr(self.controller, '_layers_model', None)
+            if model is None or layer_idx < 0 or layer_idx >= len(model.layers):
+                return False
+            layer = model.layers[layer_idx]
+            # For single layout, use the first record directly; for combined,
+            # prefer the record whose offset matches the layer label, else fall
+            # back to the first record.
+            record = records[0]
+            if spec.layout == "combined":
+                from dc_cut.core.io.offset_label import normalize_offset
+                wanted = normalize_offset(layer.label)
+                for r in records:
+                    if r.offset and r.offset == wanted:
+                        record = r
+                        break
+            layer.spectrum_data = record.to_dict()
+            try:
+                from dc_cut.services.prefs import get_pref
+                layer.spectrum_alpha = get_pref('default_spectrum_alpha', 0.5)
+                layer.spectrum_visible = get_pref('show_spectra', True)
+            except Exception:
+                layer.spectrum_alpha = 0.5
+                layer.spectrum_visible = True
+
+            if hasattr(self.controller, 'spectrum') and self.controller.spectrum is not None:
+                self.controller.spectrum.render_backgrounds()
+            return True
+        except Exception:
+            return False
 
     def _build_toolbar(self):
         pass
@@ -1556,6 +1669,21 @@ class MainWindow(QtWidgets.QMainWindow):
                     sc_save.activated.connect(a_save.callback)
                     sc_save.setEnabled(True)
                     self._save_shortcut = sc_save
+                except Exception:
+                    pass
+                try:
+                    a_save_as = reg.get('file.save_state_as')
+                    sc_save_as = QtGui.QShortcut(
+                        QtGui.QKeySequence('Ctrl+Shift+S'), self
+                    )
+                    sc_save_as.setContext(
+                        QtCore.Qt.WindowShortcut
+                        if hasattr(QtCore.Qt, 'WindowShortcut')
+                        else QtCore.Qt.ShortcutContext.WindowShortcut
+                    )
+                    sc_save_as.activated.connect(a_save_as.callback)
+                    sc_save_as.setEnabled(True)
+                    self._save_as_shortcut = sc_save_as
                 except Exception:
                     pass
         except Exception as e:

@@ -14,15 +14,10 @@ from ...qt_compat import (
     Horizontal, PolicyExpanding,
 )
 from .collapsible import CollapsibleSection
+from .fonts import CURATED_FONTS, populate_font_combo
 
 if TYPE_CHECKING:
-    from ...core.models import SubplotState
-
-
-_CURATED_FONTS = [
-    "Arial", "Times New Roman", "Calibri",
-    "Helvetica", "Courier New", "Georgia",
-]
+    from ...core.models import SubplotState, TypographyConfig
 
 
 class SubplotSettingsPanel(QtWidgets.QWidget):
@@ -42,6 +37,8 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
         self._updating = False
         self._subplot_key = ""
         self._batch_keys: list = []
+        self._current_sp = None
+        self._batch_subplots: list = []
         self._build_ui()
 
     def _build_ui(self):
@@ -68,7 +65,7 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
         tl.addRow("Name:", self._edit_name)
 
         self._combo_font = QtWidgets.QComboBox()
-        self._combo_font.addItems(_CURATED_FONTS)
+        self._combo_font.addItems(CURATED_FONTS)
         self._combo_font.currentTextChanged.connect(
             lambda f: self._emit("font_family", f))
         tl.addRow("Font:", self._combo_font)
@@ -118,6 +115,26 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
         self._combo_xtick.currentTextChanged.connect(
             lambda v: self._emit("x_tick_format", v))
         xl.addRow("Tick format:", self._combo_xtick)
+
+        # Frequency tick style (decades / one-two-five / custom / ruler)
+        # — mirrors the DC Cut properties panel.
+        self._combo_freq_tick_style = QtWidgets.QComboBox()
+        self._combo_freq_tick_style.addItems(
+            ["decades", "one-two-five", "custom", "ruler"]
+        )
+        self._combo_freq_tick_style.currentTextChanged.connect(
+            self._on_freq_tick_style_changed
+        )
+        xl.addRow("Freq ticks:", self._combo_freq_tick_style)
+
+        self._edit_freq_custom = QtWidgets.QLineEdit()
+        self._edit_freq_custom.setPlaceholderText(
+            "e.g. 1,2,3,5,7,10,15,20"
+        )
+        self._edit_freq_custom.editingFinished.connect(
+            self._on_freq_custom_ticks_changed
+        )
+        xl.addRow("Custom (Hz):", self._edit_freq_custom)
 
         # Auto + manual range
         self._chk_auto_x = QtWidgets.QCheckBox("Auto")
@@ -239,102 +256,216 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
 
     # ── Public API ────────────────────────────────────────────────────
 
-    def show_subplot(self, sp: "SubplotState"):
-        """Populate from a SubplotState."""
+    def show_subplot(self, sp: "SubplotState",
+                     typography: "TypographyConfig" = None):
+        """Populate from a SubplotState.
+
+        ``typography`` (optional) is the sheet's global TypographyConfig used
+        to display effective font/size when the subplot has no per-subplot
+        override (font_family == "" or sizes == 0).
+        """
         self._updating = True
         self._subplot_key = sp.key
+        self._current_sp = sp
         self._batch_keys = []
+        self._batch_subplots = []
         self._lbl_selection.setVisible(False)
 
-        self._edit_name.setText(sp.name)
+        # Block signals across all controls during populate to avoid
+        # accidentally clobbering the model with the combo's first item.
+        widgets = [
+            self._edit_name, self._combo_font, self._spin_title_size,
+            self._spin_label_size, self._spin_tick_size,
+            self._combo_domain, self._combo_xscale, self._combo_xtick,
+            self._combo_freq_tick_style, self._edit_freq_custom,
+            self._chk_auto_x, self._spin_xmin, self._spin_xmax,
+            self._edit_xlabel, self._combo_yscale, self._combo_ytick,
+            self._chk_auto_y, self._spin_ymin, self._spin_ymax,
+            self._edit_ylabel, self._chk_legend_visible,
+            self._combo_legend_pos, self._spin_legend_size,
+            self._chk_legend_frame,
+        ]
+        for w in widgets:
+            w.blockSignals(True)
+        try:
+            self._edit_name.setText(sp.name)
 
-        # Font — curated combo
-        font = sp.font_family or _CURATED_FONTS[0]
-        idx = self._combo_font.findText(font)
-        if idx >= 0:
-            self._combo_font.setCurrentIndex(idx)
-        self._spin_title_size.setValue(sp.title_font_size if sp.title_font_size > 0 else 12)
-        self._spin_label_size.setValue(sp.axis_label_font_size if sp.axis_label_font_size > 0 else 10)
-        self._spin_tick_size.setValue(sp.tick_label_font_size if sp.tick_label_font_size > 0 else 9)
+            # Font — curated combo. Show effective value (sp override or
+            # global typography fallback) without writing to the model.
+            tfont = ""
+            if typography is not None:
+                tfont = getattr(typography, "font_family", "") or ""
+            effective_font = sp.font_family or tfont or CURATED_FONTS[0]
+            populate_font_combo(self._combo_font, effective_font)
 
-        # X axis
-        idx = self._combo_domain.findText(sp.x_domain)
-        if idx >= 0:
-            self._combo_domain.setCurrentIndex(idx)
-        idx = self._combo_xscale.findText(sp.x_scale)
-        if idx >= 0:
-            self._combo_xscale.setCurrentIndex(idx)
-        idx = self._combo_xtick.findText(sp.x_tick_format)
-        if idx >= 0:
-            self._combo_xtick.setCurrentIndex(idx)
-        self._chk_auto_x.setChecked(sp.auto_x)
-        if sp.x_range:
-            self._spin_xmin.setValue(sp.x_range[0])
-            self._spin_xmax.setValue(sp.x_range[1])
-        self._edit_xlabel.setText(sp.x_label)
+            # Sizes — show the per-subplot value when set, otherwise the
+            # effective global size derived from typography.
+            if typography is not None:
+                title_default = typography.title_size
+                label_default = typography.axis_label_size
+                tick_default = typography.tick_label_size
+                legend_default = typography.legend_font_size
+            else:
+                title_default = 12
+                label_default = 10
+                tick_default = 9
+                legend_default = 8
+            self._spin_title_size.setValue(
+                sp.title_font_size if sp.title_font_size > 0 else title_default)
+            self._spin_label_size.setValue(
+                sp.axis_label_font_size if sp.axis_label_font_size > 0 else label_default)
+            self._spin_tick_size.setValue(
+                sp.tick_label_font_size if sp.tick_label_font_size > 0 else tick_default)
 
-        # Y axis
-        idx = self._combo_yscale.findText(sp.y_scale)
-        if idx >= 0:
-            self._combo_yscale.setCurrentIndex(idx)
-        idx = self._combo_ytick.findText(sp.y_tick_format)
-        if idx >= 0:
-            self._combo_ytick.setCurrentIndex(idx)
-        self._chk_auto_y.setChecked(sp.auto_y)
-        if sp.y_range:
-            self._spin_ymin.setValue(sp.y_range[0])
-            self._spin_ymax.setValue(sp.y_range[1])
-        self._edit_ylabel.setText(sp.y_label)
-
-        # Legend
-        legend_vis = getattr(sp, "legend_visible", None)
-        self._chk_legend_visible.setChecked(
-            legend_vis if legend_vis is not None else True)
-        legend_pos = getattr(sp, "legend_position", "") or "best"
-        idx = self._combo_legend_pos.findText(legend_pos)
-        if idx >= 0:
-            self._combo_legend_pos.setCurrentIndex(idx)
-        leg_size = getattr(sp, "legend_font_size", 0)
-        self._spin_legend_size.setValue(leg_size if leg_size > 0 else 8)
-        legend_frame = getattr(sp, "legend_frame_on", None)
-        self._chk_legend_frame.setChecked(
-            legend_frame if legend_frame is not None else True)
-
-        self._updating = False
-
-    def show_subplots_batch(self, keys: list, subplots: list):
-        """Batch editing for multiple subplots — common settings apply to all."""
-        self._updating = True
-        self._batch_keys = list(keys)
-        self._subplot_key = keys[0] if keys else ""
-
-        self._lbl_selection.setText(f"{len(keys)} subplots selected")
-        self._lbl_selection.setVisible(True)
-
-        # Show first subplot's values as a reference
-        if subplots:
-            sp = subplots[0]
-            self._edit_name.setText("")
-            self._edit_name.setPlaceholderText("(multiple)")
-            font = sp.font_family or _CURATED_FONTS[0]
-            idx = self._combo_font.findText(font)
-            if idx >= 0:
-                self._combo_font.setCurrentIndex(idx)
-            self._spin_title_size.setValue(sp.title_font_size)
-            self._spin_label_size.setValue(sp.axis_label_font_size)
-            self._spin_tick_size.setValue(sp.tick_label_font_size)
-
+            # X axis
             idx = self._combo_domain.findText(sp.x_domain)
             if idx >= 0:
                 self._combo_domain.setCurrentIndex(idx)
             idx = self._combo_xscale.findText(sp.x_scale)
             if idx >= 0:
                 self._combo_xscale.setCurrentIndex(idx)
+            idx = self._combo_xtick.findText(sp.x_tick_format)
+            if idx >= 0:
+                self._combo_xtick.setCurrentIndex(idx)
+            freq_style = str(getattr(sp, "freq_tick_style", "one-two-five"))
+            if freq_style == "one_two_five":
+                freq_style = "one-two-five"
+            idx = self._combo_freq_tick_style.findText(freq_style)
+            if idx >= 0:
+                self._combo_freq_tick_style.setCurrentIndex(idx)
+            custom = getattr(sp, "freq_custom_ticks", None) or []
+            self._edit_freq_custom.setText(
+                ",".join(f"{float(v):g}" for v in custom)
+            )
+            self._edit_freq_custom.setEnabled(freq_style == "custom")
+            self._chk_auto_x.setChecked(sp.auto_x)
+            # Seed manual X range: prefer the user's manual range, fall
+            # back to the last rendered auto limits so unchecking "Auto"
+            # starts from what the user is currently seeing (not 0.0).
+            seed_xlim = sp.x_range
+            if not seed_xlim:
+                seed_xlim = getattr(sp, "last_auto_xlim", None)
+            if seed_xlim and len(seed_xlim) == 2:
+                try:
+                    self._spin_xmin.setValue(float(seed_xlim[0]))
+                    self._spin_xmax.setValue(float(seed_xlim[1]))
+                except (TypeError, ValueError):
+                    pass
+            self._edit_xlabel.setText(sp.x_label)
+
+            # Y axis
             idx = self._combo_yscale.findText(sp.y_scale)
             if idx >= 0:
                 self._combo_yscale.setCurrentIndex(idx)
+            idx = self._combo_ytick.findText(sp.y_tick_format)
+            if idx >= 0:
+                self._combo_ytick.setCurrentIndex(idx)
+            self._chk_auto_y.setChecked(sp.auto_y)
+            seed_ylim = sp.y_range
+            if not seed_ylim:
+                seed_ylim = getattr(sp, "last_auto_ylim", None)
+            if seed_ylim and len(seed_ylim) == 2:
+                try:
+                    self._spin_ymin.setValue(float(seed_ylim[0]))
+                    self._spin_ymax.setValue(float(seed_ylim[1]))
+                except (TypeError, ValueError):
+                    pass
+            self._edit_ylabel.setText(sp.y_label)
 
-        self._updating = False
+            # Legend
+            legend_vis = getattr(sp, "legend_visible", None)
+            self._chk_legend_visible.setChecked(
+                legend_vis if legend_vis is not None else True)
+            legend_pos = getattr(sp, "legend_position", "") or "best"
+            idx = self._combo_legend_pos.findText(legend_pos)
+            if idx >= 0:
+                self._combo_legend_pos.setCurrentIndex(idx)
+            leg_size = getattr(sp, "legend_font_size", 0)
+            self._spin_legend_size.setValue(
+                leg_size if leg_size > 0 else legend_default)
+            legend_frame = getattr(sp, "legend_frame_on", None)
+            self._chk_legend_frame.setChecked(
+                legend_frame if legend_frame is not None else True)
+        finally:
+            for w in widgets:
+                w.blockSignals(False)
+            self._updating = False
+
+    def show_subplots_batch(self, keys: list, subplots: list,
+                            typography: "TypographyConfig" = None):
+        """Batch editing for multiple subplots — common settings apply to all."""
+        self._updating = True
+        self._batch_keys = list(keys)
+        self._batch_subplots = list(subplots or [])
+        self._current_sp = None
+        self._subplot_key = keys[0] if keys else ""
+
+        self._lbl_selection.setText(f"{len(keys)} subplots selected")
+        self._lbl_selection.setVisible(True)
+
+        widgets = [
+            self._edit_name, self._combo_font, self._spin_title_size,
+            self._spin_label_size, self._spin_tick_size,
+            self._combo_domain, self._combo_xscale, self._combo_yscale,
+            self._chk_auto_x, self._spin_xmin, self._spin_xmax,
+            self._chk_auto_y, self._spin_ymin, self._spin_ymax,
+        ]
+        for w in widgets:
+            w.blockSignals(True)
+        try:
+            if subplots:
+                sp = subplots[0]
+                self._edit_name.setText("")
+                self._edit_name.setPlaceholderText("(multiple)")
+                tfont = ""
+                if typography is not None:
+                    tfont = getattr(typography, "font_family", "") or ""
+                effective_font = sp.font_family or tfont or CURATED_FONTS[0]
+                populate_font_combo(self._combo_font, effective_font)
+                self._spin_title_size.setValue(sp.title_font_size)
+                self._spin_label_size.setValue(sp.axis_label_font_size)
+                self._spin_tick_size.setValue(sp.tick_label_font_size)
+
+                # Seed axis controls from the first subplot so the
+                # "Apply X/Y range" buttons have meaningful starting
+                # values. The Apply buttons already broadcast to every
+                # key in ``self._batch_keys`` via :meth:`_emit`.
+                self._chk_auto_x.setChecked(bool(sp.auto_x))
+                seed_x = sp.x_range or getattr(sp, "last_auto_xlim", None)
+                if seed_x and len(seed_x) == 2:
+                    try:
+                        self._spin_xmin.setValue(float(seed_x[0]))
+                        self._spin_xmax.setValue(float(seed_x[1]))
+                    except (TypeError, ValueError):
+                        pass
+                self._chk_auto_y.setChecked(bool(sp.auto_y))
+                seed_y = sp.y_range or getattr(sp, "last_auto_ylim", None)
+                if seed_y and len(seed_y) == 2:
+                    try:
+                        self._spin_ymin.setValue(float(seed_y[0]))
+                        self._spin_ymax.setValue(float(seed_y[1]))
+                    except (TypeError, ValueError):
+                        pass
+                self._spin_xmin.setEnabled(not bool(sp.auto_x))
+                self._spin_xmax.setEnabled(not bool(sp.auto_x))
+                self._btn_apply_x.setEnabled(not bool(sp.auto_x))
+                self._spin_ymin.setEnabled(not bool(sp.auto_y))
+                self._spin_ymax.setEnabled(not bool(sp.auto_y))
+                self._btn_apply_y.setEnabled(not bool(sp.auto_y))
+
+                idx = self._combo_domain.findText(sp.x_domain)
+                if idx >= 0:
+                    self._combo_domain.setCurrentIndex(idx)
+                idx = self._combo_xscale.findText(sp.x_scale)
+                if idx >= 0:
+                    self._combo_xscale.setCurrentIndex(idx)
+                idx = self._combo_yscale.findText(sp.y_scale)
+                if idx >= 0:
+                    self._combo_yscale.setCurrentIndex(idx)
+        finally:
+            for w in widgets:
+                w.blockSignals(False)
+            self._updating = False
 
     def clear(self):
         """Reset to empty state."""
@@ -355,6 +486,29 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
         self._spin_xmin.setEnabled(not checked)
         self._spin_xmax.setEnabled(not checked)
         self._btn_apply_x.setEnabled(not checked)
+        # When the user disables Auto, pre-fill the spinboxes with the
+        # last rendered auto limits so the starting point is what the
+        # plot is showing instead of 0.0 / 0.0. For batch mode, use the
+        # first selected subplot's cache as the seed (the user will
+        # tweak and Apply anyway).
+        if not checked and not self._updating:
+            seed = None
+            sp = self._current_sp
+            if sp is None and self._batch_subplots:
+                sp = self._batch_subplots[0]
+            if sp is not None:
+                seed = getattr(sp, "x_range", None) or getattr(
+                    sp, "last_auto_xlim", None
+                )
+            if seed and len(seed) == 2:
+                self._spin_xmin.blockSignals(True)
+                self._spin_xmax.blockSignals(True)
+                try:
+                    self._spin_xmin.setValue(float(seed[0]))
+                    self._spin_xmax.setValue(float(seed[1]))
+                finally:
+                    self._spin_xmin.blockSignals(False)
+                    self._spin_xmax.blockSignals(False)
         if not self._updating:
             self._emit("auto_x", checked)
 
@@ -362,6 +516,24 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
         self._spin_ymin.setEnabled(not checked)
         self._spin_ymax.setEnabled(not checked)
         self._btn_apply_y.setEnabled(not checked)
+        if not checked and not self._updating:
+            seed = None
+            sp = self._current_sp
+            if sp is None and self._batch_subplots:
+                sp = self._batch_subplots[0]
+            if sp is not None:
+                seed = getattr(sp, "y_range", None) or getattr(
+                    sp, "last_auto_ylim", None
+                )
+            if seed and len(seed) == 2:
+                self._spin_ymin.blockSignals(True)
+                self._spin_ymax.blockSignals(True)
+                try:
+                    self._spin_ymin.setValue(float(seed[0]))
+                    self._spin_ymax.setValue(float(seed[1]))
+                finally:
+                    self._spin_ymin.blockSignals(False)
+                    self._spin_ymax.blockSignals(False)
         if not self._updating:
             self._emit("auto_y", checked)
 
@@ -374,3 +546,22 @@ class SubplotSettingsPanel(QtWidgets.QWidget):
         ymin, ymax = self._spin_ymin.value(), self._spin_ymax.value()
         if ymax > ymin:
             self._emit("y_range", (ymin, ymax))
+
+    def _on_freq_tick_style_changed(self, style: str):
+        """Broadcast the freq tick style and toggle the Custom field."""
+        self._edit_freq_custom.setEnabled(style == "custom")
+        self._emit("freq_tick_style", style)
+
+    def _on_freq_custom_ticks_changed(self):
+        """Parse the comma-separated custom tick list and emit."""
+        raw = self._edit_freq_custom.text().strip()
+        vals: list = []
+        for part in raw.replace(";", ",").split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                vals.append(float(part))
+            except ValueError:
+                continue
+        self._emit("freq_custom_ticks", vals)

@@ -30,8 +30,8 @@ import numpy as np
 from dc_cut.core.processing.nearfield.ranges import EvaluationRange
 
 
-LineKind = Literal["lambda", "freq"]
-LineRole = Literal["min", "max"]
+LineKind = Literal["lambda", "freq", "zone"]
+LineRole = Literal["min", "max", "label"]
 LineSource = Literal["user", "derived"]
 
 
@@ -46,6 +46,7 @@ class DerivedLine:
     source: LineSource
     valid: bool = True
     derived_from: Optional[float] = None
+    custom_label: str = ""  # overrides default "f_min = … Hz" on canvas + tree
 
     def key(self) -> Tuple[int, str, str]:
         """Stable key for persistence / visibility state."""
@@ -77,9 +78,17 @@ class DerivedLimitSet:
         ]
 
     def band_count(self) -> int:
-        if not self.lines:
+        """Return the number of *threshold* bands (kind != 'zone').
+
+        Zone pseudo-bands (used purely as Limit Lines tab
+        bookkeeping) are excluded so this still answers the natural
+        question "how many distinct NF threshold bands did the
+        derivation produce?".
+        """
+        real = [ln.band_index for ln in self.lines if ln.kind != "zone"]
+        if not real:
             return 0
-        return max(ln.band_index for ln in self.lines) + 1
+        return max(real) + 1
 
     def find(
         self, band_index: int, kind: LineKind, role: LineRole,

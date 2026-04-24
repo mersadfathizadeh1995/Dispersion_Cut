@@ -40,11 +40,16 @@ class LineSelector:
         on_select: Callable[[float, float, float, float, str], None],
         line_color: str = "#e74c3c",
         arrow_color: str = "#e74c3c",
+        controller=None,
     ):
         self.ax = ax
         self.on_select = on_select
         self.line_color = line_color
         self.arrow_color = arrow_color
+        # Optional back-reference to the controller so we can reach
+        # ``controller.blit_manager`` for fast preview redraws. When
+        # ``None`` we silently fall back to ``canvas.draw_idle``.
+        self.controller = controller
         
         self._active = False
         self._p1: Optional[Tuple[float, float]] = None
@@ -55,10 +60,115 @@ class LineSelector:
         self._arrow: Optional[FancyArrow] = None
         self._arrow_keep: Optional[FancyArrow] = None
         self._endpoint_markers: List[Line2D] = []
+        # Hidden spectrum reference for the hide-during-gesture fallback
+        # (active only when blitting is turned off).
+        self._hidden_spectrum = None
         
         self._cid_press: Optional[int] = None
         self._cid_motion: Optional[int] = None
         self._cid_key: Optional[int] = None
+
+    # ------------------------------------------------------------------
+    # Performance helpers
+    # ------------------------------------------------------------------
+    def _blit_manager(self):
+        bm = getattr(self.controller, "blit_manager", None)
+        if bm is None:
+            return None
+        try:
+            from dc_cut.services.prefs import get_pref
+
+            if not bool(get_pref("spectrum_perf_use_blitting", True)):
+                return None
+        except Exception:
+            pass
+        return bm if bm.is_enabled() else None
+
+    def _register_animated(self, artist) -> None:
+        bm = self._blit_manager()
+        if bm is not None and artist is not None:
+            bm.register_animated(artist)
+
+    def _unregister_animated(self, artist) -> None:
+        bm = getattr(self.controller, "blit_manager", None)
+        if bm is not None and artist is not None:
+            bm.unregister_animated(artist)
+
+    def _request_redraw(self) -> None:
+        """Repaint the canvas via blitting when enabled, else fall back
+        to ``draw_idle`` (optionally throttled by the blit manager).
+        """
+        bm = self._blit_manager()
+        if bm is not None and bm.blit_update():
+            return
+        # Fall back to draw_idle; use the throttled variant if available
+        # so the non-blitting path still feels snappy.
+        manager = getattr(self.controller, "blit_manager", None)
+        if manager is not None:
+            manager.request_draw_idle()
+            return
+        try:
+            self.ax.figure.canvas.draw_idle()
+        except Exception:
+            pass
+
+    def _begin_gesture(self) -> None:
+        """Hide the spectrum for the duration of a drag when blitting
+        is unavailable but the user still opted into the fallback.
+        Re-shown by :meth:`_end_gesture`.
+        """
+        if self._blit_manager() is not None:
+            return  # Blitting handles this automatically.
+        try:
+            from dc_cut.services.prefs import get_pref
+
+            if not bool(get_pref("spectrum_perf_hide_during_gesture", True)):
+                return
+        except Exception:
+            return
+        layer = self._find_active_spectrum_layer()
+        if layer is None or layer.spectrum_image is None:
+            return
+        try:
+            if layer.spectrum_image.get_visible():
+                layer.spectrum_image.set_visible(False)
+                self._hidden_spectrum = layer.spectrum_image
+                try:
+                    self.ax.figure.canvas.draw_idle()
+                except Exception:
+                    pass
+        except Exception:
+            self._hidden_spectrum = None
+
+    def _end_gesture(self) -> None:
+        if self._hidden_spectrum is None:
+            return
+        try:
+            self._hidden_spectrum.set_visible(True)
+        except Exception:
+            pass
+        self._hidden_spectrum = None
+        try:
+            self.ax.figure.canvas.draw_idle()
+        except Exception:
+            pass
+
+    def _find_active_spectrum_layer(self):
+        ctrl = self.controller
+        if ctrl is None:
+            return None
+        try:
+            model = getattr(ctrl, "_layers_model", None)
+            if model is None:
+                return None
+            for layer in getattr(model, "layers", []):
+                if getattr(layer, "spectrum_visible", False) and getattr(
+                    layer, "spectrum_image", None
+                ) is not None:
+                    return layer
+        except Exception:
+            return None
+        return None
     
     @property
     def active(self) -> bool:
@@ -100,6 +210,7 @@ class LineSelector:
         self._clear_preview()
         self._p1 = None
         self._p2 = None
+        self._end_gesture()
         try:
             self.ax.figure.canvas.draw_idle()
         except Exception:
@@ -110,10 +221,7 @@ class LineSelector:
         self._side = "below" if self._side == "above" else "above"
         if self._p1 is not None and self._p2 is not None:
             self._update_arrow()
-            try:
-                self.ax.figure.canvas.draw_idle()
-            except Exception:
-                pass
+            self._request_redraw()
     
     def _on_press(self, event: MouseEvent) -> None:
         if event.inaxes != self.ax:
@@ -127,6 +235,7 @@ class LineSelector:
         
         if self._p1 is None:
             self._p1 = (x, y)
+            self._begin_gesture()
             self._draw_endpoint(x, y)
         elif self._p2 is None:
             self._p2 = (x, y)
@@ -167,6 +276,7 @@ class LineSelector:
         self._clear_preview()
         self._p1 = None
         self._p2 = None
+        self._end_gesture()
         if self.on_select is not None:
             self.on_select(x1, y1, x2, y2, side)
     
@@ -180,10 +290,8 @@ class LineSelector:
             zorder=100,
         )[0]
         self._endpoint_markers.append(marker)
-        try:
-            self.ax.figure.canvas.draw_idle()
-        except Exception:
-            pass
+        self._register_animated(marker)
+        self._request_redraw()
     
     def _draw_preview_line(self, x1: float, y1: float, x2: float, y2: float) -> None:
         if self._preview_line is not None:
@@ -196,10 +304,8 @@ class LineSelector:
                 linewidth=2,
                 zorder=99,
             )[0]
-        try:
-            self.ax.figure.canvas.draw_idle()
-        except Exception:
-            pass
+            self._register_animated(self._preview_line)
+        self._request_redraw()
     
     def _draw_line(self) -> None:
         if self._p1 is None or self._p2 is None:
@@ -217,10 +323,8 @@ class LineSelector:
                 linewidth=2,
                 zorder=99,
             )[0]
-        try:
-            self.ax.figure.canvas.draw_idle()
-        except Exception:
-            pass
+            self._register_animated(self._preview_line)
+        self._request_redraw()
     
     def _update_arrow(self) -> None:
         """Draw arrows perpendicular to line indicating deletion direction.
@@ -315,14 +419,14 @@ class LineSelector:
             ),
             zorder=99,
         )
-        
-        try:
-            self.ax.figure.canvas.draw_idle()
-        except Exception:
-            pass
+
+        self._register_animated(self._arrow)
+        self._register_animated(self._arrow_keep)
+        self._request_redraw()
     
     def _clear_preview(self) -> None:
         if self._preview_line is not None:
+            self._unregister_animated(self._preview_line)
             try:
                 self._preview_line.remove()
             except Exception:
@@ -330,6 +434,7 @@ class LineSelector:
             self._preview_line = None
         
         if self._arrow is not None:
+            self._unregister_animated(self._arrow)
             try:
                 self._arrow.remove()
             except Exception:
@@ -337,6 +442,7 @@ class LineSelector:
             self._arrow = None
         
         if hasattr(self, '_arrow_keep') and self._arrow_keep is not None:
+            self._unregister_animated(self._arrow_keep)
             try:
                 self._arrow_keep.remove()
             except Exception:
@@ -344,6 +450,7 @@ class LineSelector:
             self._arrow_keep = None
         
         for marker in self._endpoint_markers:
+            self._unregister_animated(marker)
             try:
                 marker.remove()
             except Exception:

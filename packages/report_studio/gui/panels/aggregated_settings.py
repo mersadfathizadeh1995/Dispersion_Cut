@@ -67,6 +67,15 @@ class AggregatedSettingsPanel(QtWidgets.QWidget):
         self._lbl_name.setWordWrap(True)
         fl.addRow("Name:", self._lbl_name)
 
+        self._le_legend_label = QtWidgets.QLineEdit()
+        self._le_legend_label.setPlaceholderText("(default: use Name)")
+        self._le_legend_label.editingFinished.connect(
+            lambda: self._emit(
+                "legend_label", self._le_legend_label.text()
+            )
+        )
+        fl.addRow("Legend name:", self._le_legend_label)
+
         self._chk_avg_visible = QtWidgets.QCheckBox("Visible")
         self._chk_avg_visible.setChecked(True)
         self._chk_avg_visible.toggled.connect(
@@ -199,6 +208,7 @@ class AggregatedSettingsPanel(QtWidgets.QWidget):
         self._current_uid = agg.uid
 
         self._lbl_name.setText(agg.display_name)
+        self._le_legend_label.setText(getattr(agg, "legend_label", "") or "")
         self._set_color_btn(self._btn_avg_color, agg.avg_color)
         self._chk_avg_visible.setChecked(agg.avg_visible)
         self._spin_avg_lw.setValue(agg.avg_line_width)
